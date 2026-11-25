@@ -488,6 +488,16 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     var isDirectory: Bool { if case .folder = row.state { true } else { false } }
     var isOffloaded: Bool { row.state == .onTheServer }
     var isAwaited: Bool { row.state == .comingBack }
+    var isLeaving: Bool { row.state == .leaving }
+    /// What a Remove on this row is confirming, for a source not here: the
+    /// removal refuses if that has changed by the time it is confirmed.
+    var actBeingRemoved: WorkspaceSourceAct? {
+        switch row.state {
+        case .onTheServer: .offloaded
+        case .comingBack: .wanted
+        case .here, .leaving, .folder: nil
+        }
+    }
     var removesWhatIsNotHere: Bool { row.removesWhatIsNotHere }
 }
 
@@ -652,9 +662,10 @@ enum DevotionalAgentWorkspaceStore {
     fileprivate static func removeContextFile(
         _ file: DevotionalAgentContextFile,
         from workspace: URL,
-        libraryRootURL: URL
+        libraryRootURL: URL,
+        heldBy holdingServer: String?
     ) throws {
-        if file.isOffloaded || file.isAwaited {
+        if let confirmed = file.actBeingRemoved {
             // No bytes here to remove, and possibly a nested path — neither
             // of which `removeContextItem` takes. A row waiting for a
             // download has no file either, and the reader confirming Remove
@@ -662,7 +673,9 @@ enum DevotionalAgentWorkspaceStore {
             try WorkspaceContextFileStore.removeOffloadedSource(
                 relativePath: file.relativePath,
                 in: workspace,
-                libraryRootURL: libraryRootURL
+                libraryRootURL: libraryRootURL,
+                confirming: confirmed,
+                heldBy: holdingServer
             )
         } else {
             try WorkspaceContextFileStore.removeContextItem(
@@ -2027,6 +2040,8 @@ struct DevotionalAgentWorkspaceView: View {
                 ? "arrow.down.circle.dotted"
                 : file.isOffloaded
                 ? "icloud.and.arrow.down"
+                : file.isLeaving
+                ? "icloud.and.arrow.up"
                 : (file.isDirectory ? "folder" : "doc"))
                 .foregroundStyle(.secondary)
             Text(file.name).lineLimit(1)
@@ -2038,6 +2053,10 @@ struct DevotionalAgentWorkspaceView: View {
                     .foregroundStyle(.tertiary)
             } else if file.isAwaited {
                 Text("Coming back")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if file.isLeaving {
+                Text("Going after next sync")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } else if let byteCount = file.byteCount, !file.isDirectory {
@@ -2065,13 +2084,20 @@ struct DevotionalAgentWorkspaceView: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
-                if !file.isDirectory {
+                if file.isLeaving {
+                    Button("Keep Here", systemImage: "arrow.uturn.backward.circle") {
+                        Task { await cancelOffload(file) }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Keep this source on this Mac after all")
+                } else if !file.isDirectory {
                     Button("Offload", systemImage: "icloud.and.arrow.up") {
                         Task { await offloadContextFile(file) }
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .help("Free the space here and keep this source on the server")
+                    .help("Free the space here after the next sync, keeping this source on the server")
                 }
             }
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {
@@ -2744,33 +2770,29 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
-            guard let observation = syncController.offloadObservation() else {
-                errorMessage = """
-                    Lamp has not synced recently enough to tell whether the \
-                    server still holds this source. Sync, then try again.
-                    """
-                return
-            }
-            // The lock on where sync points goes on before anything is
-            // deleted, not after the list is next read.
-            syncController.willOffload(to: observation.source)
-            try await WorkspaceContextFileStore.offloadSource(
-                relativePath: file.relativePath,
-                in: workspaceURL,
-                libraryRootURL: libraryRootURL,
-                observation: observation,
-                // Asked again just before the unlink. Waiting for the
-                // workspace and hashing the file take time, and in it sync can
-                // be turned off or moved, or a newer pass can see the source
-                // gone; the look this press began with has to still be the
-                // current one.
-                while: { [syncController] in
-                    await MainActor.run { syncController.offloadObservation() == observation }
-                }
+            // Queued, not deleted: it goes right after the next sync, with
+            // that sync's look at the server and nothing else running
+            // (`decisions/0021`). Asked for now, so the wait is a sync's.
+            try await WorkspaceContextFileStore.queueOffload(
+                relativePath: file.relativePath, in: workspaceURL
             )
-            try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
-            await syncController.refreshSourcesOnlyOnTheServer(library: libraryModel.library)
-            contextNote = "“\(file.name)” is on the server. Download it whenever you need it."
+            Task { _ = await syncController.syncAsked(library: libraryModel.library) }
+            contextNote = "“\(file.name)” goes back to the server after the next sync."
+            schedulePoll()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Withdraws a request to offload before it is carried out.
+    private func cancelOffload(_ file: DevotionalAgentContextFile) async {
+        guard let workspaceURL else { return }
+        errorMessage = nil
+        contextNote = nil
+        do {
+            try await WorkspaceContextFileStore.cancelOffload(
+                relativePath: file.relativePath, in: workspaceURL
+            )
             schedulePoll()
         } catch {
             errorMessage = error.localizedDescription
@@ -2786,11 +2808,10 @@ struct DevotionalAgentWorkspaceView: View {
             try await WorkspaceContextFileStore.fetchSource(
                 relativePath: file.relativePath, in: workspaceURL
             )
-            // Clearing the note changes no file, and the automatic pass only
-            // starts for a change to a file it carries — so without this the
-            // source waited on an idle library for some unrelated edit.
-            LampSyncRequest.wantAPass()
-            // A press, so not subject to the automatic-sync setting.
+            // Asking changes no file, and the automatic pass only starts for a
+            // change to a file it carries, so the press starts one — a press,
+            // so not subject to the automatic-sync setting. One pass: if one
+            // is already running, the controller answers this after it.
             Task { _ = await syncController.syncAsked(library: libraryModel.library) }
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” will come back on the next sync."
@@ -2808,7 +2829,8 @@ struct DevotionalAgentWorkspaceView: View {
             try await DevotionalAgentWorkspaceStore.removeContextFile(
                 file,
                 from: workspaceURL,
-                libraryRootURL: libraryRootURL
+                libraryRootURL: libraryRootURL,
+                heldBy: syncController.serverHoldingOffloads
             )
             // Removing a source that was only on the server can lift the
             // lock on where sync points.

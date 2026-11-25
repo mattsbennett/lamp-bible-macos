@@ -313,11 +313,17 @@ public enum WorkspaceContextFileStore {
         // copy on the next pass — overwriting a source with something else,
         // and nobody asked. The top-level name is what is taken, so a new
         // folder cannot land among offloaded files either.
+        //
+        // Compared without case: on the case-insensitive volume a library
+        // usually lives on, `history.pdf` and an offloaded `History.pdf` are
+        // one path. Over-reserving on a case-sensitive volume costs a " 2".
         let reserved = Set(
-            WorkspaceFileLedger.load(in: workspaceURL).contextActs().keys.compactMap {
-                $0.split(separator: "/", maxSplits: 1).first
-                    .map { String($0).precomposedStringWithCanonicalMapping }
-            }
+            WorkspaceFileLedger.load(in: workspaceURL).contextActs()
+                .filter { $0.value != .leaving }.keys.compactMap {
+                    $0.split(separator: "/", maxSplits: 1).first.map {
+                        String($0).precomposedStringWithCanonicalMapping.lowercased()
+                    }
+                }
         )
 
         let values = try source.resourceValues(forKeys: [
@@ -534,6 +540,7 @@ public enum WorkspaceContextFileStore {
         switch result.skipped[relativePath] {
         case .changedSinceUpload: throw OffloadError.changedSinceUpload(relativePath)
         case .untrustedVolume: throw OffloadError.untrustedVolume(relativePath)
+        case .wouldLoseResourceFork: throw OffloadError.wouldLoseResourceFork(relativePath)
         case .nowHeld: throw OffloadError.notOnTheServer(relativePath)
         case .notOnTheServer, .notSeenOnTheServer:
             throw OffloadError.notOnTheServer(relativePath)
@@ -559,12 +566,23 @@ public enum WorkspaceContextFileStore {
         relativePath: String,
         in workspaceURL: URL,
         libraryRootURL: URL,
+        confirming confirmed: WorkspaceSourceAct,
+        heldBy holdingServer: String?,
         fileManager: FileManager = .default
     ) throws {
         let folder = workspaceURL.lastPathComponent
         guard let member = try? LampWritingWorkspaceLayout.contextPath(
             folder: folder, relativePath: relativePath
         ) else { throw OffloadError.notAsource(relativePath) }
+
+        // Still the thing the reader confirmed. The dialog was opened on a row
+        // for a source not here; if its act has changed since — a file turned
+        // up and the gather answered it, or it was asked back — the row the
+        // reader saw is not the row there is now, and nothing is removed.
+        let key = WorkspaceFileLedger.contextKey(relativePath)
+        let current = WorkspaceFileLedger.load(in: workspaceURL).acts[key]
+            .map(WorkspaceSourceAct.init)
+        guard current == confirmed else { throw OffloadError.replacedSinceConfirmed(relativePath) }
 
         // What is at the path now, before anything is written down. The
         // reader confirmed removing a source that was not here; if a file is
@@ -582,9 +600,11 @@ public enum WorkspaceContextFileStore {
             let records = LampSyncFileRecords.load(
                 fromLibraryAt: libraryRootURL, fileManager: fileManager
             )
-            let isTheSource = records.sources.keys.contains {
+            // Against the server the offload went to, and no other: a match
+            // against an old server's record says nothing about this one.
+            let isTheSource = holdingServer.map {
                 !records.changedSinceUpload(member, in: $0, digest: landed.digest)
-            }
+            } ?? false
             guard isTheSource else { throw OffloadError.replacedSinceConfirmed(relativePath) }
         }
 
@@ -603,6 +623,31 @@ public enum WorkspaceContextFileStore {
         // refuses anything that is no longer the file that was checked.
         guard let landed else { return }
         try? unlink(landed, libraryRootURL: libraryRootURL, fileManager: fileManager)
+    }
+
+    /// Asks for a source to go back to the server after the next sync.
+    ///
+    /// Nothing is deleted here. Every offload happens in one place — right
+    /// after a sync pass finishes, with that pass's fresh look at the server
+    /// and nothing else running — because a button that deleted at any moment
+    /// could overlap a pass, a change of server, or a refresh of the lock on
+    /// one, and three review rounds kept finding those overlaps one at a time
+    /// (owner's decision, `decisions/0021`).
+    @WritingWorkspaceFiles
+    public static func queueOffload(relativePath: String, in workspaceURL: URL) throws {
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteLeaving(WorkspaceFileLedger.contextKey(relativePath))
+        try ledger.save(in: workspaceURL)
+    }
+
+    /// Withdraws a request to offload, before the sync that would carry it out.
+    @WritingWorkspaceFiles
+    public static func cancelOffload(relativePath: String, in workspaceURL: URL) throws {
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        let key = WorkspaceFileLedger.contextKey(relativePath)
+        guard ledger.acts[key] == .leaving else { return }
+        ledger.forgetAct(key)
+        try ledger.save(in: workspaceURL)
     }
 
     /// Asks for an offloaded source back.
@@ -643,6 +688,19 @@ public enum WorkspaceContextFileStore {
         /// The library is on a volume whose file identities cannot be trusted
         /// to notice a change, so nothing there is offloaded.
         case untrustedVolume
+        /// The file has a resource fork, which no store carries.
+        case wouldLoseResourceFork
+
+        /// Whether trying again after another sync could change the answer.
+        /// A request to offload a source that will never qualify is dropped,
+        /// and said, rather than retried for ever.
+        public var isLasting: Bool {
+            switch self {
+            case .notAsource, .untrustedVolume, .wouldLoseResourceFork: true
+            case .notOnTheServer, .notSeenOnTheServer, .changedSinceUpload,
+                 .couldNotRemove, .nowHeld: false
+            }
+        }
     }
 
     /// Puts sources back on the server.
@@ -710,6 +768,13 @@ public enum WorkspaceContextFileStore {
             guard let verified = VerifiedSource.verify(
                 relativePath: relativePath, inContext: contextDirectory
             ) else { skipped[relativePath] = .notAsource; continue }
+            // Neither the digest nor any store carries a resource fork, so the
+            // copy on the server is not the whole file and no download could
+            // put the fork back.
+            guard !verified.read.hasResourceFork else {
+                skipped[relativePath] = .wouldLoseResourceFork
+                continue
+            }
             // The last check before the unlink is of the identity alone, and
             // `decisions/0007` trusts an identity only on APFS: on exFAT, or a
             // share that mirrors the write time into the change time, a file
@@ -812,6 +877,7 @@ public enum WorkspaceContextFileStore {
         case changedSinceUpload(String)
         case untrustedVolume(String)
         case replacedSinceConfirmed(String)
+        case wouldLoseResourceFork(String)
 
         public var errorDescription: String? {
             switch self {
@@ -821,8 +887,10 @@ public enum WorkspaceContextFileStore {
                 "“\(name)” is not a file this writing holds as a source."
             case .changedSinceUpload(let name):
                 "“\(name)” has changed since it was synced, so it goes up on the next sync first."
+            case .wouldLoseResourceFork(let name):
+                "“\(name)” has a resource fork, which the server can't keep, so Lamp keeps it here."
             case .replacedSinceConfirmed(let name):
-                "A different file named “\(name)” is here now, so nothing was removed. Remove it from its own row if you mean to."
+                "“\(name)” has changed since you chose to remove it, so nothing was removed. Check its row and try again."
             case .untrustedVolume(let name):
                 "“\(name)” is on a disk that can't reliably tell whether a file has changed, so Lamp keeps it here rather than risk deleting edits the server doesn't have."
             }
@@ -1208,7 +1276,9 @@ public enum WorkspaceContextFileStore {
     ) -> URL {
         func isTaken(_ candidate: URL) -> Bool {
             fileManager.fileExists(atPath: candidate.path)
-                || reserved.contains(candidate.lastPathComponent.precomposedStringWithCanonicalMapping)
+                || reserved.contains(
+                    candidate.lastPathComponent.precomposedStringWithCanonicalMapping.lowercased()
+                )
         }
         let proposed = directory.appendingPathComponent(name)
         guard isTaken(proposed) else { return proposed }

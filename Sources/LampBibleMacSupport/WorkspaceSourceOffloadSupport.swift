@@ -67,6 +67,11 @@ public enum WorkspaceSourceOffload {
     public struct Workspace: Equatable, Sendable {
         /// The writing this workspace belongs to.
         public let writingID: String
+        /// The workspace's own folder, carried rather than derived again from
+        /// the id: two ids that differ only in Unicode form are one string to
+        /// Swift and two folders on disk, and re-deriving would put one
+        /// writing's candidates in the other's folder.
+        public let folder: URL?
         /// When the reader last did anything with this writing, or nil where
         /// that cannot be told.
         ///
@@ -91,11 +96,13 @@ public enum WorkspaceSourceOffload {
 
         public init(
             writingID: String,
+            folder: URL? = nil,
             lastActivity: Date?,
             sources: [String],
             onTheServer: Set<String>
         ) {
             self.writingID = writingID
+            self.folder = folder
             self.lastActivity = lastActivity
             self.sources = sources
             self.onTheServer = onTheServer
@@ -106,10 +113,13 @@ public enum WorkspaceSourceOffload {
     public struct Candidate: Equatable, Sendable, Comparable {
         public let writingID: String
         public let relativePath: String
+        /// The workspace folder it is in — see `Workspace.folder`.
+        public let folder: URL?
 
-        public init(writingID: String, relativePath: String) {
+        public init(writingID: String, relativePath: String, folder: URL? = nil) {
             self.writingID = writingID
             self.relativePath = relativePath
+            self.folder = folder
         }
 
         public static func < (lhs: Candidate, rhs: Candidate) -> Bool {
@@ -148,7 +158,10 @@ public enum WorkspaceSourceOffload {
             guard now.timeIntervalSince(lastActivity) > window else { continue }
             for source in workspace.sources where workspace.onTheServer.contains(source) {
                 candidates.append(
-                    Candidate(writingID: workspace.writingID, relativePath: source)
+                    Candidate(
+                        writingID: workspace.writingID, relativePath: source,
+                        folder: workspace.folder
+                    )
                 )
             }
         }
@@ -182,7 +195,7 @@ extension WorkspaceSourceOffload {
     @WritingWorkspaceFiles
     public static func workspaces(
         inLibraryAt libraryRootURL: URL,
-        writings: [String: Date],
+        writings: [(id: String, modified: Date)],
         observation: ServerObservation,
         now: Date = Date(),
         fileManager: FileManager = .default
@@ -196,9 +209,13 @@ extension WorkspaceSourceOffload {
         var found: [Workspace] = []
         for folder in folders {
             let name = folder.lastPathComponent
-            guard let writingID = LampWritingWorkspaceLayout.writingID(
-                ofFolder: name, among: writings.keys
-            ) else { continue }
+            // By the id's bytes, as the folder was named — not by Swift string
+            // equality, which would match two ids differing only in Unicode
+            // form to one folder and one date.
+            guard let writing = writings.first(where: {
+                LampWritingWorkspaceLayout.directoryName(for: $0.id) == name
+            }) else { continue }
+            let writingID = writing.id
             let ledger = WorkspaceFileLedger.load(in: folder)
             // Not a candidate while it is new here, however it came — attached
             // here, or installed by a pass: see `WorkspaceFileLedger.isNewHere`.
@@ -220,9 +237,10 @@ extension WorkspaceSourceOffload {
             found.append(
                 Workspace(
                     writingID: writingID,
+                    folder: folder,
                     lastActivity: lastActivity(
                         ofWorkspaceAt: folder,
-                        writingSaved: writings[writingID],
+                        writingSaved: writing.modified,
                         fileManager: fileManager
                     ),
                     sources: sources,
@@ -323,6 +341,11 @@ extension WorkspaceSourceOffload {
 public struct ServerObservation: Equatable, Sendable {
     /// The store this came from, as the records name it.
     public let source: String
+    /// The account that looked, where a store has accounts. The records
+    /// name a WebDAV store by its address alone, and another account at the
+    /// same address can be another set of files: a look taken as one account
+    /// says nothing about what the next one can reach.
+    public let account: String
     /// Every path the manifest counted as a member.
     public let members: Set<String>
     /// What the listing of each source's folder said its revision was.
@@ -337,9 +360,11 @@ public struct ServerObservation: Equatable, Sendable {
     public static let lifetime: TimeInterval = 15 * 60
 
     public init(
-        source: String, members: Set<String>, revisions: [String: String], at: Date = Date()
+        source: String, account: String = "",
+        members: Set<String>, revisions: [String: String], at: Date = Date()
     ) {
         self.source = source
+        self.account = account
         self.members = members
         self.revisions = revisions
         self.at = at
@@ -349,8 +374,9 @@ public struct ServerObservation: Equatable, Sendable {
     /// recently enough. Changing folders or turning sync off makes the last
     /// look worthless however recent it is, because Offload would delete
     /// against one server while Download fetched from another.
-    public func answers(for source: String, now: Date = Date()) -> Bool {
-        self.source == source && now.timeIntervalSince(at) < Self.lifetime
+    public func answers(for source: String, account: String = "", now: Date = Date()) -> Bool {
+        self.source == source && self.account == account
+            && now.timeIntervalSince(at) < Self.lifetime
     }
 
     /// Whether the listing showed `path` at the revision this Mac recorded
@@ -445,6 +471,9 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public enum State: Equatable, Sendable {
         /// A file on disk.
         case here
+        /// A file on disk the reader has asked to go back to the server; it
+        /// goes after the next sync.
+        case leaving
         /// A folder on disk. `holdsSourcesNotHere` when something under it
         /// is only on the server, or on its way: removing the folder deletes
         /// those everywhere too, and the row shows nothing of them.
@@ -466,7 +495,7 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public var id: String { relativePath }
     public var isHere: Bool {
         switch state {
-        case .here, .folder: true
+        case .here, .leaving, .folder: true
         case .onTheServer, .comingBack: false
         }
     }
@@ -475,7 +504,7 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public var removesWhatIsNotHere: Bool {
         switch state {
         case .onTheServer, .comingBack, .folder(holdsSourcesNotHere: true): true
-        case .here, .folder(holdsSourcesNotHere: false): false
+        case .here, .leaving, .folder(holdsSourcesNotHere: false): false
         }
     }
 
@@ -512,8 +541,11 @@ extension WorkspaceSourceOffload {
     /// with a combining mark decomposed, and a source would otherwise be
     /// drawn twice, once as itself and once as "On the server".
     public static func rows(
-        onDisk: [DiskEntry], notHere: [String: WorkspaceSourceAct]
+        onDisk: [DiskEntry],
+        notHere: [String: WorkspaceSourceAct],
+        leaving: Set<String> = []
     ) -> [SourceRow] {
+        let leaving = Set(leaving.map { $0.precomposedStringWithCanonicalMapping })
         let notHere = Dictionary(
             notHere.map { ($0.key.precomposedStringWithCanonicalMapping, $0.value) },
             uniquingKeysWith: { first, _ in first }
@@ -532,10 +564,14 @@ extension WorkspaceSourceOffload {
                 let holds = notHere.keys.contains { $0 == path || $0.hasPrefix(path + "/") }
                 rows.append(SourceRow(relativePath: path, state: .folder(holdsSourcesNotHere: holds)))
             } else {
-                rows.append(SourceRow(relativePath: path, state: .here, byteCount: entry.byteCount))
+                rows.append(SourceRow(
+                    relativePath: path,
+                    state: leaving.contains(path) ? .leaving : .here,
+                    byteCount: entry.byteCount
+                ))
             }
         }
-        for (path, act) in notHere where !shown.contains(path) {
+        for (path, act) in notHere where !shown.contains(path) && act != .leaving {
             rows.append(SourceRow(
                 relativePath: path, state: act == .offloaded ? .onTheServer : .comingBack
             ))
@@ -568,7 +604,8 @@ extension WorkspaceSourceOffload {
         }
         return rows(
             onDisk: entries,
-            notHere: LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager)
+            notHere: LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager),
+            leaving: Set(LampWorkspaceSync.leavingSourceNames(in: workspace, fileManager: fileManager))
         )
     }
 }

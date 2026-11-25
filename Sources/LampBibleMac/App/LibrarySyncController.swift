@@ -121,6 +121,10 @@ final class LibrarySyncController: ObservableObject {
     /// Whether where sync points is locked to one server.
     var destinationIsLocked: Bool { offloadsHeldBy != nil }
 
+    /// The server the outstanding offloads went to, for checking a removal
+    /// against it and no other.
+    var serverHoldingOffloads: String? { offloadsHeldBy }
+
     /// Engages the lock on `source` before an offload deletes anything.
     func willOffload(to source: String) {
         if offloadsHeldBy == nil { offloadsHeldBy = source }
@@ -131,7 +135,7 @@ final class LibrarySyncController: ObservableObject {
         sourcesOnlyOnTheServer = await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: root)
         let removalsQueued = LampSyncRemovedModules.load(fromLibraryAt: root, fileManager: fileManager)
             .removedAt.keys.contains(where: LampWorkspaceSync.namesAsource)
-        if sourcesOnlyOnTheServer.isEmpty, !removalsQueued {
+        if sourcesOnlyOnTheServer.isEmpty, !removalsQueued, !isOffloading {
             if offloadsHeldBy != nil { offloadsHeldBy = nil }
         } else if offloadsHeldBy == nil, !sourcesOnlyOnTheServer.isEmpty, let current = currentSource {
             // Held but never written down — from a build before this. The
@@ -339,7 +343,11 @@ final class LibrarySyncController: ObservableObject {
         // has just written. Ask for a pass after it instead. Checked with no
         // suspension before the call, so it is the same answer the guard
         // inside will give.
-        guard !isSyncing else {
+        //
+        // Nor while the offloads after the last pass are being carried out:
+        // they act on that pass's look at the server, and a new pass starting
+        // under them could see a source gone that they are about to delete.
+        guard !isSyncing, !isOffloading else {
             LampSyncRequest.wantAPass()
             return false
         }
@@ -352,16 +360,93 @@ final class LibrarySyncController: ObservableObject {
         pendingObservation = nil
         if finished {
             await reconcileOffloadsWithTheServer(library: library)
-            await offloadInactiveSources(library: library)
+            await carryOutOffloads(library: library)
         }
         await refreshSourcesOnlyOnTheServer(library: library)
         // An ask made while this pass ran — a Download pressed after the
-        // gather had already looked — is answered now rather than left for a
-        // poll that only the reader window runs.
-        if finished, LampSyncRequest.takePending() {
+        // gather had already looked — is answered now, whether or not this
+        // pass finished: a poll that only the reader window runs may not be
+        // running. Once, so a failing server is not asked again for ever.
+        if LampSyncRequest.takePending() {
             return await sync(library: library)
         }
         return finished
+    }
+
+    /// Whether the offloads after a pass are being carried out. While they
+    /// are, no pass starts and the lock on where sync points is not released.
+    @Published private(set) var isOffloading = false
+
+    /// Carries out every offload, right after a pass has finished and before
+    /// another can start: what the reader asked for, then what the
+    /// inactivity setting picks.
+    ///
+    /// **The one place a source is deleted to save space** (owner's decision,
+    /// `decisions/0021`). The Offload button used to delete at once, at any
+    /// moment, and so could overlap a pass, a change of server, or a refresh
+    /// of the lock on one — three review rounds found those overlaps one at a
+    /// time. Here there is one moment: the look at the server is the one this
+    /// pass has just taken, no other pass is running, and the lock is
+    /// written down before anything goes and not released until after.
+    private func carryOutOffloads(library: LampLibrary) async {
+        guard let observation = offloadObservation() else { return }
+        isOffloading = true
+        defer { isOffloading = false }
+        await offloadRequestedSources(library: library, observation: observation)
+        await offloadInactiveSources(library: library, observation: observation)
+    }
+
+    /// The sources the reader asked to go back to the server.
+    ///
+    /// Asked for, so none of the sweep's own reasons to wait — the setting,
+    /// the hour between sweeps, the writing's dates, an open editor — apply:
+    /// the reader is the one at that editor, pressing the button. Every
+    /// safety check does. A request that could succeed later stays; one that
+    /// never can is dropped and said.
+    private func offloadRequestedSources(
+        library: LampLibrary, observation: ServerObservation
+    ) async {
+        let root = library.rootURL
+        var offloaded = 0
+        var refused: [String] = []
+        for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: root) {
+            willOffload(to: observation.source)
+            do {
+                let result = try await WorkspaceContextFileStore.offloadSources(
+                    requested, in: workspace, libraryRootURL: root, observation: observation,
+                    while: { @Sendable [weak self] in
+                        await MainActor.run { self?.offloadObservation() == observation }
+                    }
+                )
+                offloaded += result.offloaded.count
+                for (path, reason) in result.skipped {
+                    if reason.isLasting {
+                        try? await WorkspaceContextFileStore.cancelOffload(
+                            relativePath: path, in: workspace
+                        )
+                        refused.append(path)
+                    } else {
+                        // A failed unlink forgets the request with the act;
+                        // put it back, so the next sync tries again.
+                        try? await WorkspaceContextFileStore.queueOffload(
+                            relativePath: path, in: workspace
+                        )
+                    }
+                    Self.log.info("A requested offload was left: \(reason.rawValue, privacy: .public)")
+                }
+            } catch {
+                Self.log.error("A requested offload failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if !refused.isEmpty {
+            errorMessage = refused.count == 1
+                ? "“\(refused[0])” can't go back to the server, so it stays on this Mac."
+                : "\(refused.count) sources can't go back to the server, so they stay on this Mac."
+        } else if offloaded > 0 {
+            statusMessage = offloaded == 1
+                ? "1 source put back on the server."
+                : "\(offloaded) sources put back on the server."
+        }
     }
 
     /// What the last **finished** pass saw of the server. Nil until one has,
@@ -404,7 +489,9 @@ final class LibrarySyncController: ObservableObject {
     func offloadObservation(now: Date = Date()) -> ServerObservation? {
         guard let source = currentSource,
               let observation = lastObservation,
-              observation.answers(for: source, now: now)
+              observation.answers(
+                  for: source, account: provider == .webDAV ? username : "", now: now
+              )
         else { return nil }
         return observation
     }
@@ -442,17 +529,18 @@ final class LibrarySyncController: ObservableObject {
     /// work available a second later anyway. With sync off there is no pass,
     /// so no sweep, which is right: there is nowhere for the sources to go.
     @discardableResult
-    func offloadInactiveSources(library: LampLibrary) async -> Int {
+    private func offloadInactiveSources(
+        library: LampLibrary, observation: ServerObservation
+    ) async -> Int {
         let after = WorkspaceSourceOffload.After.chosen()
         guard after.days != nil else { return 0 }
         let now = Date()
-        guard now.timeIntervalSince(lastOffloadSweepAt) > Self.offloadSweepInterval,
-              let observation = offloadObservation(now: now)
+        guard now.timeIntervalSince(lastOffloadSweepAt) > Self.offloadSweepInterval
         else { return 0 }
         lastOffloadSweepAt = now
 
         let libraryRoot = library.rootURL
-        let writings: [String: Date]
+        let writings: [(id: String, modified: Date)]
         do {
             writings = try await library.personalDevotionalModificationDates()
         } catch {
@@ -469,15 +557,21 @@ final class LibrarySyncController: ObservableObject {
         )
         guard !candidates.isEmpty else { return 0 }
 
-        var byWriting: [String: [String]] = [:]
+        // By folder, which each candidate carries, and never by id: two ids
+        // differing only in Unicode form are one key to Swift and two folders
+        // on disk, and re-deriving the folder from the id would send one
+        // writing's candidates into the other's workspace.
+        var byFolder: [String: (writingID: String, folder: URL, paths: [String])] = [:]
         for candidate in candidates {
-            byWriting[candidate.writingID, default: []].append(candidate.relativePath)
+            guard let folder = candidate.folder else { continue }
+            byFolder[folder.path, default: (candidate.writingID, folder, [])].paths
+                .append(candidate.relativePath)
         }
         var offloaded = 0
-        for (writingID, relativePaths) in byWriting.sorted(by: { $0.key < $1.key }) {
-            let workspaceURL = LampWritingWorkspace.url(
-                libraryRootURL: libraryRoot, writingID: writingID
-            )
+        for (_, group) in byFolder.sorted(by: { $0.key < $1.key }) {
+            let writingID = group.writingID
+            let relativePaths = group.paths
+            let workspaceURL = group.folder
             // Asked again, per workspace, rather than trusted from before the
             // scan. The scan and the batches before this one are awaits, and
             // a reader who opened this writing during them would lose its
@@ -1331,6 +1425,7 @@ extension LibrarySyncController {
         if let written = outcome.written?.bundle, let opened = pendingObservation {
             pendingObservation = ServerObservation(
                 source: opened.source,
+                account: opened.account,
                 members: Set(written.manifest.members.map(\.path)),
                 revisions: opened.revisions,
                 at: opened.at
@@ -1820,6 +1915,7 @@ extension LibrarySyncController {
         // never had.
         pendingObservation = ServerObservation(
             source: source,
+            account: provider == .webDAV ? username : "",
             members: Set(manifest.members.map(\.path)),
             revisions: unlisted
         )

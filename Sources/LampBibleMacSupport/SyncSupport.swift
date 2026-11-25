@@ -171,9 +171,19 @@ public enum LampWorkspaceSync {
         // show a regular file at the leaf, while the gather — which follows
         // no links — has no source there at all: the Download row would go
         // and the lock on the server would lift with nothing restored.
-        return values.isRegularFile == true && values.isSymbolicLink != true
-            && file.resolvingSymlinksInPath().path
-                .hasPrefix(context.resolvingSymlinksInPath().path + "/")
+        guard values.isRegularFile == true, values.isSymbolicLink != true else { return false }
+        // No link anywhere on the way, as the gather follows none
+        // (`decisions/0010`). Resolving and comparing prefixes is not the
+        // same thing: a folder linked to another folder *inside* the context
+        // directory resolves inside it too, and the gather still skips it.
+        var step = context
+        for component in relativePath.split(separator: "/").dropLast() {
+            step = step.appendingPathComponent(String(component))
+            guard let link = try? step.resourceValues(forKeys: [.isSymbolicLinkKey]),
+                  link.isSymbolicLink != true
+            else { return false }
+        }
+        return true
     }
 
     /// Every source this reader has done something to that is not here, with
@@ -186,10 +196,32 @@ public enum LampWorkspaceSync {
         let ledger = WorkspaceFileLedger.load(in: workspace)
         var notHere: [String: WorkspaceSourceAct] = [:]
         for (path, act) in ledger.contextActs()
-        where !isHere(path, inContextOf: workspace, fileManager: fileManager) {
+        where act != .leaving && !isHere(path, inContextOf: workspace, fileManager: fileManager) {
             notHere[path] = WorkspaceSourceAct(act)
         }
         return notHere
+    }
+
+    /// Every workspace with sources the reader has asked to go back to the
+    /// server, and which.
+    @WritingWorkspaceFiles
+    public static func requestedOffloads(
+        inLibraryAt libraryRoot: URL, fileManager: FileManager = .default
+    ) -> [(workspace: URL, paths: [String])] {
+        ((try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? []).compactMap { workspace in
+            let paths = leavingSourceNames(in: workspace, fileManager: fileManager)
+            return paths.isEmpty ? nil : (workspace, paths)
+        }
+    }
+
+    /// The sources the reader has asked to go back to the server, whose files
+    /// are still here.
+    @WritingWorkspaceFiles
+    public static func leavingSourceNames(
+        in workspace: URL, fileManager: FileManager = .default
+    ) -> [String] {
+        WorkspaceFileLedger.load(in: workspace).contextPaths(withAct: .leaving)
+            .filter { isHere($0, inContextOf: workspace, fileManager: fileManager) }
     }
 
     /// The sources one workspace has let go to the server and does not hold.
@@ -236,7 +268,9 @@ public enum LampWorkspaceSync {
             let acted = ledger.contextActs()
             guard !acted.isEmpty else { continue }
             var changed = false
-            for path in acted.keys.sorted() {
+            // Not a request to leave: that source is here, and may not be on
+            // the server yet — forgetting the request would cancel it.
+            for path in acted.keys.sorted() where acted[path] != .leaving {
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
                 ), !members.contains(member)
@@ -1477,6 +1511,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
     var arrivedAt: [String: Int64] = [:]
 
     enum SourceAct: String, Codable, Equatable, Sendable {
+        /// The reader asked for this source to go back to the server. Its
+        /// file is still here: the offload happens after the next sync
+        /// finishes, alongside the inactivity sweep, so that every deletion
+        /// happens at one moment, with a fresh look at the server and nothing
+        /// else running (owner's decision, `decisions/0021`). The only act a
+        /// present file keeps.
+        case leaving
         /// This Mac let the file go; the server keeps it. Withheld while no
         /// file is here.
         case offloaded
@@ -1573,6 +1614,12 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// The reader asked for a source back.
     mutating func noteWanted(_ key: String) {
         acts[key] = .wanted
+    }
+
+    /// The reader asked for a source to go back to the server, after the
+    /// next sync.
+    mutating func noteLeaving(_ key: String) {
+        acts[key] = .leaving
     }
 
     /// Whatever this Mac had done to the source no longer applies: it
@@ -1711,11 +1758,10 @@ struct WorkspaceFileLedger: Codable, Equatable {
             presentSince[key] = max(presentSince[key] ?? .min, time)
             arrivedAt[key] = time
         }
-        // A file here answers whatever was done to its path: an offload whose
-        // unlink never happened, a download that has landed, an attachment
-        // under a name that was let go of. The act is about a file that is
-        // not here; once one is, there is nothing left for it to say.
-        for key in present.keys where Self.isContextKey(key) {
+        // A file here answers whatever was done to its path — an offload whose
+        // unlink never happened, a download that has landed — except a
+        // request to offload it, which is about a file that is here.
+        for key in present.keys where Self.isContextKey(key) && acts[key] != .leaving {
             acts[key] = nil
         }
         self.synced = present
@@ -1740,7 +1786,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
         let before = synced ?? [:]
         for key in present.keys where before[key] == nil && Self.isContextKey(key) {
             arrivedAt[key] = time
-            acts[key] = nil
+            if acts[key] != .leaving { acts[key] = nil }
         }
         synced = present
     }
@@ -2025,10 +2071,11 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
     /// What a reader has done to a source, as the pane and the sweep see it.
     /// The ledger's own value, made public; see `WorkspaceFileLedger.acts`.
     public enum WorkspaceSourceAct: String, Equatable, Sendable {
-        case offloaded, wanted
+        case leaving, offloaded, wanted
 
         init(_ act: WorkspaceFileLedger.SourceAct) {
             switch act {
+            case .leaving: self = .leaving
             case .offloaded: self = .offloaded
             case .wanted: self = .wanted
             }

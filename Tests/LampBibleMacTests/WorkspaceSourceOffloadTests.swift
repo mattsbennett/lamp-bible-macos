@@ -360,6 +360,30 @@ struct WorkspaceSourceOffloadTests {
         #expect(ledger.presentSince[key] == nil, "the shared timestamp is still not touched")
     }
 
+    /// A look at the server taken as one account answers for no other, even
+    /// at the same address: another account can be another set of files.
+    @Test func alookAnswersOnlyForTheAccountThatTookIt() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let observation = ServerObservation(
+            source: "webdav:example", account: "alice", members: [], revisions: [:], at: at
+        )
+        #expect(observation.answers(for: "webdav:example", account: "alice", now: at))
+        #expect(!observation.answers(for: "webdav:example", account: "bob", now: at))
+    }
+
+    /// The leaving state draws as a file here, going after the next sync —
+    /// not as gone, and not as removable without a copy here.
+    @Test func arequestedOffloadIsAfileStillHere() {
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: "history.pdf", isDirectory: false, byteCount: 3)],
+            notHere: [:],
+            leaving: ["history.pdf"]
+        )
+        #expect(rows == [SourceRow(relativePath: "history.pdf", state: .leaving, byteCount: 3)])
+        #expect(rows.first?.isHere == true)
+        #expect(rows.first?.removesWhatIsNotHere == false)
+    }
+
     @Test func theSettingIsThisMacsOwn() {
         #expect(WorkspaceSourceOffload.After.settingKey == "writing.sources.offloadAfter")
         #expect(
@@ -453,7 +477,7 @@ struct WorkspaceSourceOffloadGatheringTests {
 
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: [writingID: Date()],
+            writings: [(writingID, Date())],
             observation: ServerObservation(
                 source: source,
                 members: [path],
@@ -646,7 +670,7 @@ struct WorkspaceSourceOffloadGatheringTests {
 
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: [Self.writingID: Date()],
+            writings: [(Self.writingID, Date())],
             observation: ServerObservation(
                 source: "webdav:example", members: [path], revisions: [path: "\"r1\""]
             )
@@ -698,7 +722,7 @@ struct WorkspaceSourceOffloadGatheringTests {
 
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: [Self.writingID: Date(timeIntervalSince1970: 0)],
+            writings: [(Self.writingID, Date(timeIntervalSince1970: 0))],
             observation: ServerObservation(source: "webdav:example", members: [], revisions: [:]),
             now: now
         )
@@ -742,12 +766,56 @@ struct WorkspaceSourceOffloadGatheringTests {
 
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: [Self.writingID: Date()],
+            writings: [(Self.writingID, Date())],
             observation: ServerObservation(
                 source: "webdav:example", members: [], revisions: [path: "\"r1\""]
             )
         )
         #expect(workspaces.first?.onTheServer.isEmpty == true)
+    }
+
+    /// Two writings whose ids differ only in Unicode form are two
+    /// workspaces, each judged by its own date and offloaded in its own
+    /// folder. Swift calls the ids one string; the folders are named from the
+    /// bytes, and re-deriving a folder from an id sent one writing's
+    /// candidates into the other's.
+    @Test func idsThatDifferOnlyInUnicodeFormAreTwoWorkspaces() async throws {
+        let composed = "personal-devotionals:\u{00E9}"
+        let decomposed = "personal-devotionals:e\u{0301}"
+        #expect(composed == decomposed)
+        let library = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("offload-bytes-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        var folders: [URL] = []
+        for id in [composed, decomposed] {
+            let folder = library
+                .appendingPathComponent("AgentWorkspaces/Writing", isDirectory: true)
+                .appendingPathComponent(LampWritingWorkspaceLayout.directoryName(for: id), isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: folder.appendingPathComponent("context"), withIntermediateDirectories: true
+            )
+            folders.append(folder)
+        }
+        #expect(folders[0] != folders[1], "two folders")
+
+        let old = Date(timeIntervalSince1970: 0)
+        let recent = Date()
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: library,
+            writings: [(composed, old), (decomposed, recent)],
+            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
+        )
+        #expect(workspaces.count == 2)
+        for workspace in workspaces {
+            // By folder name: the gatherer's paths are under /private/var and
+            // these under /var, the same place spelled two ways.
+            let expected = workspace.folder?.lastPathComponent == folders[0].lastPathComponent
+                ? old : recent
+            #expect(
+                workspace.lastActivity == expected,
+                "each folder carries its own writing's date"
+            )
+        }
     }
 
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
@@ -760,7 +828,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         try await Self.settle(["big.pdf"], in: fixture.workspace)
         let known = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: [Self.writingID: Date()],
+            writings: [(Self.writingID, Date())],
             observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
         )
         #expect(known.count == 1)
@@ -772,7 +840,7 @@ struct WorkspaceSourceOffloadGatheringTests {
 
         let orphaned = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
-            writings: ["personal-devotionals:SOMETHING-ELSE": Date()],
+            writings: [("personal-devotionals:SOMETHING-ELSE", Date())],
             observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
         )
         #expect(
