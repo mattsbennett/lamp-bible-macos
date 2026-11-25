@@ -2751,6 +2751,9 @@ struct DevotionalAgentWorkspaceView: View {
                     """
                 return
             }
+            // The lock on where sync points goes on before anything is
+            // deleted, not after the list is next read.
+            syncController.willOffload(to: observation.source)
             try await WorkspaceContextFileStore.offloadSource(
                 relativePath: file.relativePath,
                 in: workspaceURL,
@@ -2787,7 +2790,8 @@ struct DevotionalAgentWorkspaceView: View {
             // starts for a change to a file it carries — so without this the
             // source waited on an idle library for some unrelated edit.
             LampSyncRequest.wantAPass()
-            Task { await syncController.syncLocalWorkIfAppeared(library: libraryModel.library) }
+            // A press, so not subject to the automatic-sync setting.
+            Task { _ = await syncController.syncAsked(library: libraryModel.library) }
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” will come back on the next sync."
             schedulePoll()

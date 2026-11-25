@@ -307,6 +307,18 @@ public enum WorkspaceContextFileStore {
         )
         let source = sourceURL.standardizedFileURL
         guard !isContained(source, in: contextDirectory) else { return nil }
+        // Names a source still holds though it is not here: let go to the
+        // server, or on its way back. The disk shows them free, and a new
+        // attachment given one of them would be published over the server's
+        // copy on the next pass — overwriting a source with something else,
+        // and nobody asked. The top-level name is what is taken, so a new
+        // folder cannot land among offloaded files either.
+        let reserved = Set(
+            WorkspaceFileLedger.load(in: workspaceURL).contextActs().keys.compactMap {
+                $0.split(separator: "/", maxSplits: 1).first
+                    .map { String($0).precomposedStringWithCanonicalMapping }
+            }
+        )
 
         let values = try source.resourceValues(forKeys: [
             .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
@@ -332,6 +344,7 @@ public enum WorkspaceContextFileStore {
             let destination = availableDestination(
                 named: source.lastPathComponent,
                 in: contextDirectory,
+                reserving: reserved,
                 fileManager: fileManager
             )
             try materialize(
@@ -348,6 +361,7 @@ public enum WorkspaceContextFileStore {
         let destination = availableDestination(
             named: source.lastPathComponent,
             in: contextDirectory,
+            reserving: reserved,
             fileManager: fileManager
         )
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: false)
@@ -672,6 +686,15 @@ public enum WorkspaceContextFileStore {
 
         var ready: [VerifiedSource] = []
         var skipped: [String: Skipped] = [:]
+        // Asked of the volume once, before any file is read. Off APFS nothing
+        // would be offloaded anyway, and on a library kept on exFAT or a share
+        // an hourly sweep would otherwise reread every eligible PDF just to
+        // refuse it. The per-file answer, from the open descriptor, is still
+        // what decides — this only saves reading what it would refuse.
+        guard LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: contextDirectory) else {
+            for relativePath in relativePaths { skipped[relativePath] = .untrustedVolume }
+            return ([], skipped)
+        }
         for relativePath in relativePaths {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: relativePath
@@ -1180,10 +1203,15 @@ public enum WorkspaceContextFileStore {
     private static func availableDestination(
         named name: String,
         in directory: URL,
+        reserving reserved: Set<String> = [],
         fileManager: FileManager
     ) -> URL {
+        func isTaken(_ candidate: URL) -> Bool {
+            fileManager.fileExists(atPath: candidate.path)
+                || reserved.contains(candidate.lastPathComponent.precomposedStringWithCanonicalMapping)
+        }
         let proposed = directory.appendingPathComponent(name)
-        guard fileManager.fileExists(atPath: proposed.path) else { return proposed }
+        guard isTaken(proposed) else { return proposed }
         let source = URL(fileURLWithPath: name)
         let ext = source.pathExtension
         let stem = source.deletingPathExtension().lastPathComponent
@@ -1191,7 +1219,7 @@ public enum WorkspaceContextFileStore {
         while true {
             let candidateName = ext.isEmpty ? "\(stem) \(index)" : "\(stem) \(index).\(ext)"
             let candidate = directory.appendingPathComponent(candidateName)
-            if !fileManager.fileExists(atPath: candidate.path) { return candidate }
+            if !isTaken(candidate) { return candidate }
             index += 1
         }
     }

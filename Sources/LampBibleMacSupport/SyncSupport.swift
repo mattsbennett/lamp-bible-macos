@@ -161,13 +161,19 @@ public enum LampWorkspaceSync {
     static func isHere(
         _ relativePath: String, inContextOf workspace: URL, fileManager: FileManager = .default
     ) -> Bool {
-        let file = workspace
-            .appendingPathComponent("context", isDirectory: true)
-            .appendingPathComponent(relativePath)
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        let file = context.appendingPathComponent(relativePath)
         guard let values = try? file.resourceValues(forKeys: [
             .isRegularFileKey, .isSymbolicLinkKey,
         ]) else { return false }
+        // And reached without leaving the context directory. A folder on the
+        // way replaced by a link to somewhere holding the same name would
+        // show a regular file at the leaf, while the gather — which follows
+        // no links — has no source there at all: the Download row would go
+        // and the lock on the server would lift with nothing restored.
         return values.isRegularFile == true && values.isSymbolicLink != true
+            && file.resolvingSymlinksInPath().path
+                .hasPrefix(context.resolvingSymlinksInPath().path + "/")
     }
 
     /// Every source this reader has done something to that is not here, with
@@ -218,14 +224,12 @@ public enum LampWorkspaceSync {
     public static func forgetActsNoLongerOnTheServer(
         inLibraryAt libraryRoot: URL,
         members: Set<String>,
-        source: String,
         fileManager: FileManager = .default
     ) -> [String] {
-        // Only what *this* server ever held. A source offloaded to one server
-        // is not a member of another's manifest, and forgetting it on the
-        // first pass against the new one would make it vanish from Context
-        // while its only copy still sits on the old.
-        let records = LampSyncFileRecords.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        // Called only with the manifest of the server the offloads went to
+        // (`mayReconcileOffloads`). Not narrowed further by whether a record
+        // survives: when another device deletes a source, its record is
+        // reaped, and requiring one left the row on the server for ever.
         var forgotten: [String] = []
         for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
             var ledger = WorkspaceFileLedger.load(in: workspace)
@@ -235,8 +239,7 @@ public enum LampWorkspaceSync {
             for path in acted.keys.sorted() {
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
-                ), !members.contains(member),
-                    records.record(member, in: source) != nil
+                ), !members.contains(member)
                 else { continue }
                 ledger.forgetAct(WorkspaceFileLedger.contextKey(path))
                 forgotten.append(member)
@@ -292,20 +295,30 @@ public enum LampWorkspaceSync {
         return asked
     }
 
-    /// Whether sync may be pointed at `destination` while `onlyOnTheServer`
-    /// are held nowhere else: always to nowhere — turning sync off changes no
-    /// server — and otherwise only at one this Mac has confirmed holding
-    /// every one of them. That last is what lets sync be turned off and on
-    /// again: the same server comes back, and it holds them.
-    public static func mayPointSync(
-        at destination: String?,
-        holding onlyOnTheServer: [String],
-        records: LampSyncFileRecords
+    /// Whether sync may be pointed at `destination` while offloads are held
+    /// by `heldBy`: always to nowhere — turning sync off changes no server —
+    /// and otherwise only back to that server.
+    ///
+    /// `heldBy` is the server the offloads were *made against*, written down
+    /// when the first one began. It used to be inferred: any server this Mac
+    /// had a confirmed record for was taken to hold the source. A record is a
+    /// memory of one upload, though, and an old server's copy may since have
+    /// been deleted or overwritten — switching back to it on the strength of
+    /// that record would have left Download fetching the wrong version or
+    /// nothing, while the only current copy sat on the server just left.
+    public static func mayPointSync(at destination: String?, heldBy: String?) -> Bool {
+        guard let heldBy, let destination else { return true }
+        return destination == heldBy
+    }
+
+    /// Whether a pass's manifest may settle this Mac's offloads: only one
+    /// from the server they were made against. Another server's manifest
+    /// never counted them, and forgetting them on its word would make them
+    /// vanish while their only copy sat on the server they went to.
+    public static func mayReconcileOffloads(
+        withManifestOf observed: String, heldBy: String?
     ) -> Bool {
-        guard let destination, !onlyOnTheServer.isEmpty else { return true }
-        return onlyOnTheServer.allSatisfy {
-            records.record($0, in: destination)?.installedRevision != nil
-        }
+        heldBy == nil || heldBy == observed
     }
 
     /// Every source this library is withholding, as published member paths:

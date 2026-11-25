@@ -1140,6 +1140,20 @@ private struct ReaderSettingsView: View {
                                 .disabled(syncController.isSyncing)
                             }
                         }
+                        if syncController.destinationIsLocked,
+                           syncController.sourcesOnlyOnTheServer.isEmpty {
+                            // Held by a removal not yet carried to the server:
+                            // sent after a switch, it would reach the wrong one.
+                            Text(
+                                """
+                                A source you removed is still on its way to this \
+                                server. Where Lamp syncs can change once it has \
+                                synced.
+                                """
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
                         Picker(
                             "Provider",
                             selection: Binding(
@@ -1156,13 +1170,14 @@ private struct ReaderSettingsView: View {
                             Button("Choose iCloud Drive or Folder…", systemImage: "folder") {
                                 syncController.chooseFolder()
                             }
-                            .disabled(!syncController.sourcesOnlyOnTheServer.isEmpty)
+                            .disabled(syncController.destinationIsLocked)
                         } else if syncController.provider == .webDAV {
                             TextField("WebDAV folder URL", text: $webDAVEndpoint)
                                 .onChange(of: webDAVEndpoint) { _, value in syncController.endpoint = value }
-                                .disabled(!syncController.sourcesOnlyOnTheServer.isEmpty)
+                                .disabled(syncController.destinationIsLocked)
                             TextField("Username", text: $webDAVUsername)
                                 .onChange(of: webDAVUsername) { _, value in syncController.username = value }
+                                .disabled(syncController.destinationIsLocked)
                             LabeledContent("Password") {
                                 HStack {
                                     SecureField("New password", text: $webDAVPassword)
@@ -1214,7 +1229,7 @@ private struct ReaderSettingsView: View {
                         }
                         .disabled(
                             !syncController.hasRememberedDetails
-                                || !syncController.sourcesOnlyOnTheServer.isEmpty
+                                || syncController.destinationIsLocked
                         )
                         .confirmationDialog(
                             "Forget sync details?",

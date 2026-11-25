@@ -768,13 +768,13 @@ struct WorkspaceFileDeletionSyncTests {
 
         // A manifest that still counts it changes nothing.
         await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: [path], source: source
+            inLibraryAt: macs.a, members: [path]
         )
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
 
         // One that does not is the other Mac's removal arriving.
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: ["something/else"], source: source
+            inLibraryAt: macs.a, members: ["something/else"]
         )
         #expect(forgotten == [path])
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
@@ -784,39 +784,118 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
-    /// A source offloaded to one server is not forgotten by a pass against
-    /// another.
+    /// Only the manifest of the server the offloads went to may settle them.
     ///
-    /// It is not a member of the new server's manifest — it never was — and
-    /// forgetting it on the first pass there made it vanish from Context
-    /// while its only copy still sat on the old server.
-    @Test func switchingServersDoesNotForgetWhatTheOldOneHolds() async throws {
+    /// Another server's manifest never counted them; forgetting them on its
+    /// word made them vanish while their only copy sat on the server they
+    /// went to. And within that server, a missing record is no reason to
+    /// keep a row: another device's deletion reaps the record, and requiring
+    /// one left the source drawn as on the server for ever.
+    @Test func onlyTheHoldingServersManifestSettlesAnOffload() async throws {
+        let held = "webdav:https://nas.example.com/s/"
+        #expect(LampWorkspaceSync.mayReconcileOffloads(withManifestOf: held, heldBy: held))
+        #expect(!LampWorkspaceSync.mayReconcileOffloads(withManifestOf: "webdav:https://other/", heldBy: held))
+
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
         let path = try LampWritingWorkspaceLayout.contextPath(
             folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
         )
-        let old = LampSyncFileRecords.webDAVSource(URL(string: "https://old.example.com/s/")!)
-        let new = LampSyncFileRecords.webDAVSource(URL(string: "https://new.example.com/s/")!)
-        var records = LampSyncFileRecords()
-        records.recordUpload(path, in: old, digest: "d", revision: "\"r1\"")
-        records.confirmRecorded([path: "\"r1\""], in: old)
-        try records.save(toLibraryAt: macs.a)
         var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
         ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
         try await ledger.save(in: workspaceURL)
-
-        let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: [], source: new
-        )
-        #expect(forgotten.isEmpty)
-        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
+        // No record at all: reaped when another device deleted it.
 
         let gone = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: [], source: old
+            inLibraryAt: macs.a, members: []
         )
-        #expect(gone == [path], "the server that held it is the one whose word counts")
+        #expect(gone == [path])
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+    }
+
+    /// Attaching a file under an offloaded source's name gives it another
+    /// name.
+    ///
+    /// The disk shows the path free. Given it, the new file would have been
+    /// published over the server's copy on the next pass — the reader's
+    /// offloaded source overwritten by something else, unasked.
+    @Test func anAttachmentDoesNotTakeAnOffloadedSourcesName() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("notes.pdf"))
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("folder/inside.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        let outside = macs.root.appendingPathComponent("incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try write("a different notes", to: outside.appendingPathComponent("notes.pdf"), at: 0)
+        let folder = outside.appendingPathComponent("folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("x", to: folder.appendingPathComponent("other.pdf"), at: 0)
+
+        let file = try await WorkspaceContextFileStore.addContextItem(
+            from: outside.appendingPathComponent("notes.pdf"), to: workspaceURL, libraryRootURL: macs.a
+        )
+        #expect(file?.lastPathComponent == "notes 2.pdf")
+        let added = try await WorkspaceContextFileStore.addContextItem(
+            from: folder, to: workspaceURL, libraryRootURL: macs.a
+        )
+        #expect(
+            added?.lastPathComponent == "folder 2",
+            "a folder cannot land among offloaded files either"
+        )
+    }
+
+    /// While offloads are outstanding, sync can be turned off and back on to
+    /// the server they went to, and pointed nowhere else (owner's decision,
+    /// `decisions/0021`).
+    ///
+    /// The server is the one written down when the first offload began, not
+    /// one inferred from records: a record is a memory of a past upload, and
+    /// an old server holding one may since have lost or replaced the file.
+    @Test func syncCannotLeaveTheServerTheOffloadsWentTo() {
+        let held = "webdav:https://nas.example.com/s/"
+        let other = "webdav:https://other.example.com/s/"
+        #expect(LampWorkspaceSync.mayPointSync(at: nil, heldBy: held), "off changes no server")
+        #expect(LampWorkspaceSync.mayPointSync(at: held, heldBy: held), "and back on returns to it")
+        #expect(!LampWorkspaceSync.mayPointSync(at: other, heldBy: held), "but nowhere else")
+        #expect(LampWorkspaceSync.mayPointSync(at: other, heldBy: nil), "and with nothing held, anywhere")
+    }
+
+    /// Download All is the way out: every offloaded source is asked back, and
+    /// the list the lock is shown from holds until they have arrived, not
+    /// merely been asked for — one on its way still exists only on the old
+    /// server.
+    @Test func downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        for name in ["a.pdf", "b.pdf"] {
+            ledger.noteOffloaded(WorkspaceFileLedger.contextKey(name))
+        }
+        try await ledger.save(in: workspaceURL)
+
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2)
+
+        let asked = await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a)
+        #expect(asked == 2)
+        #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["a.pdf", "b.pdf"])
+        #expect(
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2,
+            "asked for is not here"
+        )
+
+        try write("a", to: context.appendingPathComponent("a.pdf"), at: 0)
+        try write("b", to: context.appendingPathComponent("b.pdf"), at: 0)
+        #expect(
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).isEmpty,
+            "arrived"
+        )
     }
 
     /// A confirmed Remove does not delete a different file that has since
@@ -861,65 +940,31 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
-    /// While a source is only on the server, sync can be turned off and on,
-    /// but not pointed at a server that does not hold it (owner's decision,
-    /// `decisions/0021`).
-    @Test func syncCannotLeaveAserverHoldingTheOnlyCopy() {
-        let member = "Workspaces/Writing/talk-123/Context/history.pdf"
-        let here = LampSyncFileRecords.webDAVSource(URL(string: "https://nas.example.com/s/")!)
-        let elsewhere = LampSyncFileRecords.webDAVSource(URL(string: "https://other.example.com/s/")!)
-        var records = LampSyncFileRecords()
-        records.recordUpload(member, in: here, digest: "d", revision: "\"r1\"")
-        records.confirmRecorded([member: "\"r1\""], in: here)
-
-        #expect(
-            LampWorkspaceSync.mayPointSync(at: nil, holding: [member], records: records),
-            "turning sync off changes no server"
-        )
-        #expect(
-            LampWorkspaceSync.mayPointSync(at: here, holding: [member], records: records),
-            "and turning it back on returns to the one that holds it"
-        )
-        #expect(
-            !LampWorkspaceSync.mayPointSync(at: elsewhere, holding: [member], records: records),
-            "but another server could neither give it back nor be told to remove it"
-        )
-        #expect(
-            LampWorkspaceSync.mayPointSync(at: elsewhere, holding: [], records: records),
-            "and with nothing only on the server, sync may go anywhere"
-        )
-    }
-
-    /// Download All is the way out: every offloaded source is asked back, and
-    /// the lock holds until they have arrived, not merely been asked for —
-    /// one on its way still exists only on the old server.
-    @Test func downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive() async throws {
+    /// A folder on the way replaced by a link does not make an offloaded
+    /// source look present.
+    ///
+    /// The leaf is a regular file through the link, but the gather follows
+    /// no links and has no source there. Counting it as here would hide the
+    /// Download row and lift the lock on the server with nothing restored.
+    @Test func anOffloadedSourceBehindALinkedFolderIsStillOnTheServer() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
         let context = workspaceURL.appendingPathComponent("context")
+        try FileManager.default.createDirectory(at: context, withIntermediateDirectories: true)
         var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
-        for name in ["a.pdf", "b.pdf"] {
-            ledger.noteOffloaded(WorkspaceFileLedger.contextKey(name))
-        }
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("notes/history.pdf"))
         try await ledger.save(in: workspaceURL)
 
-        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2)
-
-        let asked = await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a)
-        #expect(asked == 2)
-        #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["a.pdf", "b.pdf"])
-        #expect(
-            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2,
-            "asked for is not here"
+        let elsewhere = macs.root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write("a file of the same name", to: elsewhere.appendingPathComponent("history.pdf"), at: 0)
+        try FileManager.default.createSymbolicLink(
+            at: context.appendingPathComponent("notes"), withDestinationURL: elsewhere
         )
 
-        try write("a", to: context.appendingPathComponent("a.pdf"), at: 0)
-        try write("b", to: context.appendingPathComponent("b.pdf"), at: 0)
-        #expect(
-            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).isEmpty,
-            "arrived, and sync may go anywhere"
-        )
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["notes/history.pdf"])
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 1)
     }
 
     /// Opening the writing part way through a batch stops the rest of it.

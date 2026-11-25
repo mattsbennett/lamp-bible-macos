@@ -98,22 +98,46 @@ final class LibrarySyncController: ObservableObject {
         self.fileManager = fileManager
     }
 
-    /// Sources this Mac holds only on the server, as member paths. While
-    /// there are any, sync cannot be pointed at a server that does not hold
-    /// them all — the owner's decision (`decisions/0021`): they exist only on
-    /// the server they went to, and another could neither give them back nor
-    /// be told to remove them. Kept current after every pass, and whenever
-    /// a pane offloads, downloads or removes a source.
+    /// Sources this Mac holds only on the server, as member paths — what the
+    /// Settings notice counts. Kept current after every pass, and whenever a
+    /// pane offloads, downloads or removes a source.
     @Published private(set) var sourcesOnlyOnTheServer: [String] = []
-    /// The library the lock above was read from, for checking a change
-    /// against its records.
-    private var lockedLibraryRoot: URL?
+
+    /// The server this Mac's offloads went to, while any are outstanding.
+    ///
+    /// The lock on where sync points (owner's decision, `decisions/0021`) is
+    /// *this*, not the list above. It is written before the first unlink, so
+    /// it holds from the moment a copy is about to go rather than from the
+    /// next time the list is read; and it names the server, rather than
+    /// inferring one from records that are only memories of past uploads.
+    /// It is released when nothing is only on the server and no removal of a
+    /// source is still queued for it — a removal sent after a switch would go
+    /// to the wrong server.
+    private var offloadsHeldBy: String? {
+        get { defaults.string(forKey: "sync.offloadsHeldBy") }
+        set { defaults.set(newValue, forKey: "sync.offloadsHeldBy"); objectWillChange.send() }
+    }
+
+    /// Whether where sync points is locked to one server.
+    var destinationIsLocked: Bool { offloadsHeldBy != nil }
+
+    /// Engages the lock on `source` before an offload deletes anything.
+    func willOffload(to source: String) {
+        if offloadsHeldBy == nil { offloadsHeldBy = source }
+    }
 
     func refreshSourcesOnlyOnTheServer(library: LampLibrary) async {
-        lockedLibraryRoot = library.rootURL
-        sourcesOnlyOnTheServer = await LampWorkspaceSync.sourcesOnlyOnTheServer(
-            inLibraryAt: library.rootURL
-        )
+        let root = library.rootURL
+        sourcesOnlyOnTheServer = await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: root)
+        let removalsQueued = LampSyncRemovedModules.load(fromLibraryAt: root, fileManager: fileManager)
+            .removedAt.keys.contains(where: LampWorkspaceSync.namesAsource)
+        if sourcesOnlyOnTheServer.isEmpty, !removalsQueued {
+            if offloadsHeldBy != nil { offloadsHeldBy = nil }
+        } else if offloadsHeldBy == nil, !sourcesOnlyOnTheServer.isEmpty, let current = currentSource {
+            // Held but never written down — from a build before this. The
+            // server sync talks to now is the one they can only have gone to.
+            offloadsHeldBy = current
+        }
     }
 
     /// Asks for every offloaded source back and starts a pass: the way out of
@@ -121,29 +145,37 @@ final class LibrarySyncController: ObservableObject {
     func downloadEverySourceOnTheServer(library: LampLibrary) async {
         await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: library.rootURL)
         await refreshSourcesOnlyOnTheServer(library: library)
-        _ = await sync(library: library)
+        _ = await syncAsked(library: library)
+    }
+
+    /// A pass the reader asked for by pressing something — Download, Try
+    /// Again, Download All. Not subject to the automatic-sync setting, which
+    /// governs passes Lamp starts by itself: a press is not one of those.
+    func syncAsked(library: LampLibrary) async -> Bool {
+        guard provider != .off else { return false }
+        return await sync(library: library)
     }
 
     /// Whether sync may be pointed at `destination` now. Refusals say why.
     private func mayPointSync(at destination: String?) -> Bool {
-        guard !sourcesOnlyOnTheServer.isEmpty, let root = lockedLibraryRoot else { return true }
-        let allowed = LampWorkspaceSync.mayPointSync(
-            at: destination,
-            holding: sourcesOnlyOnTheServer,
-            records: LampSyncFileRecords.load(fromLibraryAt: root, fileManager: fileManager)
-        )
+        let allowed = LampWorkspaceSync.mayPointSync(at: destination, heldBy: offloadsHeldBy)
         if !allowed { sayWhyTheDestinationIsLocked() }
         return allowed
     }
 
     private func sayWhyTheDestinationIsLocked() {
         let count = sourcesOnlyOnTheServer.count
-        errorMessage = """
-            \(count == 1 ? "A source is" : "\(count) sources are") only on the \
-            current sync server. Download \(count == 1 ? "it" : "them") before \
-            changing where Lamp syncs, or \(count == 1 ? "it" : "they") would be \
-            left behind.
-            """
+        errorMessage = count == 0
+            ? """
+              A source removal is still waiting to reach the current sync \
+              server. Let it sync before changing where Lamp syncs.
+              """
+            : """
+              \(count == 1 ? "A source is" : "\(count) sources are") only on the \
+              current sync server. Download \(count == 1 ? "it" : "them") before \
+              changing where Lamp syncs, or \(count == 1 ? "it" : "they") would be \
+              left behind.
+              """
     }
 
     /// The server a provider would sync with, from what is remembered for it.
@@ -184,7 +216,16 @@ final class LibrarySyncController: ObservableObject {
 
     var username: String {
         get { defaults.string(forKey: "sync.webdav.username") ?? "" }
-        set { defaults.set(newValue, forKey: "sync.webdav.username") }
+        set {
+            // Another account on the same address can be another set of
+            // files, and the sources were offloaded to this one's.
+            guard newValue == username || !destinationIsLocked else {
+                sayWhyTheDestinationIsLocked()
+                objectWillChange.send()
+                return
+            }
+            defaults.set(newValue, forKey: "sync.webdav.username")
+        }
     }
 
     /// Whether anything is remembered about how to reach a sync server.
@@ -206,7 +247,7 @@ final class LibrarySyncController: ObservableObject {
     func forgetSyncDetails() {
         // Forgetting the way to the server is forgetting the way to the only
         // copy of anything offloaded to it.
-        guard sourcesOnlyOnTheServer.isEmpty else {
+        guard !destinationIsLocked else {
             sayWhyTheDestinationIsLocked()
             return
         }
@@ -379,8 +420,11 @@ final class LibrarySyncController: ObservableObject {
         // Unread is not empty: a pass that never got a manifest must not look
         // like a server that has dropped every source.
         guard let members = lastObservation?.members else { return }
+        guard let observed = lastObservation?.source,
+              LampWorkspaceSync.mayReconcileOffloads(withManifestOf: observed, heldBy: offloadsHeldBy)
+        else { return }
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: library.rootURL, members: members, source: lastObservation?.source ?? ""
+            inLibraryAt: library.rootURL, members: members
         )
         if !forgotten.isEmpty {
             Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
@@ -439,6 +483,7 @@ final class LibrarySyncController: ObservableObject {
             // a reader who opened this writing during them would lose its
             // sources from under an open editor.
             guard !OpenWritingEditors.writingIDs.contains(writingID) else { continue }
+            willOffload(to: observation.source)
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,

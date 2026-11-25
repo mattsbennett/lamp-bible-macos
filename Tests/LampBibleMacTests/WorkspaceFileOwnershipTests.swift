@@ -91,10 +91,13 @@ struct WorkspaceFileOwnershipTests {
                     sibling: the gather has already described the workspace by
                     the time this is asked).
                     """,
+                "mayReconcileOffloads": """
+                    compares two server names it is handed and opens nothing.
+                    """,
                 "mayPointSync": """
-                    compares the paths and the records it is handed, and opens \
-                    nothing: the settings ask it on the main actor as a change \
-                    is made, and a hop to the owner there would be a frame.
+                    compares two server names it is handed and opens nothing: \
+                    the settings ask it on the main actor as a change is made, \
+                    and a hop to the owner there would be a frame.
                     """,
                 "claimableRevisionMembers": """
                     compares two sets of paths it is handed and opens nothing. \
