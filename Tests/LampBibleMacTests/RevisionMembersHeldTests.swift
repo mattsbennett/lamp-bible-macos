@@ -126,6 +126,28 @@ struct RevisionMembersHeldTests {
         #expect(claimed == [shouted])
     }
 
+    /// What counts as a reader's *source*, and what does not.
+    ///
+    /// The writing folder is required. A custom skill is published by copying
+    /// its whole tree under `Workspaces/Skills/<skill>`, so a skill that
+    /// keeps its own `Context` folder would otherwise be taken for a reader's
+    /// sources — and a Mac receiving the skill would withhold files the skill
+    /// needs. A reviewer found that; `namesARevision` already required the
+    /// folder for the same reason.
+    @Test(arguments: [
+        ("Workspaces/Writing/W1/Context/book.pdf", true),
+        ("Workspaces/Writing/W1/Context/sources/deep/book.pdf", true),
+        ("Workspaces/Skills/my-skill/Context/index.json", false),
+        ("Workspaces/Devotionals/W1/Context/book.pdf", false),
+        ("Workspaces/Writing/W1/Revisions/1-A.json", false),
+        ("Workspaces/Writing/W1/Documents/draft.md", false),
+        ("Workspaces/Writing//Context/book.pdf", false),
+        ("Context/book.pdf", false),
+    ])
+    func namesOnlyAreadersSource(path: String, isSource: Bool) {
+        #expect(LampWorkspaceSync.namesAsource(path) == isSource, "for \(path)")
+    }
+
     @Test func namesTheWorkspaceAmemberBelongsTo() {
         #expect(
             LampWorkspaceSync.workspaceIdentifier(

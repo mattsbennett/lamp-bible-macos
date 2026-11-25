@@ -168,9 +168,10 @@ struct WorkspaceFileDeletionSyncTests {
 
         // Deleted through the act. Taking it off the disk is no longer a
         // deletion — see `aSourceThatMerelyGoesMissingIsNotDeletedEverywhere`.
-        try await WorkspaceContextFileStore.deleteContextFile(
-            at: context.appendingPathComponent("sources/commentary.txt"),
-            in: workspace(macs.a),
+        // Through the app's own Remove, which is the act that records it.
+        try await WorkspaceContextFileStore.removeContextItem(
+            at: context.appendingPathComponent("sources"),
+            from: workspace(macs.a),
             libraryRootURL: macs.a
         )
         try await macs.sync(from: macs.b, to: macs.a)
@@ -214,9 +215,9 @@ struct WorkspaceFileDeletionSyncTests {
         try await macs.sync(from: macs.a, to: macs.b)
         try await macs.sync(from: macs.b, to: macs.a)
 
-        try await WorkspaceContextFileStore.deleteContextFile(
+        try await WorkspaceContextFileStore.removeContextItem(
             at: contextA.appendingPathComponent("map.txt"),
-            in: workspace(macs.a),
+            from: workspace(macs.a),
             libraryRootURL: macs.a
         )
         try await macs.sync(from: macs.a, to: macs.b)

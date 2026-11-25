@@ -1258,29 +1258,25 @@ extension LibrarySyncController {
         // Except the ids an untagged merge here still needs a file for: a
         // demotion wants every id the merge replaced, so claiming one would
         // leave a turn's changes under no turn's name for good.
-        // A source the manifest names and this Mac does not have is
-        // **withheld**, not fetched: offloaded to free space, removed in
-        // Finder, or simply never pulled on this device. The pass takes no
-        // part in it — nothing fetched, nothing deleted, nothing recorded —
-        // so it stays on the server and comes down when something asks.
+        // The sources this Mac has **offloaded**: still on the server,
+        // dropped here to free space. The pass takes no part in them —
+        // nothing fetched, nothing deleted, nothing recorded — so they come
+        // down again when something asks.
         //
-        // This is what makes a missing source safe now that absence is no
-        // longer read as a deletion (`WorkspaceContextFileStore
-        // .deleteContextFile` is the only thing that means "delete it
-        // everywhere"). Without it, a removed source would be downloaded on
-        // every pass, written back, and — before that change — discarded
-        // again: the loop `decisions/0016` is about, in a third place.
-        //
-        // Deliberately a policy and not a claim. It says nothing about why
-        // the file is absent, which is the distinction those records cost
-        // four review rounds to arrive at.
-        let heldPaths = Set(described.files.map(\.path))
-        result.gathered.withheld.formUnion(
-            manifest.members.lazy
-                .filter { $0.kind == .workspaceFile }
-                .map(\.path)
-                .filter { LampWorkspaceSync.namesAsource($0) && !heldPaths.contains($0) }
+        // Read from each workspace's ledger, not from what is missing. The
+        // first version of this withheld every absent source, which cannot
+        // tell a file this Mac offloaded from one it has never seen: a new
+        // Mac withheld the whole library's sources and had no way to fetch
+        // one. Absence is not a fact about intent, and this is the fourth
+        // place tonight that has had to be said
+        // (`lamp-bible-core/Documentation/decisions/0016`, `0017`, `0018`).
+        let offloaded = await LampWorkspaceSync.offloadedSources(
+            inLibraryAt: library.rootURL, fileManager: fileManager
         )
+        if !offloaded.isEmpty {
+            let members = Set(manifest.members.lazy.map(\.path))
+            result.gathered.withheld.formUnion(offloaded.intersection(members))
+        }
 
         result.gathered.heldWithoutAFile.formUnion(
             await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
@@ -1475,9 +1471,17 @@ extension LibrarySyncController {
         // The paths no folder listing reaches: the manifest names them, and
         // their folders are listed for them — one request a folder rather
         // than one a file. See `revisionsOfUnlistedMembers`.
+        // Withheld paths are not asked about either. A folder provider's
+        // listing carries no revision, so the fallback asks the file itself —
+        // which on iCloud materialises an evicted copy and hashes it. A pass
+        // that will not install a source has no business pulling its bytes
+        // into the sync folder to find out its revision.
+        let withheld = result.gathered.withheld
         result.gathered.extraListing.merge(
             await LampSyncLocalFiles.revisionsOfUnlistedMembers(
-                manifest.members.filter { !($0.kind?.isListed ?? true) }.map(\.path),
+                manifest.members
+                    .filter { !($0.kind?.isListed ?? true) && !withheld.contains($0.path) }
+                    .map(\.path),
                 from: store
             )
         ) { _, listed in listed }

@@ -100,6 +100,32 @@ public enum LampWorkspaceSync {
         return claimed
     }
 
+    /// Every source this library has offloaded, as published member paths.
+    ///
+    /// Read from each workspace's own ledger rather than inferred from what
+    /// is missing. A new Mac has offloaded nothing, so it withholds nothing
+    /// and fetches the library's sources as it always did — which is the
+    /// regression the first version of this caused, and the fourth time
+    /// absence turned out not to be a fact (`decisions/0018`).
+    @WritingWorkspaceFiles
+    public static func offloadedSources(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> Set<String> {
+        var paths: Set<String> = []
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            let ledger = WorkspaceFileLedger.load(in: workspace)
+            guard !ledger.offloaded.isEmpty else { continue }
+            let prefix = [
+                portableDirectoryName,
+                WritingFolder.perFile.rawValue,
+                workspace.lastPathComponent,
+            ].joined(separator: "/")
+            paths.formUnion(ledger.offloadedMembers(under: prefix))
+        }
+        return paths
+    }
+
     /// Whether `path` is a published **source**:
     /// `Workspaces/<kind>/<workspace>/Context/<name...>`.
     ///
@@ -109,8 +135,16 @@ public enum LampWorkspaceSync {
     /// allowed, unlike revisions, because a reader's sources come in folders.
     public static func namesAsource(_ path: String) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count >= 5, parts[0] == portableDirectoryName, parts[3] == "Context",
-              !parts[1].isEmpty, !parts[2].isEmpty, !parts[4].isEmpty
+        // The writing folder is required, as `namesARevision` requires it. A
+        // custom skill is published by copying its whole tree under
+        // `Workspaces/Skills/<skill>`, so a skill that keeps its own
+        // `Context` folder would otherwise be classified as a reader's
+        // sources — and a receiving Mac would take the skill while silently
+        // leaving out files it needs.
+        guard parts.count >= 5, parts[0] == portableDirectoryName,
+              parts[1] == WritingFolder.perFile.rawValue,
+              parts[3] == "Context",
+              !parts[2].isEmpty, !parts[4].isEmpty
         else { return false }
         return true
     }
@@ -1182,6 +1216,19 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// objects whose modification times are those of whichever copy came
     /// first, so a file added again could look older than its own deletion.
     var presentSince: [String: Int64] = [:]
+    /// Sources this Mac has deliberately offloaded: still on the server,
+    /// dropped here to free space.
+    ///
+    /// **Local only** — it is not in `Portable`, because it is this Mac's
+    /// housekeeping and no other device's business.
+    ///
+    /// Recorded rather than inferred, which is the fourth time that
+    /// distinction has had to be made (`decisions/0016`, `0017`, `0018`).
+    /// Withholding every absent source looked equivalent and is not: it
+    /// cannot tell a file this Mac offloaded from one it has never seen, so
+    /// a new Mac withheld every source in the library and could never fetch
+    /// one. Absence is not a fact about intent.
+    var offloaded: Set<String> = []
 
     struct Portable: Codable, Equatable {
         var formatVersion = 1
@@ -1219,6 +1266,35 @@ struct WorkspaceFileLedger: Codable, Equatable {
         deletedAt[key] = max(deletedAt[key] ?? .min, Self.milliseconds(now))
         synced?[key] = nil
         presentSince[key] = nil
+        offloaded.remove(key)
+    }
+
+    /// Notes that a source was offloaded here: the file goes, the member
+    /// stays, and the gather withholds it until something asks for it.
+    mutating func recordOffload(of key: String) {
+        let key = Self.normalized(key)
+        offloaded.insert(key)
+        synced?[key] = nil
+    }
+
+    /// Takes a source off the offloaded list, so the next pass fetches it.
+    mutating func clearOffload(of key: String) {
+        offloaded.remove(Self.normalized(key))
+    }
+
+    /// The published member paths this Mac has offloaded, given the prefix
+    /// the workspace publishes under (`Workspaces/Writing/<id>`).
+    func offloadedMembers(under prefix: String) -> Set<String> {
+        // Checked against the published shape rather than trusted: a key that
+        // does not name a reader's source is not something to withhold, and
+        // the check is the same one that keeps a custom skill's own `Context`
+        // folder out of this.
+        Set(
+            offloaded.lazy
+                .filter(Self.isContextKey)
+                .map { "\(prefix)/\($0)" }
+                .filter(LampWorkspaceSync.namesAsource)
+        )
     }
 
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
