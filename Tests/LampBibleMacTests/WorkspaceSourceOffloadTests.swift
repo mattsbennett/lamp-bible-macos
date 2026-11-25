@@ -287,20 +287,6 @@ struct WorkspaceSourceOffloadTests {
         #expect(ledger.acts[key] == nil, "a file here answers whatever was done to its path")
     }
 
-    /// A folder that has taken an offloaded file's own path holds it.
-    ///
-    /// Removing the folder deletes that source everywhere, because the
-    /// removal counts the path itself; the confirmation has to count it too,
-    /// or a click deletes the only copy of a different source unasked.
-    @Test func afolderAtAnOffloadedPathWaitsForADownload() {
-        let rows = WorkspaceSourceOffload.rows(
-            onDisk: [.init(name: "history.pdf", isDirectory: true, byteCount: nil)],
-            notHere: ["history.pdf": .offloaded]
-        )
-        #expect(rows == [SourceRow(relativePath: "history.pdf", state: .folder(holdsSourcesNotHere: true))])
-        #expect(rows.first?.removalWaitsForDownload == true)
-    }
-
     /// What a pass installs arrives here, though the gather never sees it.
     ///
     /// A pass installs sources between the gather's note and the record of
@@ -785,6 +771,19 @@ struct WorkspaceSourceOffloadGatheringTests {
         let old = OffloadLock(source: "webdav:a", account: nil)
         #expect(old.admits(source: "webdav:a", account: "user:ben"))
         #expect(!old.admits(source: "webdav:b", account: "user:ben"))
+    }
+
+    /// A source hidden by a folder at its own path is drawn, beside the
+    /// folder, as waiting for the folder to move: no download can land, and
+    /// a row that only offered Download would never work.
+    @Test func asourceHiddenByAfolderIsDrawnBesideIt() {
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: "history.pdf", isDirectory: true, byteCount: nil)],
+            notHere: ["history.pdf": .offloaded]
+        )
+        #expect(rows.map(\.state) == [.folder(holdsSourcesNotHere: true), .blockedByAFolder])
+        #expect(Set(rows.map(\.id)).count == 2)
+        #expect(rows.filter { !$0.removalWaitsForDownload }.isEmpty)
     }
 
     @Test func anonymousIsNotAnEmptyUsername() {

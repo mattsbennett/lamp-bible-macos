@@ -317,8 +317,14 @@ public enum WorkspaceContextFileStore {
         // Compared without case: on the case-insensitive volume a library
         // usually lives on, `history.pdf` and an offloaded `History.pdf` are
         // one path. Over-reserving on a case-sensitive volume costs a " 2".
+        // From a ledger that read: one that would not cannot say which names
+        // are taken, and guessing none could put a new file over an
+        // offloaded source's only copy.
+        guard let ledger = WorkspaceFileLedger.loadIfReadable(in: workspaceURL) else {
+            throw WorkspaceFileLedger.UnreadableLedger()
+        }
         let reserved = Set(
-            WorkspaceFileLedger.load(in: workspaceURL).contextActs()
+            ledger.contextActs()
                 .filter { $0.value != .leaving }.keys.compactMap {
                     $0.split(separator: "/", maxSplits: 1).first.map {
                         String($0).precomposedStringWithCanonicalMapping.lowercased()
@@ -694,17 +700,17 @@ public enum WorkspaceContextFileStore {
         observation: ServerObservation,
         server: OffloadServer,
         onlyWhileRequested: Bool = false,
-        readBudget: Int64 = 1 << 30,
+        readBudget: Int64 = readBackPerRun,
         fileManager: FileManager = .default,
         while shouldContinue: (@Sendable () async -> Bool)? = nil
-    ) async throws -> (offloaded: [String], skipped: [String: Skipped]) {
+    ) async throws -> (offloaded: [String], skipped: [String: Skipped], read: Int64) {
         // The server read from is the one the look was at, reached the same
         // way: otherwise the members say nothing about it.
         guard server.source == observation.source, server.account == observation.account else {
             return ([], Dictionary(relativePaths.map { ($0, Skipped.couldNotReadTheServer) },
-                                   uniquingKeysWith: { first, _ in first }))
+                                   uniquingKeysWith: { first, _ in first }), 0)
         }
-        guard !relativePaths.isEmpty else { return ([], [:]) }
+        guard !relativePaths.isEmpty else { return ([], [:], 0) }
         let contextDirectory = try validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
         )
@@ -722,7 +728,7 @@ public enum WorkspaceContextFileStore {
         // what decides — this only saves reading what it would refuse.
         guard LampSyncIdentityTrust.trustsIdentity(ofVolumeAt: contextDirectory) else {
             for relativePath in relativePaths { skipped[relativePath] = .untrustedVolume }
-            return ([], skipped)
+            return ([], skipped, 0)
         }
         for relativePath in relativePaths {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
@@ -767,10 +773,17 @@ public enum WorkspaceContextFileStore {
                 continue
             }
             // The proof: the server's copy, read now, through the store the
-            // sync uses, is these bytes. Bounded per run — the first sweep
-            // on a library could otherwise read back all of it at once.
-            guard read < readBudget else { skipped[verified.relativePath] = .later; continue }
-            read += verified.read.identity.size
+            // sync uses, is these bytes. Bounded — the first sweep on a
+            // library could otherwise read back all of it at once — and the
+            // bound checked before the read, not after. One file larger than
+            // the whole allowance may go only as a run's first read, or it
+            // never would.
+            let size = verified.read.identity.size
+            guard read + size <= readBudget || (read == 0 && readBudget >= readBackPerRun) else {
+                skipped[verified.relativePath] = .later
+                continue
+            }
+            read += size
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: verified.relativePath
             ) else { skipped[verified.relativePath] = .notAsource; continue }
@@ -844,8 +857,12 @@ public enum WorkspaceContextFileStore {
                 }
             }
         }
-        return (offloaded, skipped)
+        return (offloaded, skipped, read)
     }
+
+    /// How much one run of offloads reads back from the server, shared by
+    /// everything it offloads.
+    public static let readBackPerRun: Int64 = 1 << 30
 
     private enum ServerCopy { case matches, differs, unreadable }
 

@@ -754,6 +754,10 @@ public enum LampWorkspaceSync {
             // source back, which loses nothing.
             let readable = WorkspaceFileLedger.loadIfReadable(in: workspace)
             var fileLedger = readable ?? WorkspaceFileLedger()
+            // A source that came back and was never checked — an import that
+            // failed after writing it — is checked here, before the gather
+            // answers its act.
+            fileLedger.checkReturns(inContextOf: workspace, sayChanged: false)
             let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
@@ -834,6 +838,7 @@ public enum LampWorkspaceSync {
             // An unreadable ledger is left as it is; see the export.
             let readableLedger = WorkspaceFileLedger.loadIfReadable(in: workspace)
             var fileLedger = readableLedger ?? WorkspaceFileLedger()
+            fileLedger.checkReturns(inContextOf: workspace, sayChanged: false)
             let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
@@ -885,7 +890,7 @@ public enum LampWorkspaceSync {
             fileLedger.recordSynced(try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             // A source that has come back is checked against what left.
-            fileLedger.checkReturns(inContextOf: workspace)
+            fileLedger.checkReturns(inContextOf: workspace, sayChanged: true)
             if readableLedger != nil { try fileLedger.save(in: workspace) }
 
             let portableSelection = portableWorkspace.appendingPathComponent("EnabledSkills.json")
@@ -1698,6 +1703,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
         // Neither on the server for this Mac nor on its way here.
         acts[key] = nil
         quarantine[key] = nil
+        offloadedDigest[key] = nil
     }
 
     /// This Mac lets a source go. Noted before the file is unlinked, so a
@@ -1738,6 +1744,8 @@ struct WorkspaceFileLedger: Codable, Equatable {
     mutating func forgetAct(_ key: String, restoring baseline: Int64? = nil) {
         let key = Self.normalized(key)
         acts[key] = nil
+        quarantine[key] = nil
+        offloadedDigest[key] = nil
         if let baseline { synced?[key] = baseline }
     }
 
@@ -1805,13 +1813,20 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// points: a ledger that would not read may be holding the last offload,
     /// and reading it as empty would lift the lock while the only copy sat on
     /// the server.
+    ///
+    /// "No ledger" only where reading it says the file does not exist.
+    /// Asking `fileExists` first answered false for a ledger in a folder Lamp
+    /// had lost permission to search — and an empty ledger then.
     static func loadIfReadable(in workspace: URL) -> WorkspaceFileLedger? {
-        let file = url(in: workspace)
-        guard FileManager.default.fileExists(atPath: file.path) else { return WorkspaceFileLedger() }
-        guard let data = try? Data(contentsOf: file),
-              let ledger = try? JSONDecoder().decode(WorkspaceFileLedger.self, from: data)
-        else { return nil }
-        return ledger
+        let data: Data
+        do {
+            data = try Data(contentsOf: url(in: workspace))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return WorkspaceFileLedger()
+        } catch {
+            return nil
+        }
+        return try? JSONDecoder().decode(WorkspaceFileLedger.self, from: data)
     }
 
     struct UnreadableLedger: LocalizedError {
@@ -1833,13 +1848,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // A binding outlives nothing but its request; what is kept about a
-        // source that left, nothing but its absence.
+        // A binding outlives nothing but its request. What is kept about a
+        // source that left goes when a copy is checked (`checkReturns`), or
+        // with the source (`forgetAct`, `recordDeletion`) — not with the act,
+        // which a gather answers before an interrupted import's copy has
+        // been checked.
         var saved = self
         saved.leavingFile = leavingFile.filter { acts[$0.key] == .leaving }
-        let away = { (key: String) in acts[key] == .offloaded || acts[key] == .wanted }
-        saved.offloadedDigest = offloadedDigest.filter { away($0.key) }
-        saved.quarantine = quarantine.filter { away($0.key) }
         try encoder.encode(saved).write(to: destination, options: .atomic)
     }
 
@@ -1938,9 +1953,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// missing mark is a thing to say, not a reason to throw away a file the
     /// reader may have put there (`decisions/0022`).
     ///
-    /// Runs on the import, before the save that would drop the entries once
-    /// the act is gone.
-    mutating func checkReturns(inContextOf workspace: URL) {
+    /// What left is kept until a copy at the path has been checked, whenever
+    /// that is: on the import that brought it, or — where that import failed
+    /// after writing it — at the next gather, before the act is answered. A
+    /// copy that differs is said only by the import, which knows it came from
+    /// the server; at a gather it may be a file the reader put there, and its
+    /// entries are simply dropped.
+    mutating func checkReturns(inContextOf workspace: URL, sayChanged: Bool) {
         let context = workspace.appendingPathComponent("context", isDirectory: true)
         let prefix = Self.contextKey("")
         for (key, left) in offloadedDigest where key.hasPrefix(prefix) {
@@ -1953,7 +1972,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
                 quarantine[key] = nil
             }
             guard digest == left else {
-                returnNotices[key] = .changed
+                if sayChanged { returnNotices[key] = .changed }
                 continue
             }
             guard let mark = quarantine[key] else { continue }

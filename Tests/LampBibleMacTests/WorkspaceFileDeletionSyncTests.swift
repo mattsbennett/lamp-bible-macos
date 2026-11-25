@@ -1046,6 +1046,131 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// A ledger in a folder Lamp may not search is unreadable, not absent:
+    /// asking whether it exists answers no, and an empty ledger then would
+    /// lift the lock with sources only on the server.
+    @Test(.enabled(if: geteuid() != 0, "root is not refused by permission bits"))
+    func aledgerBehindAdeniedFolderIsUnreadable() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        var ledger = WorkspaceFileLedger()
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        try await ledger.save(in: workspaceURL)
+        let lamp = workspaceURL.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lamp.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lamp.path) }
+
+        #expect(WorkspaceFileLedger.loadIfReadable(in: workspaceURL) == nil)
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == nil)
+    }
+
+    /// Attaching needs the ledger that says which names offloaded sources
+    /// still hold; one that will not read refuses the attachment rather than
+    /// guess none, which could put a new file over an offloaded one's copy.
+    @Test func attachingRefusesOverAnUnreadableLedger() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        try FileManager.default.createDirectory(
+            at: workspaceURL.appendingPathComponent("context"), withIntermediateDirectories: true
+        )
+        let ledgerFile = workspaceURL.appendingPathComponent(".lamp/sync-files.json")
+        try FileManager.default.createDirectory(
+            at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("not a ledger".utf8).write(to: ledgerFile)
+        let outside = macs.root.appendingPathComponent("history.pdf")
+        try write("another", to: outside, at: 0)
+
+        await #expect(throws: WorkspaceFileLedger.UnreadableLedger.self) {
+            try await WorkspaceContextFileStore.addContextItem(
+                from: outside, to: workspaceURL, libraryRootURL: macs.a
+            )
+        }
+        #expect(await contextFiles(macs.a).isEmpty)
+    }
+
+    /// A copy that came back by an import which failed before checking it is
+    /// checked at the next gather: the same bytes get their mark back, and
+    /// the record of what left is not dropped unchecked.
+    @Test func acopyAnInterruptedImportLeftIsCheckedAtTheNextGather() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let a = workspace(macs.a)
+        let file = a.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let mark = "0083;6750a1b2;Safari;"
+        _ = Data(mark.utf8).withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+        }
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: a.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: a, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            server: serverAsUploaded(in: source, library: macs.a)
+        )
+        #expect(result.offloaded == ["history.pdf"])
+        try await WorkspaceContextFileStore.fetchSource(relativePath: "history.pdf", in: a)
+        // The import wrote it and stopped: no check ran.
+        try write("Daniell", to: file, at: 0)
+
+        let outgoing = macs.root.appendingPathComponent("outgoing", isDirectory: true)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
+
+        let size = getxattr(file.path, "com.apple.quarantine", nil, 0, 0, 0)
+        #expect(size > 0, "marked at the gather")
+    }
+
+    /// A file the reader puts where an offloaded source was is not news from
+    /// the server: the gather drops what it kept about the old one and says
+    /// nothing, and gives the new file no mark.
+    @Test func afileTheReaderPutsInPlaceIsNotSaidToHaveComeBack() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let a = workspace(macs.a)
+        let file = a.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        _ = Data("0083;6750a1b2;Safari;".utf8).withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+        }
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: a.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: a, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            server: serverAsUploaded(in: source, library: macs.a)
+        )
+        #expect(result.offloaded == ["history.pdf"])
+        try write("my own notes", to: file, at: 0)
+
+        let outgoing = macs.root.appendingPathComponent("outgoing", isDirectory: true)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: macs.a, to: outgoing, installID: "mac")
+
+        #expect(await LampWorkspaceSync.takeReturnNotices(inLibraryAt: macs.a).changed.isEmpty)
+        #expect(getxattr(file.path, "com.apple.quarantine", nil, 0, 0, 0) < 0)
+    }
+
     /// A context folder that is itself a link is no way to a source: the
     /// gather never goes there.
     @Test func alinkedContextFolderIsNotPresence() async throws {
@@ -1611,6 +1736,17 @@ struct WorkspaceFileDeletionSyncTests {
         )
         #expect(result.offloaded.count == 1)
         #expect(result.skipped.values.first == .later)
+
+        // What is left of a run's allowance is checked before a read: a file
+        // larger than what remains waits, rather than going over.
+        let rest = try await WorkspaceContextFileStore.offloadSources(
+            result.skipped.keys.sorted(), in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            server: serverAsUploaded(in: source, library: macs.a),
+            readBudget: 5
+        )
+        #expect(rest.offloaded.isEmpty)
+        #expect(rest.read == 0)
     }
 
     /// A request to offload is made about a file that is here, or not made.

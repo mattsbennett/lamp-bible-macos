@@ -145,6 +145,14 @@ final class LibrarySyncController: ObservableObject {
     /// Whether where sync points is locked to one server.
     var destinationIsLocked: Bool { offloadLock != nil }
 
+    /// Whether these credentials reach the locked server as the account the
+    /// lock names — re-entering a lost password, say.
+    private func isTheLockedAccount(username: String, password: String) -> Bool {
+        guard let lock = offloadLock, let account = lock.account else { return false }
+        return currentSource == lock.source
+            && SyncAccount.identity(username: username, password: password) == account
+    }
+
     /// Engages the lock before an offload deletes anything.
     private func willOffload(to source: String, as account: String) {
         if offloadLock == nil { offloadLock = OffloadLock(source: source, account: account) }
@@ -260,8 +268,12 @@ final class LibrarySyncController: ObservableObject {
         get { defaults.string(forKey: "sync.webdav.username") ?? "" }
         set {
             // Another account on the same address can be another set of
-            // files, and the sources were offloaded to this one's.
-            guard newValue == username || !destinationIsLocked else {
+            // files, and the sources were offloaded to this one's. Setting
+            // back the account the lock names is always allowed: that is how
+            // a reader restores access, not a switch.
+            guard newValue == username || !destinationIsLocked
+                    || isTheLockedAccount(username: newValue, password: SyncSecretStore.password ?? "")
+            else {
                 sayWhyTheDestinationIsLocked()
                 objectWillChange.send()
                 return
@@ -311,6 +323,7 @@ final class LibrarySyncController: ObservableObject {
         guard SyncAccount.identity(username: username, password: password)
                 == SyncAccount.identity(username: username, password: current)
                 || !destinationIsLocked
+                || isTheLockedAccount(username: username, password: password)
         else {
             sayWhyTheDestinationIsLocked()
             return false
@@ -471,6 +484,8 @@ final class LibrarySyncController: ObservableObject {
         guard let observation = offloadObservation() else { return }
         isOffloading = true
         defer { isOffloading = false }
+        // One allowance for the whole run, requested and swept alike.
+        offloadReadBudget = WorkspaceContextFileStore.readBackPerRun
         do {
             try await withConnection { connection in
                 // The connection is made again from the settings; it must be
@@ -492,18 +507,25 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
+    /// What this run of offloads may still read back from the server.
+    private var offloadReadBudget: Int64 = 0
+
     /// What came back from the server not as it left, said once.
     private func sayWhatCameBack(library: LampLibrary) async {
         let notices = await LampWorkspaceSync.takeReturnNotices(inLibraryAt: library.rootURL)
+        var lines: [String] = []
         if let first = notices.changed.first {
-            errorMessage = notices.changed.count == 1
+            lines.append(notices.changed.count == 1
                 ? "“\(first)” came back from the server changed: it isn't the copy that left this Mac."
-                : "\(notices.changed.count) sources came back from the server changed: they aren't the copies that left this Mac."
-        } else if let first = notices.unmarked.first {
-            errorMessage = notices.unmarked.count == 1
-                ? "“\(first)” came back without its “downloaded from the internet” mark, which macOS wouldn't let Lamp put back."
-                : "\(notices.unmarked.count) sources came back without their “downloaded from the internet” mark, which macOS wouldn't let Lamp put back."
+                : "\(notices.changed.count) sources came back from the server changed: they aren't the copies that left this Mac.")
         }
+        if let first = notices.unmarked.first {
+            lines.append(notices.unmarked.count == 1
+                ? "“\(first)” came back without its “downloaded from the internet” mark, which macOS wouldn't let Lamp put back."
+                : "\(notices.unmarked.count) sources came back without their “downloaded from the internet” mark, which macOS wouldn't let Lamp put back.")
+        }
+        // Both, when both: each was cleared as it was read.
+        if !lines.isEmpty { errorMessage = lines.joined(separator: " ") }
     }
 
     /// The sources the reader asked to go back to the server.
@@ -525,7 +547,7 @@ final class LibrarySyncController: ObservableObject {
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     requested, in: workspace, libraryRootURL: root, observation: observation,
-                    server: server, onlyWhileRequested: true,
+                    server: server, onlyWhileRequested: true, readBudget: offloadReadBudget,
                     while: { @Sendable [weak self] in
                         await MainActor.run {
                             guard let self else { return false }
@@ -535,6 +557,7 @@ final class LibrarySyncController: ObservableObject {
                     }
                 )
                 offloaded += result.offloaded.count
+                offloadReadBudget -= result.read
                 for (path, reason) in result.skipped {
                     if reason == .withdrawn {
                         // Keep Here won; there is nothing to put back.
@@ -723,6 +746,7 @@ final class LibrarySyncController: ObservableObject {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
                     libraryRootURL: libraryRoot, observation: observation, server: server,
+                    readBudget: offloadReadBudget,
                     // Asked again before each file goes, not once before the
                     // batch: hashing a workspace's sources takes long enough
                     // for a reader to open the writing in the middle of it.
@@ -743,6 +767,7 @@ final class LibrarySyncController: ObservableObject {
                     }
                 )
                 offloaded += result.offloaded.count
+                offloadReadBudget -= result.read
                 for reason in Set(result.skipped.values) {
                     let count = result.skipped.values.filter { $0 == reason }.count
                     Self.log.info("Offload sweep left \(count, privacy: .public) source(s): \(reason.rawValue, privacy: .public)")

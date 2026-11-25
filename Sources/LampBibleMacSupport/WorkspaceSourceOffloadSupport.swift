@@ -504,6 +504,10 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
         case onTheServer
         /// Asked back; not here yet.
         case comingBack
+        /// Not here, and a folder stands at its path: no download can land
+        /// until the folder is moved. Drawn beside the folder's own row so
+        /// the reader can see what it hides.
+        case blockedByAFolder
     }
 
     /// Where the source is under the context directory. What a row is
@@ -514,11 +518,11 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public let state: State
     public let byteCount: Int?
 
-    public var id: String { relativePath }
+    public var id: String { state == .blockedByAFolder ? relativePath + "\u{0}blocked" : relativePath }
     public var isHere: Bool {
         switch state {
         case .here, .leaving, .folder: true
-        case .onTheServer, .comingBack: false
+        case .onTheServer, .comingBack, .blockedByAFolder: false
         }
     }
     /// Whether Remove waits for a Download first: the row, or something
@@ -527,7 +531,7 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     /// it is not offered (`decisions/0022`).
     public var removalWaitsForDownload: Bool {
         switch state {
-        case .onTheServer, .comingBack, .folder(holdsSourcesNotHere: true): true
+        case .onTheServer, .comingBack, .blockedByAFolder, .folder(holdsSourcesNotHere: true): true
         case .here, .leaving, .folder(holdsSourcesNotHere: false): false
         }
     }
@@ -576,10 +580,12 @@ extension WorkspaceSourceOffload {
         )
         var rows: [SourceRow] = []
         var shown: Set<String> = []
+        var folders: Set<String> = []
         for entry in onDisk where entry.isDirectory || entry.isRegularFile {
             let path = entry.name.precomposedStringWithCanonicalMapping
             shown.insert(path)
             if entry.isDirectory {
+                folders.insert(path)
                 // Under it, or **at** it: a folder that has taken an
                 // offloaded file's own path hides that source, and
                 // `removeContextItem` refuses over the path itself too.
@@ -593,13 +599,20 @@ extension WorkspaceSourceOffload {
                 ))
             }
         }
-        for (path, act) in notHere where !shown.contains(path) && act != .leaving {
-            rows.append(SourceRow(
-                relativePath: path, state: act == .offloaded ? .onTheServer : .comingBack
-            ))
+        for (path, act) in notHere where act != .leaving {
+            if folders.contains(path) {
+                rows.append(SourceRow(relativePath: path, state: .blockedByAFolder))
+            } else if !shown.contains(path) {
+                rows.append(SourceRow(
+                    relativePath: path, state: act == .offloaded ? .onTheServer : .comingBack
+                ))
+            }
         }
         return rows.sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+            let order = $0.relativePath.localizedStandardCompare($1.relativePath)
+            return order == .orderedSame
+                ? $1.state == .blockedByAFolder
+                : order == .orderedAscending
         }
     }
 

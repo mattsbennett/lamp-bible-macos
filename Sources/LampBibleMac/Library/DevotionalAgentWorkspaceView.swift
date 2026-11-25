@@ -489,6 +489,7 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     var isOffloaded: Bool { row.state == .onTheServer }
     var isAwaited: Bool { row.state == .comingBack }
     var isLeaving: Bool { row.state == .leaving }
+    var isBlocked: Bool { row.state == .blockedByAFolder }
     var removalWaitsForDownload: Bool { row.removalWaitsForDownload }
 }
 
@@ -1998,7 +1999,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// would make them look like a choice of wording.
     private func contextFileRow(_ file: DevotionalAgentContextFile) -> some View {
         HStack {
-            Image(systemName: file.isAwaited
+            Image(systemName: file.isBlocked
+                ? "exclamationmark.triangle"
+                : file.isAwaited
                 ? "arrow.down.circle.dotted"
                 : file.isOffloaded
                 ? "icloud.and.arrow.down"
@@ -2007,9 +2010,16 @@ struct DevotionalAgentWorkspaceView: View {
                 : (file.isDirectory ? "folder" : "doc"))
                 .foregroundStyle(.secondary)
             Text(file.name).lineLimit(1)
-                .foregroundStyle(file.isOffloaded || file.isAwaited ? .secondary : .primary)
+                .foregroundStyle(file.isOffloaded || file.isAwaited || file.isBlocked ? .secondary : .primary)
             Spacer()
-            if file.isOffloaded {
+            if file.isBlocked {
+                // On the server, hidden by a folder at its path: no download
+                // can land until the folder moves.
+                Text("Move the folder to download")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help("A folder with this name is where this source would come back. Move or rename the folder, then download the source.")
+            } else if file.isOffloaded {
                 Text("On the server")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -2026,7 +2036,9 @@ struct DevotionalAgentWorkspaceView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            if file.isOffloaded || file.isAwaited {
+            if file.isBlocked {
+                EmptyView()
+            } else if file.isOffloaded || file.isAwaited {
                 Button(
                     file.isAwaited ? "Try Again" : "Download",
                     systemImage: file.isAwaited ? "arrow.clockwise" : "arrow.down.circle"
