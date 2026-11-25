@@ -1277,6 +1277,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// before anyone could read it.
     @State private var refreshErrorMessage: String?
     @State private var contextNote: String?
+    /// The offloaded source a Remove is waiting to be confirmed for. Its
+    /// bytes are not on this Mac, so the click would destroy the only copy.
+    @State private var sourceToRemove: DevotionalAgentContextFile?
     @State private var isDropTargeted = false
     @State private var skillEditorRequest: DevotionalAgentSkillEditorRequest?
     @State private var skillPendingDeletion: DevotionalAgentSkill?
@@ -1716,6 +1719,30 @@ struct DevotionalAgentWorkspaceView: View {
                 VStack(spacing: 5) {
                     ForEach(contextFiles) { file in contextFileRow(file) }
                 }
+                .confirmationDialog(
+                    "Remove “\(sourceToRemove?.name ?? "")” from every device?",
+                    isPresented: Binding(
+                        get: { sourceToRemove != nil },
+                        set: { if !$0 { sourceToRemove = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Remove Everywhere", role: .destructive) {
+                        if let file = sourceToRemove {
+                            sourceToRemove = nil
+                            Task { await removeContextFile(file) }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { sourceToRemove = nil }
+                } message: {
+                    Text(
+                        """
+                        This source is on the server, not on this Mac, so \
+                        removing it deletes the only copy. Download it first \
+                        if you want to keep one.
+                        """
+                    )
+                }
             }
             if let contextNote {
                 Label(contextNote, systemImage: "info.circle")
@@ -2058,7 +2085,15 @@ struct DevotionalAgentWorkspaceView: View {
                 }
             }
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {
-                Task { await removeContextFile(file) }
+                // Asked about only when the bytes are not here. For a file on
+                // disk this is a removal the reader can see the subject of;
+                // for an offloaded one the click destroys the only copy there
+                // is, with nothing left on this Mac to go back to.
+                if file.isOffloaded {
+                    sourceToRemove = file
+                } else {
+                    Task { await removeContextFile(file) }
+                }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
@@ -2711,10 +2746,19 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
+            guard let observed = LampSyncRequest.lastSeen else {
+                errorMessage = """
+                    Lamp has not synced yet, so it cannot tell whether the \
+                    server still holds this source. Sync, then try again.
+                    """
+                return
+            }
             try await WorkspaceContextFileStore.offloadSource(
                 relativePath: file.relativePath,
                 in: workspaceURL,
-                libraryRootURL: libraryRootURL
+                libraryRootURL: libraryRootURL,
+                source: observed.source,
+                seen: observed.revisions
             )
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” is on the server. Download it whenever you need it."

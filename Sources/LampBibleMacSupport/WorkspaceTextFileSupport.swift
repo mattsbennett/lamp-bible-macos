@@ -414,9 +414,25 @@ public enum WorkspaceContextFileStore {
         // One entry per *file*, not one for the folder: the import checks
         // each source against its own key, so a folder's key alone would
         // leave every file inside it on the other Mac.
-        guard !keys.isEmpty else { return }
+        // Including the sources under here that are *not* on disk: the walk
+        // above enumerates files, and an offloaded one has none. Removing a
+        // folder has to take its offloaded descendants too, or they stay on
+        // the server for ever with nothing left here to name them
+        // (`decisions/0019`).
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
-        for key in keys { ledger.recordDeletion(of: key) }
+        let relative = item.standardizedFileURL.path
+            .dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
+        let offloadedDescendants = ledger.offloadedMembers(under: "")
+            .compactMap { member -> String? in
+                let key = WorkspaceFileLedger.contextKey("")
+                guard member.hasPrefix(key) else { return nil }
+                let path = String(member.dropFirst(key.count))
+                guard path == relative || path.hasPrefix(relative + "/") else { return nil }
+                return WorkspaceFileLedger.contextKey(path)
+            }
+        let allKeys = Set(keys).union(offloadedDescendants)
+        guard !allKeys.isEmpty else { return }
+        for key in allKeys { ledger.recordDeletion(of: key) }
         try ledger.save(in: workspaceURL)
 
         // And queued for the *server*, which is new: until a source became a
@@ -425,7 +441,7 @@ public enum WorkspaceContextFileStore {
         // for ever. This is what lets the store shrink
         // (`lamp-bible-core/Documentation/decisions/0019`).
         let folder = workspaceURL.lastPathComponent
-        let members = keys.compactMap { key -> String? in
+        let members = allKeys.compactMap { key -> String? in
             let relative = String(key.dropFirst(WorkspaceFileLedger.contextKey("").count))
             return try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: relative
@@ -486,31 +502,30 @@ public enum WorkspaceContextFileStore {
     /// (`lamp-bible-core/Documentation/decisions/0018`).
     ///
     /// The pane's own control. It runs the same checks as the unattended
-    /// sweep, through the same function, minus the one it has no way to make:
-    /// the sweep is handed the listing the pass just took, and a button press
-    /// has no pass behind it. So this still trusts a confirmed revision from
-    /// any source this Mac has synced with, and the reader is standing there
-    /// to see what happens (`decisions/0021`).
+    /// sweep, through the same function — including the look at the server.
+    ///
+    /// A press has no pass behind it, so it takes the last pass's listing and
+    /// the server that listing came from. Without one it refuses: trusting
+    /// the record alone would delete the last copy of a source somebody
+    /// removed from the sync folder by hand, and the record would be just as
+    /// confident (`decisions/0021`). A reader standing there watching is not
+    /// a substitute for knowing.
     @WritingWorkspaceFiles
     public static func offloadSource(
         relativePath: String,
         in workspaceURL: URL,
         libraryRootURL: URL,
+        source: String,
+        seen: [String: String],
         fileManager: FileManager = .default
     ) throws {
         guard let path = try? LampWritingWorkspaceLayout.contextPath(
             folder: workspaceURL.lastPathComponent, relativePath: relativePath
         ) else { throw OffloadError.notAsource(relativePath) }
-        let records = LampSyncFileRecords.load(
-            fromLibraryAt: libraryRootURL, fileManager: fileManager
-        )
-        guard let source = records.sources.keys.sorted().first(where: {
-            records.record(path, in: $0)?.installedRevision != nil
-        }) else { throw OffloadError.notOnTheServer(relativePath) }
-
+        _ = path
         let result = try offloadSources(
             [relativePath], in: workspaceURL, libraryRootURL: libraryRootURL,
-            source: source, seen: nil, fileManager: fileManager
+            source: source, seen: seen, fileManager: fileManager
         )
         guard result.offloaded.isEmpty else { return }
         switch result.skipped[relativePath] {
@@ -562,14 +577,25 @@ public enum WorkspaceContextFileStore {
         // Tolerant of a copy being here after all: the reader may have
         // fetched it back between the list being drawn and the button being
         // pressed, and the deletion means the same thing either way.
-        let file = (try? validatedContextDirectory(
+        //
+        // Only ever a regular file, and only one inside this workspace's
+        // context directory. `removeSyncedContextFile` deletes recursively,
+        // so without this a folder that had taken the place of an offloaded
+        // file — the shallow listing still offers the old row — would be
+        // erased whole, with everything unrelated inside it.
+        guard let contextDirectory = try? validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
-        ))?.appendingPathComponent(relativePath)
-        if let file, fileManager.fileExists(atPath: file.path) {
-            try? removeSyncedContextFile(
-                at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
-            )
-        }
+        ) else { return }
+        let file = contextDirectory.appendingPathComponent(relativePath)
+        guard let values = try? file.resourceValues(forKeys: [
+            .isRegularFileKey, .isSymbolicLinkKey,
+        ]), values.isRegularFile == true, values.isSymbolicLink != true,
+              file.resolvingSymlinksInPath().path
+                .hasPrefix(contextDirectory.resolvingSymlinksInPath().path + "/")
+        else { return }
+        try? removeSyncedContextFile(
+            at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
     }
 
     /// Asks for an offloaded source back. The next pass fetches it.
@@ -641,7 +667,7 @@ public enum WorkspaceContextFileStore {
         )
         let root = contextDirectory.resolvingSymlinksInPath().path + "/"
 
-        var ready: [(relativePath: String, file: URL)] = []
+        var ready: [(relativePath: String, file: URL, identity: LampFileIdentity)] = []
         var skipped: [String: Skipped] = [:]
         for relativePath in relativePaths {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
@@ -677,7 +703,11 @@ public enum WorkspaceContextFileStore {
                 skipped[relativePath] = .changedSinceUpload
                 continue
             }
-            ready.append((relativePath, file))
+            guard let identity = try? LampFileIdentity(url: file) else {
+                skipped[relativePath] = .notAsource
+                continue
+            }
+            ready.append((relativePath, file, identity))
         }
         guard !ready.isEmpty else { return ([], skipped) }
 
@@ -690,6 +720,19 @@ public enum WorkspaceContextFileStore {
         var offloaded: [String] = []
         var stubborn: [String] = []
         for candidate in ready {
+            // The file this batch verified, not merely the path it was at.
+            // Every candidate is hashed before any is deleted, so a large
+            // batch leaves a window in which Finder, a restore, or an agent
+            // running in this very workspace can put different bytes at an
+            // already-checked path — and those bytes were never on the
+            // server.
+            guard let now = try? LampFileIdentity(url: candidate.file),
+                  now == candidate.identity
+            else {
+                skipped[candidate.relativePath] = .changedSinceUpload
+                stubborn.append(candidate.relativePath)
+                continue
+            }
             do {
                 try removeSyncedContextFile(
                     at: candidate.file, libraryRootURL: libraryRootURL,

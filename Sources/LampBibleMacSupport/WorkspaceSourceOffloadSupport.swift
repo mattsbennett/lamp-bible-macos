@@ -157,6 +157,11 @@ public enum WorkspaceSourceOffload {
 }
 
 extension WorkspaceSourceOffload {
+    /// How long a source asked back is left alone for, whatever the writing's
+    /// dates say. A week: long enough to read what you fetched, short enough
+    /// that a source fetched and forgotten goes back on its own.
+    static let fetchGrace: TimeInterval = 7 * 24 * 60 * 60
+
     /// Reads the policy's inputs off disk: one entry per workspace whose
     /// writing this library still has.
     ///
@@ -193,7 +198,13 @@ extension WorkspaceSourceOffload {
             guard let writingID = LampWritingWorkspaceLayout.writingID(
                 ofFolder: name, among: writings.keys
             ) else { continue }
+            // Left alone for a while after being asked for: see
+            // `recentlyFetchedSources`.
+            let justFetched = LampWorkspaceSync.recentlyFetchedSources(
+                in: folder, since: Date().addingTimeInterval(-Self.fetchGrace)
+            )
             let sources = contextRelativePaths(in: folder, fileManager: fileManager)
+                .filter { !justFetched.contains($0) }
             var onTheServer: Set<String> = []
             for relativePath in sources {
                 guard let path = try? LampWritingWorkspaceLayout.contextPath(

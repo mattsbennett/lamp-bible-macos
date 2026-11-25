@@ -155,6 +155,28 @@ public enum LampWorkspaceSync {
     ///
     /// For the pane, which lists what a writing holds whether or not the
     /// bytes are here.
+    /// The sources asked back since `since`, by their path under the context
+    /// directory.
+    ///
+    /// A download advances no inactivity clock — the writing it belongs to is
+    /// old by definition, or the sweep would not have touched it — so without
+    /// this the next pass's sweep puts back on the server the file the reader
+    /// just asked for, and the two undo each other for ever.
+    @WritingWorkspaceFiles
+    public static func recentlyFetchedSources(
+        in workspace: URL, since: Date
+    ) -> Set<String> {
+        let ledger = WorkspaceFileLedger.load(in: workspace)
+        let prefix = WorkspaceFileLedger.contextKey("")
+        let cutoff = WorkspaceFileLedger.milliseconds(since)
+        var names: Set<String> = []
+        for (key, at) in ledger.fetchedAt where at >= cutoff && key.hasPrefix(prefix) {
+            let name = String(key.dropFirst(prefix.count))
+            if !name.isEmpty { names.insert(name) }
+        }
+        return names
+    }
+
     @WritingWorkspaceFiles
     public static func offloadedSourceNames(in workspace: URL) -> [String] {
         let ledger = WorkspaceFileLedger.load(in: workspace)
@@ -1333,6 +1355,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
             [String: Int64].self, forKey: .presentSince
         ) ?? [:]
         offloaded = try container.decodeIfPresent(Set<String>.self, forKey: .offloaded) ?? []
+        fetchedAt = try container.decodeIfPresent(
+            [String: Int64].self, forKey: .fetchedAt
+        ) ?? [:]
     }
 
     init() {}
@@ -1385,8 +1410,16 @@ struct WorkspaceFileLedger: Codable, Equatable {
     }
 
     /// Takes a source off the offloaded list, so the next pass fetches it.
+    /// When a source was last asked back, by key. Kept so the sweep does not
+    /// put a file back on the server minutes after the reader fetched it: a
+    /// download advances no inactivity clock, and the writing it belongs to
+    /// is old by definition, so without this Download and the next pass's
+    /// sweep would undo each other.
+    var fetchedAt: [String: Int64] = [:]
+
     mutating func clearOffload(of key: String) {
         offloaded.remove(Self.normalized(key))
+        fetchedAt[Self.normalized(key)] = Self.milliseconds(Date())
     }
 
     /// The published member paths this Mac has offloaded, given the prefix
@@ -1796,6 +1829,29 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
     @MainActor
     public enum LampSyncRequest {
         private static var isPending = false
+
+        /// What the last finished pass saw when it listed the workspaces'
+        /// context folders, and which server it was listing.
+        ///
+        /// The sweep is handed this directly. The pane's Offload button needs
+        /// it too and has no controller to ask, so it is left here: without a
+        /// look at the server, a press would be trusting a record that
+        /// nothing ever refreshes, and could delete the last copy of a source
+        /// somebody removed from the sync folder by hand (`decisions/0021`).
+        public private(set) static var lastSeen: (source: String, revisions: [String: String])?
+
+        public static func noteObservation(source: String, revisions: [String: String]) {
+            lastSeen = (source, revisions)
+        }
+
+        /// Forgotten when a pass does not finish, or the server changes.
+        public static func forgetObservation() { lastSeen = nil }
+
+        /// What the last pass saw, if it was looking at `source`.
+        public static func observation(of source: String) -> [String: String]? {
+            guard let lastSeen, lastSeen.source == source else { return nil }
+            return lastSeen.revisions
+        }
 
         /// Ask for a pass. Costs nothing if one is already wanted.
         public static func wantAPass() { isPending = true }

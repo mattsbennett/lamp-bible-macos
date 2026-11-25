@@ -228,6 +228,7 @@ final class LibrarySyncController: ObservableObject {
             await offloadInactiveSources(library: library)
         } else {
             lastSeenUnlisted = [:]
+            LampSyncRequest.forgetObservation()
         }
         return finished
     }
@@ -290,8 +291,9 @@ final class LibrarySyncController: ObservableObject {
         }
         // Read on this actor, where the editors register themselves.
         let held = OpenWritingEditors.writingIDs
-        let seen = lastSeenUnlisted
-        guard !seen.isEmpty else { return 0 }
+        guard let seen = LampSyncRequest.observation(of: source),
+              !seen.isEmpty
+        else { return 0 }
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: libraryRoot, writings: writings, source: source, seen: seen
         )
@@ -1619,6 +1621,15 @@ extension LibrarySyncController {
         // `installedRevision` is a memory of one upload and is never
         // refreshed (`decisions/0021`).
         lastSeenUnlisted = unlisted
+        // Tied to the server it came from. A folder provider's revisions are
+        // content digests, so an old folder's listing could otherwise match a
+        // record kept for a different folder and authorise an offload the new
+        // one knows nothing about.
+        if let source = currentSource {
+            LampSyncRequest.noteObservation(
+                source: source, revisions: unlisted
+            )
+        }
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
     }

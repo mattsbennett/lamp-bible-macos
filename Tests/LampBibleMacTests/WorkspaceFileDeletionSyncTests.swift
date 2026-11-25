@@ -195,7 +195,8 @@ struct WorkspaceFileDeletionSyncTests {
 
         await #expect(throws: WorkspaceContextFileStore.OffloadError.self) {
             try await WorkspaceContextFileStore.offloadSource(
-                relativePath: "history.pdf", in: workspace(macs.a), libraryRootURL: macs.a
+                relativePath: "history.pdf", in: workspace(macs.a), libraryRootURL: macs.a,
+                source: "webdav:example", seen: [:]
             )
         }
         #expect(
@@ -230,7 +231,8 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
 
         try await WorkspaceContextFileStore.offloadSource(
-            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
         )
 
         #expect(await contextFiles(macs.a).isEmpty, "the space is back")
@@ -416,7 +418,8 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
 
         try await WorkspaceContextFileStore.offloadSource(
-            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: [path: "\"r1\""]
         )
         #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path))
 
@@ -526,6 +529,93 @@ struct WorkspaceFileDeletionSyncTests {
             and no longer withheld: a path being tombstoned must not also be \
             one the pane offers Download for.
             """
+        )
+    }
+
+    /// Removing an offloaded source never removes a tree.
+    ///
+    /// The Context listing is shallow and drawn from the ledger as well as
+    /// the disk, so a row can name a path a *folder* has since taken. The
+    /// removal unlinks recursively, so without a regular-file check a click
+    /// on that row would erase the folder and everything unrelated in it.
+    @Test func removingAnOffloadedSourceWillNotDeleteAfolderAtItsPath() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let taken = context.appendingPathComponent("history.pdf", isDirectory: true)
+        try FileManager.default.createDirectory(at: taken, withIntermediateDirectories: true)
+        try write("unrelated", to: taken.appendingPathComponent("something else.md"), at: 0)
+
+        try await WorkspaceContextFileStore.removeOffloadedSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+
+        #expect(
+            FileManager.default.fileExists(
+                atPath: taken.appendingPathComponent("something else.md").path
+            ),
+            "the folder that took the path, and its contents, are untouched"
+        )
+    }
+
+    /// The batch deletes the file it checked, not whatever is at the path.
+    ///
+    /// Every candidate is hashed before any is deleted, so a batch leaves a
+    /// window in which Finder, a restore, or an agent running in this very
+    /// workspace can put different bytes at an already-checked path — and
+    /// those bytes were never on the server. Here the replacement lands while
+    /// the batch is deleting the file before it.
+    @Test func abatchWillNotDeleteBytesItDidNotVerify() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        for name in ["a.pdf", "b.pdf"] {
+            try write(name, to: context.appendingPathComponent(name), at: 0)
+            let path = try LampWritingWorkspaceLayout.contextPath(
+                folder: workspaceURL.lastPathComponent, relativePath: name
+            )
+            records.recordUpload(
+                path, in: source,
+                digest: try LampSyncContentRevision.digest(
+                    forFileAt: context.appendingPathComponent(name)
+                ),
+                revision: "\"r1\""
+            )
+            records.confirmRecorded([path: "\"r1\""], in: source)
+        }
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["a.pdf", "b.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil,
+            fileManager: ReplacingFileManager(
+                whenRemoving: context.appendingPathComponent("a.pdf"),
+                replace: context.appendingPathComponent("b.pdf"),
+                with: "different bytes entirely"
+            )
+        )
+
+        #expect(result.offloaded == ["a.pdf"], "the one it verified and nothing changed")
+        #expect(
+            result.skipped["b.pdf"] == .changedSinceUpload,
+            "and the one that changed under it is left alone"
+        )
+        #expect(
+            try String(
+                contentsOf: context.appendingPathComponent("b.pdf"), encoding: .utf8
+            ) == "different bytes entirely",
+            "the bytes that arrived in the window are still here"
+        )
+        let member = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "b.pdf"
+        )
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(member),
+            "and it is not withheld, so the new bytes go up on the next pass"
         )
     }
 
@@ -750,5 +840,30 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(paths.contains("Workspaces/Devotionals/\(devotional)/DeletedFiles.json"))
         // Earlier versions import only Documents and Context as files.
         #expect(!paths.contains { $0.contains("/Documents/") || $0.contains("/Context/") })
+    }
+}
+
+/// A `FileManager` that writes over one file while another is being removed —
+/// standing in for Finder, a restore, or an agent running in the workspace,
+/// arriving in the window between the batch's check and its unlink.
+private final class ReplacingFileManager: FileManager, @unchecked Sendable {
+    private let trigger: URL
+    private let target: URL
+    private let contents: String
+
+    init(whenRemoving trigger: URL, replace target: URL, with contents: String) {
+        self.trigger = trigger
+        self.target = target
+        self.contents = contents
+        super.init()
+    }
+
+    override func removeItem(at url: URL) throws {
+        if url.standardizedFileURL == trigger.standardizedFileURL {
+            // In place, keeping the inode: the harder case, and the one a
+            // process writing over an open path actually produces.
+            try? contents.write(to: target, atomically: false, encoding: .utf8)
+        }
+        try super.removeItem(at: url)
     }
 }
