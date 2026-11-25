@@ -247,6 +247,67 @@ public enum LampWorkspaceSync {
         return forgotten
     }
 
+    /// Every source this Mac has only on the server — let go, or asked back
+    /// and not yet arrived — as published member paths.
+    ///
+    /// While there are any, sync may not be pointed at another server
+    /// (owner's decision, 2026-11-25, `decisions/0021`): these exist only on
+    /// the server they were offloaded to, so a different one could neither
+    /// give them back nor be told to remove them.
+    @WritingWorkspaceFiles
+    public static func sourcesOnlyOnTheServer(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> [String] {
+        var members: [String] = []
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            for path in sourcesNotHere(in: workspace, fileManager: fileManager).keys {
+                if let member = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: workspace.lastPathComponent, relativePath: path
+                ) { members.append(member) }
+            }
+        }
+        return members.sorted()
+    }
+
+    /// Asks for every source this Mac has let go to the server. The way out
+    /// of the lock above: once they have all arrived, sync may go anywhere.
+    @discardableResult
+    @WritingWorkspaceFiles
+    public static func askForEverySourceOnTheServer(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> Int {
+        var asked = 0
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            var ledger = WorkspaceFileLedger.load(in: workspace)
+            let offloaded = ledger.contextPaths(withAct: .offloaded)
+            guard !offloaded.isEmpty else { continue }
+            for path in offloaded {
+                ledger.noteWanted(WorkspaceFileLedger.contextKey(path))
+                asked += 1
+            }
+            try? ledger.save(in: workspace)
+        }
+        return asked
+    }
+
+    /// Whether sync may be pointed at `destination` while `onlyOnTheServer`
+    /// are held nowhere else: always to nowhere — turning sync off changes no
+    /// server — and otherwise only at one this Mac has confirmed holding
+    /// every one of them. That last is what lets sync be turned off and on
+    /// again: the same server comes back, and it holds them.
+    public static func mayPointSync(
+        at destination: String?,
+        holding onlyOnTheServer: [String],
+        records: LampSyncFileRecords
+    ) -> Bool {
+        guard let destination, !onlyOnTheServer.isEmpty else { return true }
+        return onlyOnTheServer.allSatisfy {
+            records.record($0, in: destination)?.installedRevision != nil
+        }
+    }
+
     /// Every source this library is withholding, as published member paths:
     /// let go to the server, and no file here.
     ///

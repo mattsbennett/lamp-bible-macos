@@ -2766,6 +2766,7 @@ struct DevotionalAgentWorkspaceView: View {
                 }
             )
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
+            await syncController.refreshSourcesOnlyOnTheServer(library: libraryModel.library)
             contextNote = "“\(file.name)” is on the server. Download it whenever you need it."
             schedulePoll()
         } catch {
@@ -2805,6 +2806,9 @@ struct DevotionalAgentWorkspaceView: View {
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
+            // Removing a source that was only on the server can lift the
+            // lock on where sync points.
+            await syncController.refreshSourcesOnlyOnTheServer(library: libraryModel.library)
             schedulePoll()
         } catch {
             errorMessage = error.localizedDescription

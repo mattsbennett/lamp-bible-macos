@@ -861,6 +861,67 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// While a source is only on the server, sync can be turned off and on,
+    /// but not pointed at a server that does not hold it (owner's decision,
+    /// `decisions/0021`).
+    @Test func syncCannotLeaveAserverHoldingTheOnlyCopy() {
+        let member = "Workspaces/Writing/talk-123/Context/history.pdf"
+        let here = LampSyncFileRecords.webDAVSource(URL(string: "https://nas.example.com/s/")!)
+        let elsewhere = LampSyncFileRecords.webDAVSource(URL(string: "https://other.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(member, in: here, digest: "d", revision: "\"r1\"")
+        records.confirmRecorded([member: "\"r1\""], in: here)
+
+        #expect(
+            LampWorkspaceSync.mayPointSync(at: nil, holding: [member], records: records),
+            "turning sync off changes no server"
+        )
+        #expect(
+            LampWorkspaceSync.mayPointSync(at: here, holding: [member], records: records),
+            "and turning it back on returns to the one that holds it"
+        )
+        #expect(
+            !LampWorkspaceSync.mayPointSync(at: elsewhere, holding: [member], records: records),
+            "but another server could neither give it back nor be told to remove it"
+        )
+        #expect(
+            LampWorkspaceSync.mayPointSync(at: elsewhere, holding: [], records: records),
+            "and with nothing only on the server, sync may go anywhere"
+        )
+    }
+
+    /// Download All is the way out: every offloaded source is asked back, and
+    /// the lock holds until they have arrived, not merely been asked for —
+    /// one on its way still exists only on the old server.
+    @Test func downloadAllAsksForEverySourceAndTheLockHoldsUntilTheyArrive() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        for name in ["a.pdf", "b.pdf"] {
+            ledger.noteOffloaded(WorkspaceFileLedger.contextKey(name))
+        }
+        try await ledger.save(in: workspaceURL)
+
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2)
+
+        let asked = await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a)
+        #expect(asked == 2)
+        #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["a.pdf", "b.pdf"])
+        #expect(
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2,
+            "asked for is not here"
+        )
+
+        try write("a", to: context.appendingPathComponent("a.pdf"), at: 0)
+        try write("b", to: context.appendingPathComponent("b.pdf"), at: 0)
+        #expect(
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).isEmpty,
+            "arrived, and sync may go anywhere"
+        )
+    }
+
     /// Opening the writing part way through a batch stops the rest of it.
     @Test func abatchStopsWhenTheWritingIsOpened() async throws {
         let macs = try Macs(devotional: devotional)

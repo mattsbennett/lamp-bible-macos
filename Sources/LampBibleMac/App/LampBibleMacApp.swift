@@ -1109,6 +1109,37 @@ private struct ReaderSettingsView: View {
 
                 case .sync:
                     Section("Sync") {
+                        if !syncController.sourcesOnlyOnTheServer.isEmpty {
+                            // Said before the controls it explains, so a
+                            // refused change is not the first the reader hears
+                            // of it.
+                            let count = syncController.sourcesOnlyOnTheServer.count
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label(
+                                    count == 1
+                                        ? "1 source is only on this sync server"
+                                        : "\(count) sources are only on this sync server",
+                                    systemImage: "icloud.and.arrow.down"
+                                )
+                                Text(
+                                    """
+                                    They were put back on the server to save space here. \
+                                    Lamp won't sync with a different server until they're \
+                                    downloaded, or they'd be left behind on this one.
+                                    """
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                Button("Download All", systemImage: "arrow.down.circle") {
+                                    Task {
+                                        await syncController.downloadEverySourceOnTheServer(
+                                            library: model.library
+                                        )
+                                    }
+                                }
+                                .disabled(syncController.isSyncing)
+                            }
+                        }
                         Picker(
                             "Provider",
                             selection: Binding(
@@ -1125,9 +1156,11 @@ private struct ReaderSettingsView: View {
                             Button("Choose iCloud Drive or Folder…", systemImage: "folder") {
                                 syncController.chooseFolder()
                             }
+                            .disabled(!syncController.sourcesOnlyOnTheServer.isEmpty)
                         } else if syncController.provider == .webDAV {
                             TextField("WebDAV folder URL", text: $webDAVEndpoint)
                                 .onChange(of: webDAVEndpoint) { _, value in syncController.endpoint = value }
+                                .disabled(!syncController.sourcesOnlyOnTheServer.isEmpty)
                             TextField("Username", text: $webDAVUsername)
                                 .onChange(of: webDAVUsername) { _, value in syncController.username = value }
                             LabeledContent("Password") {
@@ -1179,7 +1212,10 @@ private struct ReaderSettingsView: View {
                         Button("Forget Sync Details…", systemImage: "trash", role: .destructive) {
                             isForgettingSyncDetails = true
                         }
-                        .disabled(!syncController.hasRememberedDetails)
+                        .disabled(
+                            !syncController.hasRememberedDetails
+                                || !syncController.sourcesOnlyOnTheServer.isEmpty
+                        )
                         .confirmationDialog(
                             "Forget sync details?",
                             isPresented: $isForgettingSyncDetails,
@@ -1276,6 +1312,9 @@ private struct ReaderSettingsView: View {
         // A conflict outlives the run that found it, so the pane has to ask
         // rather than wait to be told.
         .task { await syncController.refreshConflicts(library: model.library) }
+        // And whether anything is held only on the server, which locks where
+        // sync can point — read on opening rather than left to the next pass.
+        .task { await syncController.refreshSourcesOnlyOnTheServer(library: model.library) }
     }
 
     private var appVersion: String {

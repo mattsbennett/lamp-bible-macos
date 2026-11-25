@@ -98,9 +98,70 @@ final class LibrarySyncController: ObservableObject {
         self.fileManager = fileManager
     }
 
+    /// Sources this Mac holds only on the server, as member paths. While
+    /// there are any, sync cannot be pointed at a server that does not hold
+    /// them all — the owner's decision (`decisions/0021`): they exist only on
+    /// the server they went to, and another could neither give them back nor
+    /// be told to remove them. Kept current after every pass, and whenever
+    /// a pane offloads, downloads or removes a source.
+    @Published private(set) var sourcesOnlyOnTheServer: [String] = []
+    /// The library the lock above was read from, for checking a change
+    /// against its records.
+    private var lockedLibraryRoot: URL?
+
+    func refreshSourcesOnlyOnTheServer(library: LampLibrary) async {
+        lockedLibraryRoot = library.rootURL
+        sourcesOnlyOnTheServer = await LampWorkspaceSync.sourcesOnlyOnTheServer(
+            inLibraryAt: library.rootURL
+        )
+    }
+
+    /// Asks for every offloaded source back and starts a pass: the way out of
+    /// the lock.
+    func downloadEverySourceOnTheServer(library: LampLibrary) async {
+        await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: library.rootURL)
+        await refreshSourcesOnlyOnTheServer(library: library)
+        _ = await sync(library: library)
+    }
+
+    /// Whether sync may be pointed at `destination` now. Refusals say why.
+    private func mayPointSync(at destination: String?) -> Bool {
+        guard !sourcesOnlyOnTheServer.isEmpty, let root = lockedLibraryRoot else { return true }
+        let allowed = LampWorkspaceSync.mayPointSync(
+            at: destination,
+            holding: sourcesOnlyOnTheServer,
+            records: LampSyncFileRecords.load(fromLibraryAt: root, fileManager: fileManager)
+        )
+        if !allowed { sayWhyTheDestinationIsLocked() }
+        return allowed
+    }
+
+    private func sayWhyTheDestinationIsLocked() {
+        let count = sourcesOnlyOnTheServer.count
+        errorMessage = """
+            \(count == 1 ? "A source is" : "\(count) sources are") only on the \
+            current sync server. Download \(count == 1 ? "it" : "them") before \
+            changing where Lamp syncs, or \(count == 1 ? "it" : "they") would be \
+            left behind.
+            """
+    }
+
+    /// The server a provider would sync with, from what is remembered for it.
+    private func source(for provider: Provider) -> String? {
+        switch provider {
+        case .webDAV: URL(string: endpoint).map(LampSyncFileRecords.webDAVSource)
+        case .folder: (try? resolveFolderURL()).map(LampSyncFileRecords.folderSource)
+        case .off: nil
+        }
+    }
+
     var provider: Provider {
         get { Provider(rawValue: defaults.string(forKey: "sync.provider") ?? "off") ?? .off }
         set {
+            guard newValue == provider || mayPointSync(at: source(for: newValue)) else {
+                objectWillChange.send()
+                return
+            }
             defaults.set(newValue.rawValue, forKey: "sync.provider")
             objectWillChange.send()
         }
@@ -113,7 +174,12 @@ final class LibrarySyncController: ObservableObject {
 
     var endpoint: String {
         get { defaults.string(forKey: "sync.webdav.endpoint") ?? "" }
-        set { defaults.set(newValue, forKey: "sync.webdav.endpoint") }
+        set {
+            guard newValue == endpoint
+                || mayPointSync(at: URL(string: newValue).map(LampSyncFileRecords.webDAVSource))
+            else { objectWillChange.send(); return }
+            defaults.set(newValue, forKey: "sync.webdav.endpoint")
+        }
     }
 
     var username: String {
@@ -138,6 +204,12 @@ final class LibrarySyncController: ObservableObject {
     /// gone, and Off was the only control there was. The library itself is left
     /// alone: this forgets the way to the server, not anything that was synced.
     func forgetSyncDetails() {
+        // Forgetting the way to the server is forgetting the way to the only
+        // copy of anything offloaded to it.
+        guard sourcesOnlyOnTheServer.isEmpty else {
+            sayWhyTheDestinationIsLocked()
+            return
+        }
         provider = .off
         defaults.removeObject(forKey: "sync.webdav.endpoint")
         defaults.removeObject(forKey: "sync.webdav.username")
@@ -168,6 +240,7 @@ final class LibrarySyncController: ObservableObject {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard mayPointSync(at: LampSyncFileRecords.folderSource(url)) else { return }
         do {
             let bookmark = try url.bookmarkData(
                 options: .withSecurityScope,
@@ -240,6 +313,7 @@ final class LibrarySyncController: ObservableObject {
             await reconcileOffloadsWithTheServer(library: library)
             await offloadInactiveSources(library: library)
         }
+        await refreshSourcesOnlyOnTheServer(library: library)
         // An ask made while this pass ran — a Download pressed after the
         // gather had already looked — is answered now rather than left for a
         // poll that only the reader window runs.
