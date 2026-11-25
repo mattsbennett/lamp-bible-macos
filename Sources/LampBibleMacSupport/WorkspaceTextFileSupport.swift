@@ -618,6 +618,10 @@ public enum WorkspaceContextFileStore {
         relativePath: String,
         in workspaceURL: URL
     ) throws {
+        // Not where something stands in its way: it could not land.
+        guard !LampWorkspaceSync.destinationIsObstructed(relativePath, inContextOf: workspaceURL) else {
+            throw OffloadError.destinationObstructed(relativePath)
+        }
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         ledger.noteWanted(WorkspaceFileLedger.contextKey(relativePath))
         try ledger.save(in: workspaceURL)
@@ -968,6 +972,7 @@ public enum WorkspaceContextFileStore {
         case changedSinceUpload(String)
         case untrustedVolume(String)
         case waitsForDownload(String)
+        case destinationObstructed(String)
         case serverCopyDiffers(String)
         case couldNotReadTheServer(String)
         case wouldLoseWhatNoStoreKeeps(String)
@@ -982,6 +987,8 @@ public enum WorkspaceContextFileStore {
                 "“\(name)” has changed since it was synced, so it goes up on the next sync first."
             case .wouldLoseWhatNoStoreKeeps(let name):
                 "“\(name)” has Finder tags or a resource fork, which the server can't keep, so Lamp keeps it here."
+            case .destinationObstructed(let name):
+                "Something is where “\(name)” would come back. Move it aside, then download the source."
             case .waitsForDownload(let name):
                 "“\(name)” holds sources that are only on the server. Download them first, then remove it."
             case .serverCopyDiffers(let name):

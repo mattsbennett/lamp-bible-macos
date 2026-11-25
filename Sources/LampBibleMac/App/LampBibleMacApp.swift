@@ -181,12 +181,14 @@ struct LampBibleMacApp: App {
                     agentRemoteHost.attach(libraryModel) { [syncController, libraryModel] in
                         // A pass already running is let finish, then one
                         // run for this, so what it brings in is sure to be
-                        // what the phone saved.
-                        let started = Date()
-                        while syncController.isPassRunning, Date().timeIntervalSince(started) < 60 {
-                            try? await Task.sleep(for: .milliseconds(250))
-                        }
+                        // what the phone saved. And waited for again after:
+                        // the offloads after a pass can outlast any short
+                        // wait, and a sync asked for meanwhile is queued
+                        // behind them rather than run — the library must
+                        // not be read until that queued pass has run too.
+                        await syncController.waitForPasses()
                         await syncController.sync(library: libraryModel.library)
+                        await syncController.waitForPasses()
                         await libraryModel.refreshNow()
                     }
                 }

@@ -346,6 +346,10 @@ public struct ServerObservation: Equatable, Sendable {
     /// server lists without one is never fetched back, so a copy offloaded
     /// on matching bytes alone could be stuck on "Coming back" for ever.
     public let listed: Set<String>
+    /// Paths the manifest records a deletion of. Only these settle an
+    /// offload as gone: a path the manifest says nothing about may be one an
+    /// older manifest, restored on the server, never knew.
+    public let deleted: Set<String>
     public let at: Date
 
     /// How long a look at the server answers for anything. A pass runs every
@@ -355,18 +359,30 @@ public struct ServerObservation: Equatable, Sendable {
 
     public init(
         source: String, account: String = "", members: Set<String>,
-        listed: Set<String>? = nil, at: Date = Date()
+        listed: Set<String>? = nil, deleted: Set<String> = [], at: Date = Date()
     ) {
         self.source = source
         self.account = account
         self.members = members
         self.listed = listed ?? members
+        self.deleted = deleted
         self.at = at
     }
 
-    /// The same look, with membership as the manifest the pass wrote has it.
-    public func with(members: Set<String>) -> ServerObservation {
-        ServerObservation(source: source, account: account, members: members, listed: listed, at: at)
+    /// The same look, with membership and deletions as the manifest the pass
+    /// wrote has them.
+    public func with(members: Set<String>, deleted: Set<String>) -> ServerObservation {
+        ServerObservation(
+            source: source, account: account, members: members, listed: listed, deleted: deleted, at: at
+        )
+    }
+
+    /// Whether this is still the look `other` was — the same pass, server
+    /// and account — whatever its age. For a check made after a long read:
+    /// the read is the proof, and expiring the look under it would refuse
+    /// a source whose bytes have just matched.
+    public func isTheSameLook(as other: ServerObservation) -> Bool {
+        self == other
     }
 
     /// Whether this can answer for `source` as `account` now: the same
@@ -438,9 +454,13 @@ public struct OffloadLock: Codable, Equatable, Sendable {
         return OffloadLock(source: source, account: account, place: place)
     }
 
-    /// Whether a pass at `source` as `account` may run while this holds.
-    public func admits(source: String, account: String) -> Bool {
-        self.source == source && (self.account == nil || self.account == account)
+    /// Whether a pass at `source` as `account` may run while this holds —
+    /// and, for a folder, at the same folder: another folder put at the
+    /// locked path is not the one holding the copies, path or no path.
+    public func admits(source: String, account: String, place: String? = nil) -> Bool {
+        self.source == source
+            && (self.account == nil || self.account == account)
+            && (self.place == nil || self.place == place)
     }
 }
 
@@ -600,8 +620,10 @@ extension WorkspaceSourceOffload {
     public static func rows(
         onDisk: [DiskEntry],
         notHere: [String: WorkspaceSourceAct],
-        leaving: Set<String> = []
+        leaving: Set<String> = [],
+        obstructed: Set<String> = []
     ) -> [SourceRow] {
+        let obstructed = Set(obstructed.map { $0.precomposedStringWithCanonicalMapping })
         let leaving = Set(leaving.map { $0.precomposedStringWithCanonicalMapping })
         let notHere = Dictionary(
             notHere.map { ($0.key.precomposedStringWithCanonicalMapping, $0.value) },
@@ -629,7 +651,7 @@ extension WorkspaceSourceOffload {
             }
         }
         for (path, act) in notHere where act != .leaving {
-            if folders.contains(path) {
+            if folders.contains(path) || obstructed.contains(path) {
                 rows.append(SourceRow(relativePath: path, state: .blockedByAFolder))
             } else if !shown.contains(path) {
                 rows.append(SourceRow(
@@ -666,10 +688,14 @@ extension WorkspaceSourceOffload {
                 isRegularFile: !isLink && values?.isRegularFile == true
             )
         }
+        let notHere = LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager)
         return rows(
             onDisk: entries,
-            notHere: LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager),
-            leaving: Set(LampWorkspaceSync.leavingSourceNames(in: workspace, fileManager: fileManager))
+            notHere: notHere,
+            leaving: Set(LampWorkspaceSync.leavingSourceNames(in: workspace, fileManager: fileManager)),
+            obstructed: Set(notHere.keys.filter {
+                LampWorkspaceSync.destinationIsObstructed($0, inContextOf: workspace)
+            })
         )
     }
 }

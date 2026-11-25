@@ -293,7 +293,7 @@ public enum LampWorkspaceSync {
     @WritingWorkspaceFiles
     public static func forgetActsNoLongerOnTheServer(
         inLibraryAt libraryRoot: URL,
-        members: Set<String>,
+        deleted: Set<String>,
         fileManager: FileManager = .default
     ) -> [String] {
         // Called only with the manifest of the server the offloads went to
@@ -309,9 +309,13 @@ public enum LampWorkspaceSync {
             // Not a request to leave: that source is here, and may not be on
             // the server yet — forgetting the request would cancel it.
             for path in acted.keys.sorted() where acted[path] != .leaving {
+                // Only a deletion the manifest records. A path it says
+                // nothing about may be one a restored, older manifest never
+                // knew — the copy can still be on the server, and forgetting
+                // it would drop its row and lift the lock (`decisions/0022`).
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
-                ), !members.contains(member)
+                ), deleted.contains(member)
                 else { continue }
                 ledger.forgetAct(WorkspaceFileLedger.contextKey(path))
                 forgotten.append(member)
@@ -320,6 +324,24 @@ public enum LampWorkspaceSync {
             if changed { try? ledger.save(in: workspace) }
         }
         return forgotten
+    }
+
+    /// Whether a source could not land at its path: a folder stands at the
+    /// path itself, or something other than a folder — a file, a link — at
+    /// any folder on the way. The import would fail to put it there, and the
+    /// failure would stop the rest of the workspace's import with it.
+    static func destinationIsObstructed(_ relativePath: String, inContextOf workspace: URL) -> Bool {
+        var at = workspace.appendingPathComponent("context", isDirectory: true)
+        let parts = relativePath.split(separator: "/").map(String.init)
+        for (index, part) in parts.enumerated() {
+            at = at.appendingPathComponent(part)
+            var info = stat()
+            guard lstat(at.path, &info) == 0 else { return false }
+            let isFolder = (info.st_mode & S_IFMT) == S_IFDIR
+            if index == parts.count - 1 { return isFolder }
+            if !isFolder { return true }
+        }
+        return false
     }
 
     /// Every source this Mac has only on the server — let go, or asked back
@@ -366,15 +388,11 @@ public enum LampWorkspaceSync {
             var ledger = WorkspaceFileLedger.load(in: workspace)
             let offloaded = ledger.contextPaths(withAct: .offloaded)
             guard !offloaded.isEmpty else { continue }
-            let context = workspace.appendingPathComponent("context", isDirectory: true)
             for path in offloaded {
-                // Not one a folder stands at: it cannot land there, and its
-                // failure would stop the whole workspace's import, keeping
-                // every other source behind it away too. Its row says to
-                // move the folder.
-                var info = stat()
-                if lstat(context.appendingPathComponent(path).path, &info) == 0,
-                   (info.st_mode & S_IFMT) == S_IFDIR { continue }
+                // Not one something stands in the way of: it cannot land, and
+                // its failure would stop the whole workspace's import, keeping
+                // every other source behind it away too. Its row says so.
+                if destinationIsObstructed(path, inContextOf: workspace) { continue }
                 ledger.noteWanted(WorkspaceFileLedger.contextKey(path))
                 asked += 1
             }
@@ -428,8 +446,12 @@ public enum LampWorkspaceSync {
     ) -> Set<String> {
         var paths: Set<String> = []
         for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            // And one asked back that cannot land — something in its way —
+            // which a download would only fail on, stopping the rest of the
+            // workspace's import with it.
             for (path, act) in sourcesNotHere(in: workspace, fileManager: fileManager)
-            where act == .offloaded {
+            where act == .offloaded
+                || (act == .wanted && destinationIsObstructed(path, inContextOf: workspace)) {
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
                 ), namesAsource(member) else { continue }

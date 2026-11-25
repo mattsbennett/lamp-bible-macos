@@ -788,6 +788,16 @@ struct WorkspaceSourceOffloadGatheringTests {
 
     /// A lock on a sync folder follows it when it is renamed or moved — the
     /// same folder by device and inode — and never to another folder.
+    /// A folder lock admits a pass only at the folder it was taken on: a
+    /// replacement put at the same path is another folder.
+    @Test func afolderLockAdmitsOnlyItsFolder() {
+        let lock = OffloadLock(source: "folder:/a", account: "", place: "1:42")
+        #expect(lock.admits(source: "folder:/a", account: "", place: "1:42"))
+        #expect(!lock.admits(source: "folder:/a", account: "", place: "1:43"))
+        #expect(!lock.admits(source: "folder:/a", account: "", place: nil))
+        #expect(OffloadLock(source: "webdav:x", account: "").admits(source: "webdav:x", account: ""))
+    }
+
     @Test func afolderLockFollowsItsFolder() {
         let lock = OffloadLock(source: "folder:/a", account: "", place: "1:42")
         #expect(lock.following(to: "folder:/b", at: "1:42") == OffloadLock(source: "folder:/b", account: "", place: "1:42"))

@@ -672,7 +672,7 @@ struct WorkspaceFileDeletionSyncTests {
     /// deletion out here: without this the note survives, the row keeps
     /// saying “On the server”, and a later attachment at that path is
     /// withheld against a member that no longer exists.
-    @Test func anOffloadIsForgottenWhenTheServerNoLongerCountsItAmember() async throws {
+    @Test func anOffloadIsForgottenOnlyWhenTheServerRecordsItsDeletion() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
@@ -698,15 +698,17 @@ struct WorkspaceFileDeletionSyncTests {
             server: serverAsUploaded(in: source, library: macs.a)
         )
 
-        // A manifest that still counts it changes nothing.
+        // A manifest that records no deletion of it changes nothing — even
+        // one that does not count it at all, as an older manifest restored
+        // on the server would not.
         await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: [path]
+            inLibraryAt: macs.a, deleted: ["something/else"]
         )
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
 
-        // One that does not is the other Mac's removal arriving.
+        // One that records its deletion is the other Mac's removal arriving.
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: ["something/else"]
+            inLibraryAt: macs.a, deleted: [path]
         )
         #expect(forgotten == [path])
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
@@ -740,7 +742,7 @@ struct WorkspaceFileDeletionSyncTests {
         // No record at all: reaped when another device deleted it.
 
         let gone = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: []
+            inLibraryAt: macs.a, deleted: [path]
         )
         #expect(gone == [path])
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
@@ -898,8 +900,11 @@ struct WorkspaceFileDeletionSyncTests {
         try write("new", to: context.appendingPathComponent("fresh.pdf"), at: 0)
         try await WorkspaceContextFileStore.queueOffload(relativePath: "fresh.pdf", in: workspaceURL)
 
+        let fresh = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "fresh.pdf"
+        )
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: []
+            inLibraryAt: macs.a, deleted: [fresh]
         )
         #expect(forgotten.isEmpty)
         #expect(await LampWorkspaceSync.leavingSourceNames(in: workspaceURL) == ["fresh.pdf"])
@@ -1147,6 +1152,33 @@ struct WorkspaceFileDeletionSyncTests {
 
         #expect(await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a) == 1)
         #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["other.pdf"])
+    }
+
+    /// A source with something in its way — a file where one of its folders
+    /// should be — is not asked back by Download All, refuses its own
+    /// Download, is withheld if already asked for, and is drawn as blocked.
+    @Test func asourceSomethingStandsInTheWayOfStaysPut() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("a file where a folder was", to: context.appendingPathComponent("Research"), at: 0)
+        var ledger = WorkspaceFileLedger()
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("Research/history.pdf"))
+        ledger.noteWanted(WorkspaceFileLedger.contextKey("Research/asked.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        #expect(await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a) == 0)
+        await #expect(throws: WorkspaceContextFileStore.OffloadError.destinationObstructed("Research/history.pdf")) {
+            try await WorkspaceContextFileStore.fetchSource(relativePath: "Research/history.pdf", in: workspaceURL)
+        }
+        let asked = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "Research/asked.pdf"
+        )
+        #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(asked), "withheld, not planned")
+        let rows = await WorkspaceSourceOffload.rows(inWorkspaceAt: workspaceURL)
+        #expect(rows.filter { $0.state == .blockedByAFolder }.map(\.relativePath).sorted()
+            == ["Research/asked.pdf", "Research/history.pdf"])
     }
 
     /// A read the server refuses costs nothing from the run's allowance, so

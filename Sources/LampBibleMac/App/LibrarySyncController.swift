@@ -153,6 +153,19 @@ final class LibrarySyncController: ObservableObject {
             && SyncAccount.identity(username: username, password: password) == account
     }
 
+    /// Whether `provider` is the folder provider pointing at the very folder
+    /// the lock was taken on, renamed or moved since: turning sync back on to
+    /// it is how the offloaded sources come back. A pass then moves the lock
+    /// to its new path.
+    private func isTheLockedFolder(_ provider: Provider) -> Bool {
+        guard provider == .folder, let lockedPlace = offloadLock?.place,
+              let folder = try? resolveFolderURL()
+        else { return false }
+        let hasScope = folder.startAccessingSecurityScopedResource()
+        defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
+        return Self.place(of: folder) == lockedPlace
+    }
+
     /// Engages the lock before an offload deletes anything.
     private func willOffload(to server: OffloadServer) {
         if offloadLock == nil {
@@ -249,7 +262,10 @@ final class LibrarySyncController: ObservableObject {
     var provider: Provider {
         get { Provider(rawValue: defaults.string(forKey: "sync.provider") ?? "off") ?? .off }
         set {
-            guard newValue == provider || mayPointSync(at: source(for: newValue)) else {
+            guard newValue == provider
+                    || isTheLockedFolder(newValue)
+                    || mayPointSync(at: source(for: newValue))
+            else {
                 objectWillChange.send()
                 return
             }
@@ -470,6 +486,16 @@ final class LibrarySyncController: ObservableObject {
     /// than run, so waiting on it alone returns before the pass it queued.
     var isPassRunning: Bool { isSyncing || passGate }
 
+    /// Waits until no pass — nor the offloads after one, nor a pass queued
+    /// behind them — is running. Bounded, so a wedged pass cannot hold a
+    /// caller for ever; a run of offloads reads at most a gigabyte back.
+    func waitForPasses() async {
+        let started = Date()
+        while isPassRunning, Date().timeIntervalSince(started) < 10 * 60 {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
     /// Whether the offloads after a pass are being carried out. While they
     /// are, no pass starts and the lock on where sync points is not released.
     @Published private(set) var isOffloading = false
@@ -575,7 +601,7 @@ final class LibrarySyncController: ObservableObject {
                     while: { @Sendable [weak self] in
                         await MainActor.run {
                             guard let self else { return false }
-                            return self.offloadObservation() == observation
+                            return self.isStillTheLook(observation)
                                 && !KeptAgentChats.isBusy(in: workspace)
                         }
                     }
@@ -690,6 +716,21 @@ final class LibrarySyncController: ObservableObject {
         return observation
     }
 
+    /// Whether `observation` is still the last pass's look, at the server
+    /// and account sync points at now — without expiring it. Asked between
+    /// and after the read-backs of a run that began with a fresh look: a
+    /// large source can take longer to read than a look lives, and the read
+    /// is the proof.
+    func isStillTheLook(_ observation: ServerObservation) -> Bool {
+        guard let last = lastObservation, last.isTheSameLook(as: observation),
+              currentSource == observation.source
+        else { return false }
+        let account = provider == .webDAV
+            ? (try? SyncSecretStore.readPassword()).map { SyncAccount.identity(username: username, password: $0) }
+            : ""
+        return account == observation.account
+    }
+
     /// Forgets this Mac's offloads of sources the server no longer holds.
     ///
     /// Another device's removal of a source neither Mac is holding reaches
@@ -700,12 +741,12 @@ final class LibrarySyncController: ObservableObject {
     private func reconcileOffloadsWithTheServer(library: LampLibrary) async {
         // Unread is not empty: a pass that never got a manifest must not look
         // like a server that has dropped every source.
-        guard let members = lastObservation?.members else { return }
+        guard let deleted = lastObservation?.deleted else { return }
         guard let observed = lastObservation?.source,
               LampWorkspaceSync.mayReconcileOffloads(withManifestOf: observed, heldBy: offloadsHeldBy)
         else { return }
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: library.rootURL, members: members
+            inLibraryAt: library.rootURL, deleted: deleted
         )
         if !forgotten.isEmpty {
             Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
@@ -798,7 +839,7 @@ final class LibrarySyncController: ObservableObject {
                             return !OpenWritingEditors.writingIDs.contains(writingID)
                                 && !KeptAgentChats.isBusy(in: workspaceURL)
                                 && WorkspaceSourceOffload.After.chosen() == after
-                                && self.offloadObservation() == observation
+                                && self.isStillTheLook(observation)
                         }
                     }
                 )
@@ -1148,7 +1189,7 @@ final class LibrarySyncController: ObservableObject {
             lock = followed
             offloadLock = lock
         }
-        guard lock.admits(source: source, account: account) else {
+        guard lock.admits(source: source, account: account, place: place) else {
             throw LibrarySyncError.offloadsHeldElsewhere
         }
         if lock.account == nil {
@@ -1716,7 +1757,10 @@ extension LibrarySyncController {
         // would leave its source drawn as "On the server". The listing stays
         // the gather's: revisions are what was seen, not what was written.
         if let written = outcome.written?.bundle, let opened = pendingObservation {
-            pendingObservation = opened.with(members: Set(written.manifest.members.map(\.path)))
+            pendingObservation = opened.with(
+                members: Set(written.manifest.members.map(\.path)),
+                deleted: Set(written.manifest.tombstones.map(\.path))
+            )
         }
         if let written = outcome.written?.bundle,
            let incoming = LampSyncBundleLedgers.bookReading(in: written),
@@ -2201,7 +2245,8 @@ extension LibrarySyncController {
             source: source,
             account: accountOfThisPass,
             members: Set(manifest.members.map(\.path)),
-            listed: Set(unlisted.keys)
+            listed: Set(unlisted.keys),
+            deleted: Set(manifest.tombstones.map(\.path))
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
