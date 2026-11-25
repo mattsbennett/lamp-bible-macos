@@ -726,35 +726,29 @@ public enum DevotionalAgentRevisionStore {
         // different kinds and nothing the person typed carries a turn, so a
         // `.userEdit` merge can never be demoted and nothing needs holding
         // back for it.
-        // The union taken once, not per revision being removed:
-        // `coveredRevisionIDs` builds a fresh set on every access, and asking
-        // it once per (removed x survivor) pair cost 64 ms on a backlog of
-        // 1,500 edits under the lock, against 2 ms for the compaction itself.
-        var demotableCoverage: Set<UUID> = []
-        for revision in compacted where keptIDs.contains(revision.id)
-            && revision.turnID == nil && revision.kind == .agentEdit
-            && revision.replacedRevisionIDs?.isEmpty == false {
-            demotableCoverage.formUnion(revision.coveredRevisionIDs)
-        }
-        let goingAway = stored.filter { !keptIDs.contains($0.revision.id) }
-        // Subsumed coverage, not the revision's own id. A merge's covered set
-        // names the originals, never another merge — so asking whether the
-        // deleted revision's *id* is covered misses a deleted tagged merge
-        // entirely, and that is exactly the thing `removingReplaced` could
-        // use, with one more original, to put a turn's name back. A reviewer
-        // found the gap between this filter and what `0017` says it does.
-        let retiring = goingAway.filter { entry in
-            // Only something that could actually *be* a holder is withheld.
-            // `removingReplaced` takes its holders from revisions that are
-            // not themselves up for demotion, and an untagged merge always
-            // is — so an untagged intermediate (`A+B` under `A+B+C`) can
-            // never help, and withholding it only had it fetched and deleted
-            // on every pass, which is the loop this record exists to stop.
-            let couldHold = entry.revision.turnID != nil
-                || entry.revision.replacedRevisionIDs?.isEmpty != false
-            guard couldHold else { return true }
-            return !entry.revision.coveredRevisionIDs.isSubset(of: demotableCoverage)
-        }
+        // Everything compaction deletes is retired. No exception, and the
+        // reason is worth keeping: an earlier version held back whatever a
+        // surviving untagged merge might one day want for a demotion, and it
+        // was wrong four times over because it was trying to read a fact
+        // about the *server* out of this folder.
+        //
+        // `compact` begins with `removingReplaced`, so a demotion that could
+        // fire here already has: if every original of an untagged merge were
+        // present, the merge would be gone and the originals kept. Originals
+        // are deleted under an untagged merge only when one of them is
+        // already missing here — and whether the missing one ever arrives is
+        // not something any local predicate can see. Withholding was not
+        // patient waiting either: a withheld revision is fetched, written and
+        // deleted again on every pass, for ever, which is the loop this list
+        // exists to stop.
+        //
+        // What that costs is in `0017`: where this Mac compacted an untagged
+        // merge before every original had arrived, that merge may keep a
+        // turn's changes under no turn's name. Never a version of the text,
+        // which the merge carries whole — and `removingReplaced` still
+        // prefers the originals whenever all of them are present.
+        let retiring = stored.filter { !keptIDs.contains($0.revision.id) }
+
         // Best effort, deliberately. `prepareLibraryForSync` compacts every
         // workspace before importing anything, so a throw here would stop
         // unrelated documents syncing over a bookkeeping file. A retirement
@@ -768,7 +762,7 @@ public enum DevotionalAgentRevisionStore {
         )
 
         var removed = Set<URL>()
-        for entry in goingAway {
+        for entry in retiring {
             forgetDecodedHistory(in: workspace)
             try FileManager.default.removeItem(at: entry.url)
             removed.insert(entry.url)
@@ -832,10 +826,25 @@ public enum DevotionalAgentRevisionStore {
         name.precomposedStringWithCanonicalMapping.lowercased()
     }
 
+    /// Whether the list at `url` is a plain file this store may use.
+    ///
+    /// A symbolic link is refused, for reading and for writing. `FileHandle`
+    /// follows one, so a link left at `.lamp/retired-revisions.json` had
+    /// compaction appending retirement entries into whatever it pointed at —
+    /// and the write succeeding is exactly why `try?` did not protect the
+    /// other file. The same reasoning as `decisions/0010`, one layer down:
+    /// this store publishes and keeps only ordinary files.
+    private static func isAplainFile(_ url: URL) -> Bool {
+        guard let info = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let type = info[.type] as? FileAttributeType
+        else { return false }
+        return type == .typeRegular
+    }
+
     public static func retiredRevisions(in workspace: URL) -> [RetiredRevision] {
         let url = metadataDirectory(in: workspace)
             .appendingPathComponent(retiredRevisionsFilename)
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard isAplainFile(url), let data = try? Data(contentsOf: url) else { return [] }
         // Split on newline *bytes* and read each line on its own. Decoding
         // the whole file as UTF-8 first meant one bad byte anywhere answered
         // "nothing is retired", after which compaction appended good entries
@@ -895,6 +904,13 @@ public enum DevotionalAgentRevisionStore {
             .joined(separator: "\n") + "\n"
         // For *updating*, not writing: the check below reads the last byte,
         // and a write-only descriptor answers that with EBADF.
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        if exists, !isAplainFile(url) {
+            // Something other than a plain file is sitting at the path — a
+            // link, most likely. Appending would write into whatever it
+            // names. Advisory means losing this batch, never touching that.
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
         if let handle = try? FileHandle(forUpdating: url) {
             defer { try? handle.close() }
             // Starting on a line of its own: an append interrupted mid-line
@@ -908,7 +924,7 @@ public enum DevotionalAgentRevisionStore {
                 if last != Data("\n".utf8) { try handle.write(contentsOf: Data("\n".utf8)) }
             }
             try handle.write(contentsOf: Data(body.utf8))
-        } else if !FileManager.default.fileExists(atPath: url.path) {
+        } else if !exists {
             try Data(body.utf8).write(to: url, options: .atomic)
         } else {
             // A log that exists and will not open — read-only, most likely.
@@ -918,13 +934,11 @@ public enum DevotionalAgentRevisionStore {
         }
     }
 
-    /// The published names a pass may actually claim for this workspace,
-    /// folded.
+    /// The published names a pass may claim for this workspace, folded.
     ///
-    /// `decisions/0017`. Three things have to hold:
+    /// `decisions/0017`. Two things have to hold:
     ///
-    /// - It is on the retired list at all, which is the evidence `0016`
-    ///   lacked.
+    /// - It is on the retired list, which is the evidence `0016` lacked.
     /// - **Some history here still decodes.** A retirement says the
     ///   replacement was on disk when compaction ran, not that it is now. A
     ///   filename was not enough to check that — the one remaining file can
@@ -934,39 +948,15 @@ public enum DevotionalAgentRevisionStore {
     ///   which with intermediate merges means walking a chain of retirements
     ///   to a live file. Rejected for cost, and recorded as rejected so the
     ///   next reviewer who notices does not reopen it.
-    /// - **Nothing a surviving demotable merge covers.** An id retired long
-    ///   ago can be wanted again: a legacy untagged merge arriving later can
-    ///   displace the tagged replacement that justified the retirement, and
-    ///   then `removingReplaced` needs that original back. The live state
-    ///   overrides the older entry, and this is the one place the id in each
-    ///   line is load-bearing.
     ///
-    /// One decode per workspace, and only for a workspace that has a member
-    /// with no file.
+    /// There is no third condition about demotions. One used to be here, and
+    /// `0017` records why it went: it was trying to read a fact about the
+    /// server out of this folder, and could not.
     public static func claimableRetiredNames(in workspace: URL) -> Set<String> {
         let retired = retiredRevisions(in: workspace)
         guard !retired.isEmpty else { return [] }
         guard let stored = try? storedRevisions(in: workspace), !stored.isEmpty else { return [] }
-
-        var wantedBack: Set<UUID> = []
-        for entry in stored where entry.revision.turnID == nil
-            && entry.revision.kind == .agentEdit
-            && entry.revision.replacedRevisionIDs?.isEmpty == false {
-            wantedBack.formUnion(entry.revision.coveredRevisionIDs)
-        }
-        // A wanted revision vetoes its *name*, not just its id. Two
-        // retirements whose names differ only in case fold alike, so
-        // dropping the wanted entry and keeping the other left the same
-        // folded name in the answer — and claimed the very revision the
-        // demotion was waiting for.
-        let vetoed = Set(
-            retired.lazy.filter { wantedBack.contains($0.id) }.map { foldedName($0.publishedName) }
-        )
-        return Set(
-            retired.lazy
-                .filter { !wantedBack.contains($0.id) }
-                .map { foldedName($0.publishedName) }
-        ).subtracting(vetoed)
+        return Set(retired.map { foldedName($0.publishedName) })
     }
 
     public static func lastSyncedDraft(in workspace: URL) throws -> String? {

@@ -173,52 +173,6 @@ struct RevisionMembersHeldTests {
         #expect(claimed == Set(members))
     }
 
-    /// A deleted *tagged merge* whose coverage a surviving untagged merge
-    /// subsumes is not retired.
-    ///
-    /// `removingReplaced` drops any revision whose covered set is a strict
-    /// subset of another's, tags or not — so an untagged legacy merge over
-    /// `A+B+C` deletes a tagged merge over `A+B`. Asking whether the deleted
-    /// revision's own *id* is covered misses this entirely: a merge's covered
-    /// set names originals, never another merge. And the tagged merge is
-    /// exactly what could put a turn's name back, given one more original, so
-    /// it has to stay fetchable.
-    @Test func doesNotRetireAtaggedMergeAnUntaggedOneSubsumes() throws {
-        let root = library()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let workspace = try workspaceURL(in: root, named: "W1")
-        let revisions = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
-        try FileManager.default.createDirectory(at: revisions, withIntermediateDirectories: true)
-
-        let a = UUID(), b = UUID(), c = UUID()
-        let tagged = DevotionalAgentRevision(
-            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two",
-            replacedRevisionIDs: [a, b].sorted { $0.uuidString < $1.uuidString },
-            turnID: UUID()
-        )
-        let untagged = DevotionalAgentRevision(
-            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two three",
-            replacedRevisionIDs: [a, b, c].sorted { $0.uuidString < $1.uuidString }
-        )
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        for revision in [tagged, untagged] {
-            try encoder.encode(revision).write(
-                to: revisions.appendingPathComponent("1700000001000-\(revision.id.uuidString).json")
-            )
-        }
-
-        try DevotionalAgentRevisionStore.compact(in: workspace)
-
-        let kept = try DevotionalAgentRevisionStore.revisions(in: workspace).map(\.id)
-        try #require(!kept.contains(tagged.id), "the untagged superset replaced it")
-        let retired = DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id)
-        #expect(
-            !retired.contains(tagged.id),
-            "it is what a demotion could still use, so it must stay fetchable"
-        )
-    }
-
     /// Two missing members whose names fold alike are both left alone.
     ///
     /// A folded match would otherwise claim both on one retirement, and the
@@ -249,6 +203,44 @@ struct RevisionMembersHeldTests {
         )
 
         #expect(claimed.isEmpty)
+    }
+
+    /// A link where the list should be is refused, read and written.
+    ///
+    /// `FileHandle` follows one, so compaction appended retirement entries
+    /// into whatever it pointed at — and the write *succeeding* is why `try?`
+    /// did not protect the other file.
+    @Test func willNotReadOrWriteAlinkWhereTheListBelongs() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+
+        let elsewhere = root.appendingPathComponent("not-for-the-list.txt")
+        try Data("someone else's bytes\n".utf8).write(to: elsewhere)
+        try FileManager.default.createSymbolicLink(
+            at: metadata.appendingPathComponent("retired-revisions.json"),
+            withDestinationURL: elsewhere
+        )
+
+        // Reading answers nothing rather than reading the other file.
+        #expect(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).isEmpty)
+
+        // And a compaction that would retire something leaves it alone.
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A B", after: "A B C",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+
+        #expect(
+            try Data(contentsOf: elsewhere) == Data("someone else's bytes\n".utf8),
+            "nothing was appended through the link"
+        )
     }
 
     /// Two workspaces using the same filename are not a collision.
@@ -421,87 +413,6 @@ struct RevisionMembersHeldTests {
         #expect(claimed.isEmpty, "the only recoverable copies must stay fetchable")
     }
 
-    /// Everything a surviving demotable merge covers stays fetchable —
-    /// including an *untagged* original, which the first version of this
-    /// retired. `removingReplaced` needs a holder for every id the merge
-    /// covers and only one of them has to know a turn, so retiring the
-    /// untagged one blocks the demotion for good.
-    @Test func keepsEverythingAdemotableMergeCoversFetchable() throws {
-        let root = library()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let workspace = try workspaceURL(in: root, named: "W1")
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
-
-        // An agent's run, merged without a turn — the legacy shape.
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, before: "one", after: "one two",
-            in: workspace, createdAt: start
-        )
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, before: "one two", after: "one two three",
-            in: workspace, createdAt: start.addingTimeInterval(60)
-        )
-
-        let kept = try DevotionalAgentRevisionStore.revisions(in: workspace)
-        let merges = kept.filter {
-            $0.turnID == nil && $0.kind == .agentEdit && $0.replacedRevisionIDs?.isEmpty == false
-        }
-        try #require(!merges.isEmpty, "the two agent edits merged, untagged")
-        let covered = Set(merges.flatMap { $0.replacedRevisionIDs ?? [] })
-        let retired = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
-
-        #expect(
-            retired.intersection(covered).isEmpty,
-            "nothing a demotable merge covers may be retired"
-        )
-    }
-
-    /// A retirement from long ago is overridden by what the history needs
-    /// now.
-    ///
-    /// A legacy untagged merge arriving later can displace the tagged
-    /// replacement that justified a retirement, and then `removingReplaced`
-    /// wants that original back. The list is evidence of a past deletion,
-    /// not a standing verdict.
-    @Test func lettsAliveDemotionOverrideAnOldRetirement() throws {
-        let root = library()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let workspace = try workspaceURL(in: root, named: "W1")
-        let start = Date(timeIntervalSince1970: 1_700_000_000)
-
-        // An agent's run that merges without a turn: the legacy shape.
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, before: "one", after: "one two",
-            in: workspace, createdAt: start
-        )
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, before: "one two", after: "one two three",
-            in: workspace, createdAt: start.addingTimeInterval(60)
-        )
-        let merges = try DevotionalAgentRevisionStore.revisions(in: workspace).filter {
-            $0.turnID == nil && $0.kind == .agentEdit && $0.replacedRevisionIDs?.isEmpty == false
-        }
-        let covered = try #require(merges.first?.replacedRevisionIDs?.first)
-
-        // As though an earlier pass had retired that original, before this
-        // merge turned up and made it wanted again.
-        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
-        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(covered.uuidString) 1600000000000-\(covered.uuidString).json;\n").utf8)
-            .write(to: list)
-        try #require(Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
-            .contains(covered))
-
-        let claimable = DevotionalAgentRevisionStore.claimableRetiredNames(in: workspace)
-
-        #expect(
-            !claimable.contains(DevotionalAgentRevisionStore.foldedName(
-                "1600000000000-\(covered.uuidString).json"
-            )),
-            "the demotion wants it back, retired or not"
-        )
-    }
-
     /// A replacement that is there but unreadable is no replacement. Its
     /// filename satisfied the guard this replaced, and then the retired
     /// originals — the only recoverable copies — were claimed rather than
@@ -649,5 +560,86 @@ struct RevisionMembersHeldTests {
     @Test func givesUpNothingForAbareFilename() {
         #expect(!LampSyncDiagnostics.folders(named: ["My Private Doubts.lamp"])
             .contains("My Private Doubts"))
+    }
+}
+
+/// What the retired list actually claims, as one property instead of one
+/// test per guess.
+///
+/// `lamp-bible-core/Documentation/decisions/0017`. A retirement says *this
+/// Mac holds that history in merged form*, and that is exactly true when the
+/// retired file coming back would change nothing the store keeps. Four
+/// versions of a predicate about demotions each shipped with a test that
+/// encoded the version — which is how the same thing was wrong four rounds
+/// running. This is the check the list is held to from now on: if it ever
+/// fails, the fault is in `compact` or `removingReplaced`, not beside them.
+struct RetirementKeepsWhatItClaimsTests {
+    /// A small deterministic generator, seeded per case: runs of edits by
+    /// the person and by an agent, some merged already, some with a turn and
+    /// some without, and an occasional duplicate of one that is kept.
+    private func revisions(seed: UInt64) -> [DevotionalAgentRevision] {
+        var state = seed | 1
+        func next(_ bound: Int) -> Int {
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return Int(state % UInt64(bound))
+        }
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        var made: [DevotionalAgentRevision] = []
+        var text = "lamp"
+        var at = start
+        let turns = [UUID(), UUID()]
+        // In runs, so that revisions really are mergeable: a merge needs the
+        // same kind, the same turn, a contiguous before/after and a gap
+        // inside the policy's. Edits with those drawn independently almost
+        // never merge, and then the property is vacuous.
+        for _ in 0..<(2 + next(3)) {
+            let agent = next(2) == 0
+            let turn = agent && next(3) != 0 ? turns[next(turns.count)] : nil
+            for _ in 0..<(2 + next(3)) {
+                let before = text
+                text += " \(made.count)"
+                at = at.addingTimeInterval(Double(30 + next(600)))
+                let covered = (0..<next(3)).map { _ in UUID() }
+                made.append(
+                    DevotionalAgentRevision(
+                        createdAt: at,
+                        kind: agent ? .agentEdit : .userEdit,
+                        beforeMarkdown: before,
+                        afterMarkdown: text,
+                        replacedRevisionIDs: covered.isEmpty ? nil : covered,
+                        turnID: turn
+                    )
+                )
+            }
+            // A gap wide enough that the next run is its own.
+            at = at.addingTimeInterval(Double(8 * 3_600))
+        }
+        // A second name for one that is already there.
+        if let first = made.first, next(2) == 0 { made.append(first) }
+        return made
+    }
+
+    @Test(arguments: Array(1...40) as [UInt64])
+    func aretiredRevisionComingBackChangesNothingKept(seed: UInt64) throws {
+        let all = revisions(seed: seed)
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let kept = DevotionalAgentRevisionCompactor.compact(all, now: now)
+        let keptIDs = Set(kept.map(\.id))
+        let dropped = all.filter { !keptIDs.contains($0.id) }
+        guard !dropped.isEmpty else { return }
+
+        // Every subset of what was dropped, up to a bound, put back.
+        for take in 1...min(dropped.count, 3) {
+            for start in 0...(dropped.count - take) {
+                let returning = Array(dropped[start..<(start + take)])
+                let after = DevotionalAgentRevisionCompactor.removingReplaced(kept + returning)
+                #expect(
+                    Set(after.map(\.id)) == keptIDs,
+                    "seed \(seed): \(returning.count) returning changed what is kept"
+                )
+            }
+        }
     }
 }

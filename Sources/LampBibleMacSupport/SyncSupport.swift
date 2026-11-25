@@ -90,7 +90,7 @@ public enum LampWorkspaceSync {
     /// wrong case `mergedIntoTheLibrary` already accepts, and the alternative
     /// is fetching them for ever.
     public static func claimableRevisionMembers(
-        among members: some Sequence<String>,
+        among members: some Collection<String>,
         heldAsFiles: Set<String>
     ) -> Set<String> {
         var claimed: Set<String> = []
@@ -138,9 +138,13 @@ public enum LampWorkspaceSync {
     /// library's history on every pass while holding the owner the editor
     /// queues behind. A record says *installed here once*; only the deleter
     /// can say *removed here deliberately*.
+    /// `members` is a `Collection` on purpose: it is walked twice, once for
+    /// the candidates and once to count folded spellings, and a single-pass
+    /// sequence would be empty the second time — which would quietly reject
+    /// every claim.
     @WritingWorkspaceFiles
     public static func revisionMembersHeldWithoutAFile(
-        members: some Sequence<String>,
+        members: some Collection<String>,
         heldAsFiles: Set<String>,
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
