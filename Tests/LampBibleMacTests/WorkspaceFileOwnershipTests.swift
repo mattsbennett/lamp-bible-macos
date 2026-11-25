@@ -86,10 +86,12 @@ struct WorkspaceFileOwnershipTests {
             declaration: "enum LampWorkspaceSync",
             publicOnly: true,
             outsideTheOwner: [
-                "revisionMembersHeldWithoutAFile": """
+                "claimableRevisionMembers": """
                     compares two sets of paths it is handed and opens nothing. \
-                    The gather has already read the workspaces by the time it \
-                    is asked (`decisions/0016`).
+                    Named apart from `revisionMembersHeldWithoutAFile`, which \
+                    reads a workspace's history and is on the owner: this test \
+                    exempts by bare name, so an overload would have exempted \
+                    the reader too (`decisions/0016`).
                     """,
             ]
         ),

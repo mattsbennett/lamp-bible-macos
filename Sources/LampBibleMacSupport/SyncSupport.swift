@@ -94,8 +94,8 @@ public enum LampWorkspaceSync {
     ///   `DevotionalAgentRevisionStore.idsWantedForDemotion`. These are left
     ///   unclaimed, so they can still come down: a demotion needs every id a
     ///   merge replaced, and a claim would keep one away for good.
-    public static func revisionMembersHeldWithoutAFile(
-        members: some Sequence<String>,
+    public static func claimableRevisionMembers(
+        among members: some Sequence<String>,
         heldAsFiles: Set<String>,
         stillWantedForDemotion: Set<UUID> = []
     ) -> Set<String> {
@@ -177,8 +177,8 @@ public enum LampWorkspaceSync {
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
     ) -> Set<String> {
-        let missing = revisionMembersHeldWithoutAFile(
-            members: members, heldAsFiles: heldAsFiles
+        let missing = claimableRevisionMembers(
+            among: members, heldAsFiles: heldAsFiles
         )
         guard !missing.isEmpty else { return [] }
 
@@ -208,8 +208,8 @@ public enum LampWorkspaceSync {
         }
         guard !wanted.isEmpty else { return claimable }
 
-        return revisionMembersHeldWithoutAFile(
-            members: claimable, heldAsFiles: [], stillWantedForDemotion: wanted
+        return claimableRevisionMembers(
+            among: claimable, heldAsFiles: [], stillWantedForDemotion: wanted
         )
     }
 

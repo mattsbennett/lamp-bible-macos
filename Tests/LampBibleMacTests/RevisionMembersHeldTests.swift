@@ -16,8 +16,8 @@ struct RevisionMembersHeldTests {
         let kept = "\(workspace)/Revisions/1700000002000-B.json"
         let compactedAway = "\(workspace)/Revisions/1700000001000-A.json"
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [kept, compactedAway],
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [kept, compactedAway],
             heldAsFiles: [kept]
         )
 
@@ -30,8 +30,8 @@ struct RevisionMembersHeldTests {
     @Test func doesNotClaimArevisionItStillHoldsAsAfile() {
         let path = "\(workspace)/Revisions/1700000001000-A.json"
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [path], heldAsFiles: [path]
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [path], heldAsFiles: [path]
         )
 
         #expect(claimed.isEmpty)
@@ -61,8 +61,8 @@ struct RevisionMembersHeldTests {
         "Revisions/1700000001000-A.json",
     ])
     func claimsNothingButArevision(path: String) {
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [path], heldAsFiles: []
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [path], heldAsFiles: []
         )
 
         #expect(claimed.isEmpty, "claimed \(path)")
@@ -82,8 +82,8 @@ struct RevisionMembersHeldTests {
             "\(workspace)/Revisions/17000000000\($0)0-M\($0).json"
         }
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: intermediates + [survivor],
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: intermediates + [survivor],
             heldAsFiles: [survivor]
         )
 
@@ -100,8 +100,8 @@ struct RevisionMembersHeldTests {
         let ordinary = "\(workspace)/Revisions/1700000002000-\(other.uuidString).json"
         let survivor = "\(workspace)/Revisions/1700000003000-C.json"
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [needed, ordinary, survivor],
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [needed, ordinary, survivor],
             heldAsFiles: [survivor],
             stillWantedForDemotion: [wanted]
         )
@@ -116,8 +116,8 @@ struct RevisionMembersHeldTests {
         let wanted = UUID()
         let lower = "\(workspace)/Revisions/1700000001000-\(wanted.uuidString.lowercased()).json"
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [lower], heldAsFiles: [], stillWantedForDemotion: [wanted]
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [lower], heldAsFiles: [], stillWantedForDemotion: [wanted]
         )
 
         #expect(claimed.isEmpty)
@@ -130,8 +130,8 @@ struct RevisionMembersHeldTests {
         let wanted = UUID()
         let different = "\(workspace)/Revisions/1700000001000-\(wanted.uuidString)-B.json"
 
-        let claimed = LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [different], heldAsFiles: [], stillWantedForDemotion: [wanted]
+        let claimed = LampWorkspaceSync.claimableRevisionMembers(
+            among: [different], heldAsFiles: [], stillWantedForDemotion: [wanted]
         )
 
         #expect(claimed == [different])
