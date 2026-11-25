@@ -418,18 +418,41 @@ public enum DevotionalAgentRevisionStore {
     ///
     /// So these are not claimed. It costs a download each until one of them
     /// settles the demotion, after which the merge no longer names them and
-    /// they are claimed like anything else — on a real library, 9 members of
-    /// 43 rather than none.
+    /// they are claimed like anything else.
+    ///
+    /// Only an **agent** edit's merge. A demotion needs a holder that knows a
+    /// turn, and nothing the person typed carries one; `canMerge` refuses two
+    /// revisions of different kinds, so a `.userEdit` merge covers user edits
+    /// and nothing else, none of which can ever name a turn. Keeping those
+    /// fetchable would download a revision and compact it away again on every
+    /// pass to settle a demotion that cannot happen — the very loop this is
+    /// part of fixing. On the owner's library every untagged merge is a user
+    /// edit, so this is the difference between claiming 34 of the 43 and all
+    /// of them.
     public static func idsWantedForDemotion(in workspace: URL) throws -> Set<UUID> {
         var wanted: Set<UUID> = []
         for stored in try storedRevisions(in: workspace) {
             guard stored.revision.turnID == nil,
+                  stored.revision.kind == .agentEdit,
                   let replaced = stored.revision.replacedRevisionIDs,
                   !replaced.isEmpty
             else { continue }
             wanted.formUnion(replaced)
         }
         return wanted
+    }
+
+    /// Whether this workspace holds any revision at all that can be read.
+    ///
+    /// `0016`'s claim rests on compaction having left a replacement behind,
+    /// so it needs there to *be* a replacement. A workspace whose history is
+    /// gone altogether — a folder restored without its `.lamp`, a directory
+    /// deleted by hand — holds no replacement for anything, and absence there
+    /// means loss rather than supersession. Asked before any member of such a
+    /// workspace is claimed.
+    public static func holdsAnyRevision(in workspace: URL) -> Bool {
+        guard let stored = try? storedRevisions(in: workspace) else { return false }
+        return !stored.isEmpty
     }
 
     /// The history to show for one document, newest first.

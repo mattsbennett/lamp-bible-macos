@@ -16,24 +16,38 @@ public enum LampSyncDiagnostics {
     /// The folders a set of member paths falls under, for a line that says
     /// where a fault is without naming the reader's own files.
     ///
-    /// Up to two components **of the directory part**, so `Workspaces/Writing`
-    /// is told apart from `Workspaces/Presentations` while a review at
-    /// `WritingReview/<id>__<document>.json` gives up `WritingReview` and not
-    /// the document's own name. Taking the first two components of the whole
-    /// path was the bug a reviewer found: a path two deep is a folder and a
-    /// filename, so the filename *was* the second component.
+    /// Only the layout's own folder names are ever said, and a second
+    /// component only where the layout fixes it. Everything else is the first
+    /// component alone.
     ///
-    /// A member with no directory at all gives up nothing — a bare name is
-    /// all name.
+    /// Two reviewer findings, in order. Taking the first two components of
+    /// the whole path named the reader's file: a path two deep is a folder
+    /// and a filename, so a review at `WritingReview/<id>__<document>.json`
+    /// gave up the document's name. Taking two components of the *directory*
+    /// part fixed that one and not the next: a book's picture lives at
+    /// `BookMedia/<module-id>/…`, and a module id carries words from the
+    /// book's title, so a shared diagnostic still said which books the reader
+    /// has. The only safe rule is to say nothing a reader or a publisher
+    /// named, so the second component is kept for the layout's own folders
+    /// and dropped everywhere else.
     public static func folders(named paths: some Sequence<String>) -> String {
+        /// The layout's own second components — names the app chose, not the
+        /// reader. `Workspaces/` holds several kinds and which one is the
+        /// diagnosis, so these are worth telling apart.
+        let fixedSecondComponents: Set<String> = [
+            "Workspaces/Writing", "Workspaces/Devotionals", "Workspaces/Presentations",
+            "Workspaces/Skills", "Workspaces/Conversations",
+        ]
         var folders: Set<String> = []
         for path in paths {
             let parts = path.split(separator: "/")
-            guard parts.count > 1 else {
+            guard let first = parts.first, parts.count > 1 else {
                 folders.insert("(the library's own folder)")
                 continue
             }
-            folders.insert(parts.dropLast().prefix(2).joined(separator: "/"))
+            let directory = parts.dropLast()
+            let twoDeep = directory.prefix(2).joined(separator: "/")
+            folders.insert(fixedSecondComponents.contains(twoDeep) ? twoDeep : String(first))
         }
         return folders.sorted().joined(separator: ", ")
     }
@@ -169,19 +183,33 @@ public enum LampWorkspaceSync {
         guard !missing.isEmpty else { return [] }
 
         var wanted: Set<UUID> = []
+        var withoutAnyHistory: Set<String> = []
         let root = LampWritingWorkspace.root(
             libraryRootURL: libraryRoot, fileManager: fileManager
         )
         for identifier in Set(missing.compactMap(workspaceIdentifier(ofRevisionAt:))) {
             let workspace = root.appendingPathComponent(identifier, isDirectory: true)
+            // The claim says a missing revision was superseded by one that is
+            // here. Where none is here, nothing superseded anything: the
+            // history is gone, not compacted, and the server's copies are the
+            // way back. Claiming them would be the one thing worse than
+            // fetching them.
+            guard DevotionalAgentRevisionStore.holdsAnyRevision(in: workspace) else {
+                withoutAnyHistory.insert(identifier)
+                continue
+            }
             wanted.formUnion(
                 (try? DevotionalAgentRevisionStore.idsWantedForDemotion(in: workspace)) ?? []
             )
         }
-        guard !wanted.isEmpty else { return missing }
+
+        let claimable = missing.filter {
+            workspaceIdentifier(ofRevisionAt: $0).map { !withoutAnyHistory.contains($0) } ?? false
+        }
+        guard !wanted.isEmpty else { return claimable }
 
         return revisionMembersHeldWithoutAFile(
-            members: missing, heldAsFiles: [], stillWantedForDemotion: wanted
+            members: claimable, heldAsFiles: [], stillWantedForDemotion: wanted
         )
     }
 

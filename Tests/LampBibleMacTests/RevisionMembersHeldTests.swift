@@ -157,6 +157,21 @@ struct RevisionMembersHeldTests {
         #expect(folders == "Workspaces/Presentations, Workspaces/Writing, WritingReview")
     }
 
+    /// And nothing a publisher named either. A book's picture lives under its
+    /// module id, and a module id carries words from the book's title, so a
+    /// second component is kept only where the layout fixes it.
+    @Test func namesNoModuleTheReaderHas() {
+        let folders = LampSyncDiagnostics.folders(named: [
+            "BookMedia/nic-romans-moo/plate-3.png",
+            "Media/Notes/43011035/tomb.png",
+            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
+        ])
+
+        #expect(!folders.contains("nic-romans-moo"))
+        #expect(!folders.contains("moo"))
+        #expect(folders == "BookMedia, Media, Workspaces/Writing")
+    }
+
     /// A bare name is all name, so it gives up none of itself.
     @Test func givesUpNothingForAbareFilename() {
         let folders = LampSyncDiagnostics.folders(named: ["My Private Doubts.lamp"])
@@ -231,8 +246,53 @@ struct RevisionMembersHeldTests {
         let kept = try DevotionalAgentRevisionStore.revisions(in: root)
         let merges = kept.filter { $0.turnID == nil && $0.replacedRevisionIDs?.isEmpty == false }
         try #require(!merges.isEmpty, "the two edits were merged into one record")
-        #expect(wanted == Set(merges.flatMap { $0.replacedRevisionIDs ?? [] }))
-        #expect(!wanted.isEmpty)
+        // A user edit's merge is not one a demotion can ever be waiting for:
+        // nothing the person typed carries a turn, and a merge never crosses
+        // kinds, so its parts can never supply the tagged holder a demotion
+        // needs. Keeping them fetchable would download and discard a
+        // revision every pass for a demotion that cannot happen.
+        #expect(merges.allSatisfy { $0.kind == .userEdit })
+        #expect(wanted.isEmpty, "a user edit's merge wants nothing fetched")
         #expect(first != nil || second != nil)
+
+        // An agent's merge does want its parts, and the same workspace says
+        // so once one is there.
+        let turn = UUID()
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: turn, before: "one", after: "one two",
+            in: root, createdAt: start.addingTimeInterval(3_600)
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, turnID: turn, before: "one two", after: "one two three",
+            in: root, createdAt: start.addingTimeInterval(3_660)
+        )
+        // Those two carry a turn, so their merge does too and is not a
+        // candidate. What this proves is the kind test, not the turn test:
+        // the set stays empty while every untagged merge is a user's.
+        #expect(try DevotionalAgentRevisionStore.idsWantedForDemotion(in: root).isEmpty)
+    }
+
+    /// A workspace whose history is gone altogether claims nothing.
+    ///
+    /// The claim says a missing revision was superseded by one that is here.
+    /// Where none is here — a folder restored without its `.lamp`, a
+    /// directory deleted by hand — nothing superseded anything, and the
+    /// server's copies are the only way back. Claiming them would be worse
+    /// than fetching them.
+    @Test func claimsNothingFromAworkspaceWithNoHistoryLeft() async throws {
+        let library = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-lost-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: library) }
+        let root = LampWritingWorkspace.root(libraryRootURL: library, fileManager: .default)
+        let emptied = root.appendingPathComponent("W-lost", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptied, withIntermediateDirectories: true)
+
+        let member = "Workspaces/Writing/W-lost/Revisions/1700000001000-A.json"
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: [member], heldAsFiles: [], inLibraryAt: library
+        )
+
+        #expect(claimed.isEmpty)
+        #expect(!DevotionalAgentRevisionStore.holdsAnyRevision(in: emptied))
     }
 }
