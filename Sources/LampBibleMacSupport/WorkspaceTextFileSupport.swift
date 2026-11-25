@@ -521,6 +521,57 @@ public enum WorkspaceContextFileStore {
         }
     }
 
+    /// Removes a source this Mac may not be holding.
+    ///
+    /// `removeContextItem` is the act for a file on disk, and it requires
+    /// one: it returns early when nothing is there, and it takes only an
+    /// entry directly under the context directory. An offloaded row is
+    /// neither — no local bytes, and possibly a nested path — so Remove on it
+    /// did nothing at all, silently.
+    ///
+    /// The deletion still has to be written down and queued for the server,
+    /// because that is what makes it a deletion rather than an absence
+    /// (`decisions/0018`, `0019`).
+    @WritingWorkspaceFiles
+    public static func removeOffloadedSource(
+        relativePath: String,
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let folder = workspaceURL.lastPathComponent
+        guard let member = try? LampWritingWorkspaceLayout.contextPath(
+            folder: folder, relativePath: relativePath
+        ) else { throw OffloadError.notAsource(relativePath) }
+        let key = WorkspaceFileLedger.contextKey(relativePath)
+
+        // `recordDeletion` clears the offload note itself: a path being
+        // tombstoned must not also be one the gather withholds, or the pane
+        // would keep offering Download for something the server is being told
+        // to drop.
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.recordDeletion(of: key)
+        try ledger.save(in: workspaceURL)
+
+        var removed = LampSyncRemovedModules.load(
+            fromLibraryAt: libraryRootURL, fileManager: fileManager
+        )
+        removed.record(member, at: WorkspaceFileLedger.milliseconds(Date()))
+        try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
+
+        // Tolerant of a copy being here after all: the reader may have
+        // fetched it back between the list being drawn and the button being
+        // pressed, and the deletion means the same thing either way.
+        let file = (try? validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        ))?.appendingPathComponent(relativePath)
+        if let file, fileManager.fileExists(atPath: file.path) {
+            try? removeSyncedContextFile(
+                at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
+            )
+        }
+    }
+
     /// Asks for an offloaded source back. The next pass fetches it.
     @WritingWorkspaceFiles
     public static func fetchSource(
@@ -648,8 +699,20 @@ public enum WorkspaceContextFileStore {
             } catch {
                 // Reported rather than thrown: one stubborn file must not cost
                 // the rest of the batch.
-                stubborn.append(candidate.relativePath)
-                skipped[candidate.relativePath] = .couldNotRemove
+                //
+                // Judged by whether the file is still here, not by the error.
+                // `removeSyncedContextFile` unlinks first and prunes the
+                // shared object after, so a pruning failure throws over a
+                // source that has already gone — and clearing its note then
+                // would leave an absent member unwithheld, which the plan
+                // reads as a download. The offload succeeded; only the tidying
+                // did not.
+                if fileManager.fileExists(atPath: candidate.file.path) {
+                    stubborn.append(candidate.relativePath)
+                    skipped[candidate.relativePath] = .couldNotRemove
+                } else {
+                    offloaded.append(candidate.relativePath)
+                }
             }
         }
 

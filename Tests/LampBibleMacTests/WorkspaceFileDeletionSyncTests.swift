@@ -478,6 +478,57 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
     }
 
+    /// Remove works on a source this Mac is not holding.
+    ///
+    /// `removeContextItem` needs a file on disk and an entry directly under
+    /// the context directory; an offloaded row has neither, so Remove on one
+    /// returned early and did nothing at all — no row cleared, no tombstone
+    /// queued, the server keeping the bytes for ever.
+    @Test func removingAsourceThatIsOnlyOnTheServerStillDeletesItEverywhere() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let notes = context.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try write("nested", to: notes.appendingPathComponent("history.pdf"), at: 0)
+        let member = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "notes/history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            member, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: notes.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([member: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        _ = try await WorkspaceContextFileStore.offloadSources(
+            ["notes/history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil
+        )
+
+        try await WorkspaceContextFileStore.removeOffloadedSource(
+            relativePath: "notes/history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+
+        let removed = await LampSyncRemovedModules.load(fromLibraryAt: macs.a)
+        #expect(
+            removed.removedAt[member] != nil,
+            "queued for the server, which is the whole point of Remove (decisions/0019)"
+        )
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(member),
+            """
+            and no longer withheld: a path being tombstoned must not also be \
+            one the pane offers Download for.
+            """
+        )
+    }
+
     /// Asked for nothing, it reads nothing and writes nothing.
     @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
         let macs = try Macs(devotional: devotional)

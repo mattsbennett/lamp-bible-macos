@@ -698,11 +698,33 @@ enum DevotionalAgentWorkspaceStore {
         from workspace: URL,
         libraryRootURL: URL
     ) throws {
-        try WorkspaceContextFileStore.removeContextItem(
-            at: file.url,
-            from: workspace,
-            libraryRootURL: libraryRootURL
-        )
+        if file.isOffloaded {
+            // No bytes here to remove, and possibly a nested path — neither
+            // of which `removeContextItem` takes. The deletion still has to
+            // be written down and queued for the server.
+            try WorkspaceContextFileStore.removeOffloadedSource(
+                relativePath: file.relativePath,
+                in: workspace,
+                libraryRootURL: libraryRootURL
+            )
+        } else {
+            try WorkspaceContextFileStore.removeContextItem(
+                at: file.url,
+                from: workspace,
+                libraryRootURL: libraryRootURL
+            )
+        }
+        try updateInstructions(in: workspace)
+    }
+
+    /// Rewrites what the agent is told about this workspace's sources.
+    ///
+    /// Offloading and Download change whether a source is here, which the
+    /// inventory states file by file — so an agent started in the pane
+    /// afterwards would otherwise be told a source is local when it is on the
+    /// server, or the other way round (`decisions/0020`).
+    @WritingWorkspaceFiles
+    fileprivate static func refreshSourceInventory(in workspace: URL) throws {
         try updateInstructions(in: workspace)
     }
 
@@ -2694,6 +2716,7 @@ struct DevotionalAgentWorkspaceView: View {
                 in: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
+            try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” is on the server. Download it whenever you need it."
             schedulePoll()
         } catch {
@@ -2710,6 +2733,11 @@ struct DevotionalAgentWorkspaceView: View {
             try await WorkspaceContextFileStore.fetchSource(
                 relativePath: file.relativePath, in: workspaceURL
             )
+            // Clearing the note changes no file, and the automatic pass only
+            // starts for a change to a file it carries — so without this the
+            // source waited on an idle library for some unrelated edit.
+            LampSyncRequest.wantAPass()
+            try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” will come back on the next sync."
             schedulePoll()
         } catch {

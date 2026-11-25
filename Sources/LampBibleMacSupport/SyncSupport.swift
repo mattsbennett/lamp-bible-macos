@@ -1779,3 +1779,30 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
+
+    /// A pass this Mac has been asked for that its own work would not start.
+    ///
+    /// The automatic pass runs when something a pass *carries* has changed —
+    /// `LampSyncLocalWork.marks` reads the workspaces' files, and deliberately
+    /// not the bookkeeping beside them, so that a pass writing its own ledger
+    /// does not wake the next one. Asking for an offloaded source back writes
+    /// only that bookkeeping: no file changes, so nothing would notice, and
+    /// on an idle library Download waited for some unrelated edit before the
+    /// file came home.
+    ///
+    /// So the ask is recorded here instead, and the poll that is already
+    /// running picks it up. Related: a new synced thing must also start a
+    /// pass, cheaply.
+    @MainActor
+    public enum LampSyncRequest {
+        private static var isPending = false
+
+        /// Ask for a pass. Costs nothing if one is already wanted.
+        public static func wantAPass() { isPending = true }
+
+        /// Whether a pass was asked for, clearing the ask.
+        public static func takePending() -> Bool {
+            defer { isPending = false }
+            return isPending
+        }
+    }

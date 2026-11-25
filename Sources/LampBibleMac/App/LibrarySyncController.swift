@@ -309,6 +309,11 @@ final class LibrarySyncController: ObservableObject {
             let workspaceURL = LampWritingWorkspace.url(
                 libraryRootURL: libraryRoot, writingID: writingID
             )
+            // Asked again, per workspace, rather than trusted from before the
+            // scan. The scan and the batches before this one are awaits, and
+            // a reader who opened this writing during them would lose its
+            // sources from under an open editor.
+            guard !OpenWritingEditors.writingIDs.contains(writingID) else { continue }
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
@@ -407,9 +412,16 @@ final class LibrarySyncController: ObservableObject {
     func syncLocalWorkIfAppeared(library: LampLibrary) async {
         guard !isSyncing,
               defaults.bool(forKey: "sync.automatic"),
-              provider != .off,
-              let work = await localWork(library: library)
+              provider != .off
         else { return }
+        // Somebody asked for a pass that this Mac's own work would not start:
+        // fetching an offloaded source writes only bookkeeping, which `marks`
+        // deliberately does not read.
+        if LampSyncRequest.takePending() {
+            _ = await sync(library: library)
+            return
+        }
+        guard let work = await localWork(library: library) else { return }
         // Nothing recorded means no pass has run in this session, which is
         // the case when sync was switched on after launch. Publishing then is
         // right: the launch pass, which would otherwise have covered what is
