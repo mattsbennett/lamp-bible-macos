@@ -395,6 +395,54 @@ public enum WorkspaceContextFileStore {
 
     /// Removes one context file that sync found deleted elsewhere, pruning its
     /// shared object once nothing links to it.
+    /// Removes a source **and records that it was removed on purpose**, so
+    /// the deletion travels and every device drops it.
+    ///
+    /// The act, as against the absence. Until now a context deletion was
+    /// *inferred*: the ledger diffed what it remembered against the disk and
+    /// called anything missing deleted. That cannot tell a reader's deliberate
+    /// removal from a file this Mac offloaded to free space, or from
+    /// something in the workspace tidying up — and once a context file is a
+    /// deletable kind, guessing wrong removes an 86 MB source from the server
+    /// and every device. `decisions/0016` and `0017` are the same mistake in
+    /// two other places; the rule each of them arrived at is that only the
+    /// code doing the removing can say why.
+    ///
+    /// So this is the only thing that means "delete it everywhere". A source
+    /// that merely goes missing is withheld by the gather instead: still on
+    /// the server, absent here, fetched when something asks.
+    ///
+    /// - Parameter workspaceURL: the workspace the file belongs to, whose
+    ///   ledger carries the deletion out to the other devices.
+    @WritingWorkspaceFiles
+    public static func deleteContextFile(
+        at fileURL: URL,
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let contextDirectory = try validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+        let prefix = contextDirectory.standardizedFileURL.path + "/"
+        let path = fileURL.standardizedFileURL.path
+        guard path.hasPrefix(prefix) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let relative = String(path.dropFirst(prefix.count))
+
+        try removeSyncedContextFile(
+            at: fileURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+
+        // Written after the file is gone: a ledger that claims a deletion
+        // whose file is still there would have the next pass republish it and
+        // then delete it again.
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.recordDeletion(of: WorkspaceFileLedger.contextKey(relative))
+        try ledger.save(in: workspaceURL)
+    }
+
     static func removeSyncedContextFile(
         at fileURL: URL,
         libraryRootURL: URL,

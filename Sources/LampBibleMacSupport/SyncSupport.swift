@@ -100,6 +100,21 @@ public enum LampWorkspaceSync {
         return claimed
     }
 
+    /// Whether `path` is a published **source**:
+    /// `Workspaces/<kind>/<workspace>/Context/<name...>`.
+    ///
+    /// Only `Context`. A workspace publishes documents, revisions,
+    /// conversations and sources, and only the sources are the hundreds of
+    /// megabytes a device may reasonably decline to hold. Nested names are
+    /// allowed, unlike revisions, because a reader's sources come in folders.
+    public static func namesAsource(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count >= 5, parts[0] == portableDirectoryName, parts[3] == "Context",
+              !parts[1].isEmpty, !parts[2].isEmpty, !parts[4].isEmpty
+        else { return false }
+        return true
+    }
+
     /// Whether `path` is a published revision file of a *writing* workspace:
     /// `Workspaces/Writing/<workspace>/Revisions/<name>.json`.
     ///
@@ -1192,6 +1207,20 @@ struct WorkspaceFileLedger: Codable, Equatable {
         key.hasPrefix("Documents/") ? documentKey(String(key.dropFirst("Documents/".count))) : key
     }
     static func contextKey(_ relativePath: String) -> String { "Context/" + relativePath }
+    /// Records a deletion made on purpose, for a key whose file is already
+    /// gone.
+    ///
+    /// The counterpart to `noteChanges` no longer inferring one for a context
+    /// file: the act writes it down, and nothing else does. Stamped with when
+    /// it was recorded, because context files' modification times are not
+    /// comparable across Macs.
+    mutating func recordDeletion(of key: String, now: Date = Date()) {
+        let key = Self.normalized(key)
+        deletedAt[key] = max(deletedAt[key] ?? .min, Self.milliseconds(now))
+        synced?[key] = nil
+        presentSince[key] = nil
+    }
+
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
 
     static func milliseconds(_ date: Date) -> Int64 {
@@ -1241,10 +1270,24 @@ struct WorkspaceFileLedger: Codable, Equatable {
         var deleted: [String] = []
         let time = Self.milliseconds(now)
         for (key, modified) in synced where present[key] == nil {
-            // A document's deletion covers the last version this Mac had, so a
-            // later edit made elsewhere survives it. Context files' times aren't
-            // comparable across Macs, so theirs is when it was noticed.
-            deletedAt[key] = max(deletedAt[key] ?? .min, Self.isContextKey(key) ? time : modified)
+            // **A missing context file is not a deletion.** Absence is not a
+            // fact about intent: a source may be gone because the reader
+            // removed it, because this Mac offloaded it to free space, or
+            // because something in the workspace tidied up — and inferring
+            // "delete it everywhere" from any of those is how a reader loses
+            // an 86 MB source they never meant to touch. It is the same
+            // mistake `decisions/0016` and `0017` were written about, in a
+            // third place: only the code that did the removing can say why.
+            //
+            // So a context deletion is recorded by the act that makes it
+            // (`WorkspaceContextFileStore.deleteContextFile`), and a context
+            // file that is merely absent is left to the gather, which
+            // withholds it: present on the server, absent here, fetched when
+            // asked for. A document keeps the old behaviour — its deletion
+            // covers the last version this Mac had, so a later edit made
+            // elsewhere survives it.
+            guard !Self.isContextKey(key) else { continue }
+            deletedAt[key] = max(deletedAt[key] ?? .min, modified)
             deleted.append(key)
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {

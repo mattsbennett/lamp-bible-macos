@@ -1258,6 +1258,30 @@ extension LibrarySyncController {
         // Except the ids an untagged merge here still needs a file for: a
         // demotion wants every id the merge replaced, so claiming one would
         // leave a turn's changes under no turn's name for good.
+        // A source the manifest names and this Mac does not have is
+        // **withheld**, not fetched: offloaded to free space, removed in
+        // Finder, or simply never pulled on this device. The pass takes no
+        // part in it — nothing fetched, nothing deleted, nothing recorded —
+        // so it stays on the server and comes down when something asks.
+        //
+        // This is what makes a missing source safe now that absence is no
+        // longer read as a deletion (`WorkspaceContextFileStore
+        // .deleteContextFile` is the only thing that means "delete it
+        // everywhere"). Without it, a removed source would be downloaded on
+        // every pass, written back, and — before that change — discarded
+        // again: the loop `decisions/0016` is about, in a third place.
+        //
+        // Deliberately a policy and not a claim. It says nothing about why
+        // the file is absent, which is the distinction those records cost
+        // four review rounds to arrive at.
+        let heldPaths = Set(described.files.map(\.path))
+        result.gathered.withheld.formUnion(
+            manifest.members.lazy
+                .filter { $0.kind == .workspaceFile }
+                .map(\.path)
+                .filter { LampWorkspaceSync.namesAsource($0) && !heldPaths.contains($0) }
+        )
+
         result.gathered.heldWithoutAFile.formUnion(
             await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
                 members: manifest.members.map(\.path),

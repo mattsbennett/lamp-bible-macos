@@ -86,6 +86,11 @@ struct WorkspaceFileOwnershipTests {
             declaration: "enum LampWorkspaceSync",
             publicOnly: true,
             outsideTheOwner: [
+                "namesAsource": """
+                    reads a published path and opens nothing (`decisions/0016`'s
+                    sibling: the gather has already described the workspace by
+                    the time this is asked).
+                    """,
                 "claimableRevisionMembers": """
                     compares two sets of paths it is handed and opens nothing. \
                     Named apart from `revisionMembersHeldWithoutAFile`, which \

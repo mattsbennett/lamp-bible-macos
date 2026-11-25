@@ -166,11 +166,44 @@ struct WorkspaceFileDeletionSyncTests {
         try await macs.sync(from: macs.b, to: macs.a)
         #expect(await contextFiles(macs.b) == ["map.txt", "sources/commentary.txt"])
 
-        try FileManager.default.removeItem(at: context.appendingPathComponent("sources"))
+        // Deleted through the act. Taking it off the disk is no longer a
+        // deletion — see `aSourceThatMerelyGoesMissingIsNotDeletedEverywhere`.
+        try await WorkspaceContextFileStore.deleteContextFile(
+            at: context.appendingPathComponent("sources/commentary.txt"),
+            in: workspace(macs.a),
+            libraryRootURL: macs.a
+        )
         try await macs.sync(from: macs.b, to: macs.a)
         #expect(await contextFiles(macs.a) == ["map.txt"])
         try await macs.sync(from: macs.a, to: macs.b)
         #expect(await contextFiles(macs.b) == ["map.txt"])
+    }
+
+    /// A source that merely goes missing is **not** deleted everywhere.
+    ///
+    /// Absence says nothing about intent: a file may be gone because the
+    /// reader removed it in Finder, because this Mac offloaded it to free
+    /// space, or because something in the workspace tidied up. Reading any of
+    /// those as "delete it from every device" is how an 86 MB source nobody
+    /// meant to touch disappears — the mistake `decisions/0016` and `0017`
+    /// were each written about. The other Mac keeps its copy, and this one
+    /// withholds the member rather than refetching it.
+    @Test func aSourceThatMerelyGoesMissingIsNotDeletedEverywhere() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let context = workspace(macs.a).appendingPathComponent("context")
+        try write("Map", to: context.appendingPathComponent("map.txt"), at: 0)
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+        try #require(await contextFiles(macs.b) == ["map.txt"])
+
+        try FileManager.default.removeItem(at: context.appendingPathComponent("map.txt"))
+        try await macs.sync(from: macs.a, to: macs.b)
+
+        #expect(
+            await contextFiles(macs.b) == ["map.txt"],
+            "the other Mac keeps a source this one merely stopped holding"
+        )
     }
 
     @Test func aContextFileAddedAgainAfterRemovalStays() async throws {
@@ -181,7 +214,11 @@ struct WorkspaceFileDeletionSyncTests {
         try await macs.sync(from: macs.a, to: macs.b)
         try await macs.sync(from: macs.b, to: macs.a)
 
-        try FileManager.default.removeItem(at: contextA.appendingPathComponent("map.txt"))
+        try await WorkspaceContextFileStore.deleteContextFile(
+            at: contextA.appendingPathComponent("map.txt"),
+            in: workspace(macs.a),
+            libraryRootURL: macs.a
+        )
         try await macs.sync(from: macs.a, to: macs.b)
         #expect(await contextFiles(macs.b).isEmpty)
 
