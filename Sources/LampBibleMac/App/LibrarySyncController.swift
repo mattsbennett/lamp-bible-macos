@@ -132,7 +132,12 @@ final class LibrarySyncController: ObservableObject {
 
     func refreshSourcesOnlyOnTheServer(library: LampLibrary) async {
         let root = library.rootURL
-        sourcesOnlyOnTheServer = await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: root)
+        // Unreadable leaves things as they were: not a reason to lift a lock.
+        guard let read = await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: root) else {
+            Self.log.error("Could not read which sources are only on the server; the lock stays as it is")
+            return
+        }
+        sourcesOnlyOnTheServer = read
         let removalsQueued = LampSyncRemovedModules.load(fromLibraryAt: root, fileManager: fileManager)
             .removedAt.keys.contains(where: LampWorkspaceSync.namesAsource)
         if sourcesOnlyOnTheServer.isEmpty, !removalsQueued, !isOffloading {
@@ -151,6 +156,26 @@ final class LibrarySyncController: ObservableObject {
         await refreshSourcesOnlyOnTheServer(library: library)
         _ = await syncAsked(library: library)
     }
+
+    /// Asks for the sync after which a requested offload is carried out.
+    ///
+    /// A source not yet on the server is uploaded by that sync — but its look
+    /// at the server is taken at the gather, before the upload, so the
+    /// request finds it not yet there and waits. Nothing local changes after
+    /// that, so nothing would start another pass: up to two follow-ups are
+    /// allowed, which is one more than an upload needs, and not a loop
+    /// against a server that never confirms.
+    func syncForOffload(library: LampLibrary) async {
+        offloadFollowUps = 2
+        offloadRefusal = nil
+        _ = await syncAsked(library: library)
+    }
+
+    private var offloadFollowUps = 0
+
+    /// Why the last requested offload could not happen, for the pane that
+    /// asked; nil while there is nothing to say.
+    @Published private(set) var offloadRefusal: String?
 
     /// A pass the reader asked for by pressing something — Download, Try
     /// Again, Download All. Not subject to the automatic-sync setting, which
@@ -347,10 +372,35 @@ final class LibrarySyncController: ObservableObject {
         // Nor while the offloads after the last pass are being carried out:
         // they act on that pass's look at the server, and a new pass starting
         // under them could see a source gone that they are about to delete.
-        guard !isSyncing, !isOffloading else {
+        guard !isSyncing, !passGate else {
             LampSyncRequest.wantAPass()
             return false
         }
+        // Taken with no suspension since the check above, and held through
+        // the pass, the promotion of its look at the server, reconciliation
+        // and the offloads: `runSyncPass` clears `isSyncing` before its last
+        // await, and a second pass starting in that gap would gather a newer
+        // view while this one deleted on the older.
+        passGate = true
+        let finished = await passAndItsAftermath(library: library)
+        passGate = false
+        // An ask made while this pass ran — a Download pressed after the
+        // gather had already looked — is answered now, whether or not this
+        // pass finished: a poll that only the reader window runs may not be
+        // running. Once, so a failing server is not asked again for ever.
+        if LampSyncRequest.takePending() {
+            return await sync(library: library)
+        }
+        return finished
+    }
+
+    /// Held from the start of a pass until its offloads are done. While it
+    /// is, no other pass or move starts.
+    private var passGate = false
+    /// The account the running pass's store was built with.
+    private var accountOfThisPass = ""
+
+    private func passAndItsAftermath(library: LampLibrary) async -> Bool {
         let finished = await runSyncPass(library: library)
         // Both forgotten on purpose: the next probe takes a fresh mark to
         // measure from, once the server has had time to settle.
@@ -363,13 +413,6 @@ final class LibrarySyncController: ObservableObject {
             await carryOutOffloads(library: library)
         }
         await refreshSourcesOnlyOnTheServer(library: library)
-        // An ask made while this pass ran — a Download pressed after the
-        // gather had already looked — is answered now, whether or not this
-        // pass finished: a poll that only the reader window runs may not be
-        // running. Once, so a failing server is not asked again for ever.
-        if LampSyncRequest.takePending() {
-            return await sync(library: library)
-        }
         return finished
     }
 
@@ -414,12 +457,22 @@ final class LibrarySyncController: ObservableObject {
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     requested, in: workspace, libraryRootURL: root, observation: observation,
+                    onlyWhileRequested: true,
                     while: { @Sendable [weak self] in
                         await MainActor.run { self?.offloadObservation() == observation }
                     }
                 )
                 offloaded += result.offloaded.count
                 for (path, reason) in result.skipped {
+                    if reason == .withdrawn {
+                        // Keep Here won; there is nothing to put back.
+                        continue
+                    }
+                    if reason == .notSeenOnTheServer || reason == .notOnTheServer,
+                       offloadFollowUps > 0 {
+                        offloadFollowUps -= 1
+                        LampSyncRequest.wantAPass()
+                    }
                     if reason.isLasting {
                         try? await WorkspaceContextFileStore.cancelOffload(
                             relativePath: path, in: workspace
@@ -439,9 +492,12 @@ final class LibrarySyncController: ObservableObject {
             }
         }
         if !refused.isEmpty {
-            errorMessage = refused.count == 1
+            let message = refused.count == 1
                 ? "“\(refused[0])” can't go back to the server, so it stays on this Mac."
                 : "\(refused.count) sources can't go back to the server, so they stay on this Mac."
+            errorMessage = message
+            // And where Offload was pressed, not only in Sync settings.
+            offloadRefusal = message
         } else if offloaded > 0 {
             statusMessage = offloaded == 1
                 ? "1 source put back on the server."
@@ -891,6 +947,8 @@ final class LibrarySyncController: ObservableObject {
     private func runSyncPass(library: LampLibrary) async -> Bool {
         guard !isSyncing else { return false }
         isSyncing = true
+        // A folder has no account; a WebDAV pass sets its own below.
+        accountOfThisPass = ""
         Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -924,8 +982,16 @@ final class LibrarySyncController: ObservableObject {
                     throw LibrarySyncError.invalidWebDAVURL
                 }
                 let storedPassword = SyncSecretStore.password ?? ""
-                let credentials = username.isEmpty && storedPassword.isEmpty
-                    ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
+                // The account this store is built with, read once, here — and
+                // what the pass's look at the server is labelled with. Read
+                // from Settings at the gather instead, a username changed
+                // mid-pass labelled the old account's listing with the new
+                // one, and an offload took that as proof the new account held
+                // a file it never had.
+                let account = username
+                accountOfThisPass = account
+                let credentials = account.isEmpty && storedPassword.isEmpty
+                    ? nil : LampWebDAVCredentials(username: account, password: storedPassword)
                 try await sync(
                     library: library,
                     store: LampWebDAVClient(baseURL: url, credentials: credentials),
@@ -1076,7 +1142,9 @@ extension LibrarySyncController {
     /// refusal halfway through.
     @discardableResult
     func move(library: LampLibrary) async -> Bool {
-        guard let offer = moveOffer, let imported = importedArchiveRevision else { return false }
+        guard let offer = moveOffer, let imported = importedArchiveRevision,
+              !isSyncing, !passGate
+        else { return false }
         isSyncing = true
         errorMessage = nil
         defer { isSyncing = false }
@@ -1915,7 +1983,7 @@ extension LibrarySyncController {
         // never had.
         pendingObservation = ServerObservation(
             source: source,
-            account: provider == .webDAV ? username : "",
+            account: accountOfThisPass,
             members: Set(manifest.members.map(\.path)),
             revisions: unlisted
         )

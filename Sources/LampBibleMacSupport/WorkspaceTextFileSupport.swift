@@ -540,7 +540,7 @@ public enum WorkspaceContextFileStore {
         switch result.skipped[relativePath] {
         case .changedSinceUpload: throw OffloadError.changedSinceUpload(relativePath)
         case .untrustedVolume: throw OffloadError.untrustedVolume(relativePath)
-        case .wouldLoseResourceFork: throw OffloadError.wouldLoseResourceFork(relativePath)
+        case .wouldLoseWhatNoStoreKeeps: throw OffloadError.wouldLoseWhatNoStoreKeeps(relativePath)
         case .nowHeld: throw OffloadError.notOnTheServer(relativePath)
         case .notOnTheServer, .notSeenOnTheServer:
             throw OffloadError.notOnTheServer(relativePath)
@@ -685,20 +685,23 @@ public enum WorkspaceContextFileStore {
         case couldNotRemove
         /// Somebody opened the writing while the batch was working.
         case nowHeld
+        /// The reader withdrew the request while the batch was working.
+        case withdrawn
         /// The library is on a volume whose file identities cannot be trusted
         /// to notice a change, so nothing there is offloaded.
         case untrustedVolume
-        /// The file has a resource fork, which no store carries.
-        case wouldLoseResourceFork
+        /// The file carries a resource fork or Finder tags, which no store
+        /// keeps.
+        case wouldLoseWhatNoStoreKeeps
 
         /// Whether trying again after another sync could change the answer.
         /// A request to offload a source that will never qualify is dropped,
         /// and said, rather than retried for ever.
         public var isLasting: Bool {
             switch self {
-            case .notAsource, .untrustedVolume, .wouldLoseResourceFork: true
+            case .notAsource, .untrustedVolume, .wouldLoseWhatNoStoreKeeps: true
             case .notOnTheServer, .notSeenOnTheServer, .changedSinceUpload,
-                 .couldNotRemove, .nowHeld: false
+                 .couldNotRemove, .nowHeld, .withdrawn: false
             }
         }
     }
@@ -730,6 +733,7 @@ public enum WorkspaceContextFileStore {
         in workspaceURL: URL,
         libraryRootURL: URL,
         observation: ServerObservation,
+        onlyWhileRequested: Bool = false,
         fileManager: FileManager = .default,
         while shouldContinue: (@Sendable () async -> Bool)? = nil
     ) async throws -> (offloaded: [String], skipped: [String: Skipped]) {
@@ -768,11 +772,12 @@ public enum WorkspaceContextFileStore {
             guard let verified = VerifiedSource.verify(
                 relativePath: relativePath, inContext: contextDirectory
             ) else { skipped[relativePath] = .notAsource; continue }
-            // Neither the digest nor any store carries a resource fork, so the
-            // copy on the server is not the whole file and no download could
-            // put the fork back.
-            guard !verified.read.hasResourceFork else {
-                skipped[relativePath] = .wouldLoseResourceFork
+            // Neither the digest nor any store carries a resource fork or the
+            // reader's Finder tags, so the copy on the server is not all of
+            // the file and no download could put them back. An attribute that
+            // could not even be read counts the same.
+            guard !verified.read.hasResourceFork, !verified.read.hasAttributesNoStoreKeeps else {
+                skipped[relativePath] = .wouldLoseWhatNoStoreKeeps
                 continue
             }
             // The last check before the unlink is of the identity alone, and
@@ -798,6 +803,13 @@ public enum WorkspaceContextFileStore {
             // Nothing suspends from here to the end of this iteration.
             let key = WorkspaceFileLedger.contextKey(verified.relativePath)
             var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+            // Still asked for, read with nothing suspending between this and
+            // the note: Keep Here pressed after the batch began, while it was
+            // reading the file, must still keep it.
+            if onlyWhileRequested, ledger.acts[key] != .leaving {
+                skipped[verified.relativePath] = .withdrawn
+                continue
+            }
             let baseline = ledger.noteOffloaded(key)
             try ledger.save(in: workspaceURL)
             do {
@@ -877,7 +889,7 @@ public enum WorkspaceContextFileStore {
         case changedSinceUpload(String)
         case untrustedVolume(String)
         case replacedSinceConfirmed(String)
-        case wouldLoseResourceFork(String)
+        case wouldLoseWhatNoStoreKeeps(String)
 
         public var errorDescription: String? {
             switch self {
@@ -887,8 +899,8 @@ public enum WorkspaceContextFileStore {
                 "“\(name)” is not a file this writing holds as a source."
             case .changedSinceUpload(let name):
                 "“\(name)” has changed since it was synced, so it goes up on the next sync first."
-            case .wouldLoseResourceFork(let name):
-                "“\(name)” has a resource fork, which the server can't keep, so Lamp keeps it here."
+            case .wouldLoseWhatNoStoreKeeps(let name):
+                "“\(name)” has Finder tags or a resource fork, which the server can't keep, so Lamp keeps it here."
             case .replacedSinceConfirmed(let name):
                 "“\(name)” has changed since you chose to remove it, so nothing was removed. Check its row and try again."
             case .untrustedVolume(let name):

@@ -1251,6 +1251,10 @@ struct DevotionalAgentWorkspaceView: View {
     /// before anyone could read it.
     @State private var refreshErrorMessage: String?
     @State private var contextNote: String?
+    /// Whether `contextNote` is the promise that a source goes after the next
+    /// sync — taken back once nothing is waiting to go, rather than left
+    /// saying so after the sync refused it.
+    @State private var contextNoteIsOffloadPromise = false
     /// Asked for a pass when a download is wanted.
     ///
     /// Both windows this pane can appear in put it in the environment. The
@@ -1701,6 +1705,16 @@ struct DevotionalAgentWorkspaceView: View {
             } else {
                 VStack(spacing: 5) {
                     ForEach(contextFiles) { file in contextFileRow(file) }
+                }
+                // A refusal is said here, where Offload was pressed, as well as
+                // in Sync settings — and the promise above it taken back.
+                .onChange(of: syncController.offloadRefusal) { _, refusal in
+                    guard let refusal else { return }
+                    errorMessage = refusal
+                    if contextNoteIsOffloadPromise {
+                        contextNote = nil
+                        contextNoteIsOffloadPromise = false
+                    }
                 }
                 .confirmationDialog(
                     "Remove “\(sourceToRemove?.name ?? "")” from every device?",
@@ -2485,6 +2499,10 @@ struct DevotionalAgentWorkspaceView: View {
            files != contextFiles {
             let wasEmpty = contextFiles.isEmpty
             contextFiles = files
+            if contextNoteIsOffloadPromise, !files.contains(where: \.isLeaving) {
+                contextNote = nil
+                contextNoteIsOffloadPromise = false
+            }
             // A download that landed, or an offload another pass carried out,
             // changes what the agent should be told — and the pane is where
             // that is noticed. Not on the first fill, which `prepare` has
@@ -2776,8 +2794,9 @@ struct DevotionalAgentWorkspaceView: View {
             try await WorkspaceContextFileStore.queueOffload(
                 relativePath: file.relativePath, in: workspaceURL
             )
-            Task { _ = await syncController.syncAsked(library: libraryModel.library) }
+            Task { await syncController.syncForOffload(library: libraryModel.library) }
             contextNote = "“\(file.name)” goes back to the server after the next sync."
+            contextNoteIsOffloadPromise = true
             schedulePoll()
         } catch {
             errorMessage = error.localizedDescription

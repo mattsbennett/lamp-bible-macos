@@ -885,20 +885,20 @@ struct WorkspaceFileDeletionSyncTests {
         }
         try await ledger.save(in: workspaceURL)
 
-        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2)
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.count == 2)
 
         let asked = await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a)
         #expect(asked == 2)
         #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["a.pdf", "b.pdf"])
         #expect(
-            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 2,
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.count == 2,
             "asked for is not here"
         )
 
         try write("a", to: context.appendingPathComponent("a.pdf"), at: 0)
         try write("b", to: context.appendingPathComponent("b.pdf"), at: 0)
         #expect(
-            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).isEmpty,
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.isEmpty == true,
             "arrived"
         )
     }
@@ -970,7 +970,7 @@ struct WorkspaceFileDeletionSyncTests {
         )
 
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["notes/history.pdf"])
-        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a).count == 1)
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.count == 1)
     }
 
     /// Offload deletes nothing when pressed: it records a request, which
@@ -1026,7 +1026,7 @@ struct WorkspaceFileDeletionSyncTests {
     @Test func arequestIsDroppedOnlyForReasonsThatWillNotChange() {
         typealias Skipped = WorkspaceContextFileStore.Skipped
         #expect(Skipped.untrustedVolume.isLasting)
-        #expect(Skipped.wouldLoseResourceFork.isLasting)
+        #expect(Skipped.wouldLoseWhatNoStoreKeeps.isLasting)
         #expect(Skipped.notAsource.isLasting)
         #expect(!Skipped.notOnTheServer.isLasting, "it may finish uploading")
         #expect(!Skipped.notSeenOnTheServer.isLasting)
@@ -1064,8 +1064,120 @@ struct WorkspaceFileDeletionSyncTests {
             ["forked.pdf"], in: workspaceURL, libraryRootURL: macs.a,
             observation: everythingRecorded(in: source, library: macs.a)
         )
-        #expect(result.skipped["forked.pdf"] == .wouldLoseResourceFork)
+        #expect(result.skipped["forked.pdf"] == .wouldLoseWhatNoStoreKeeps)
         #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// A source the reader has tagged in Finder stays here: the tags are not
+    /// in the bytes, no store keeps them, and a download would bring the file
+    /// back without them.
+    @Test func atTaggedSourceStaysHere() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let file = context.appendingPathComponent("tagged.pdf")
+        try write("data", to: file, at: 0)
+        try (file as NSURL).setResourceValue(["Reading"], forKey: .tagNamesKey)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "tagged.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["tagged.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a)
+        )
+        #expect(result.skipped["tagged.pdf"] == .wouldLoseWhatNoStoreKeeps)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// Keep Here wins even after the batch has begun: the request is read
+    /// again at the moment the offload would be noted, with nothing
+    /// suspending in between.
+    @Test func keepHereWinsAfterTheBatchHasStarted() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let file = context.appendingPathComponent("history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try await WorkspaceContextFileStore.queueOffload(relativePath: "history.pdf", in: workspaceURL)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            onlyWhileRequested: true,
+            while: {
+                // Pressed while the batch was reading the file.
+                try? await WorkspaceContextFileStore.cancelOffload(
+                    relativePath: "history.pdf", in: workspaceURL
+                )
+                return true
+            }
+        )
+        #expect(result.offloaded.isEmpty)
+        #expect(result.skipped["history.pdf"] == .withdrawn)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// An inventory that could not be read says so, rather than reading as
+    /// empty — which would lift the lock that guards the only copies.
+    @Test(.enabled(if: geteuid() != 0, "root is not refused by permission bits"))
+    func anUnreadableInventoryIsNotAnEmptyOne() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let writing = workspace(macs.a).deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: workspace(macs.a), withIntermediateDirectories: true)
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == [], "readable and empty")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: writing.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: writing.path)
+        }
+        #expect(
+            await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == nil,
+            "unreadable, which is not the same"
+        )
+    }
+
+    /// A context folder that is itself a link is no way to a source: the
+    /// gather never goes there.
+    @Test func alinkedContextFolderIsNotPresence() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        try? FileManager.default.removeItem(at: workspaceURL.appendingPathComponent("context"))
+        let elsewhere = macs.root.appendingPathComponent("elsewhere-context", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write("same name", to: elsewhere.appendingPathComponent("history.pdf"), at: 0)
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: workspaceURL.appendingPathComponent("context"), withDestinationURL: elsewhere
+        )
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
     }
 
     /// Remove refuses when the row the reader confirmed is no longer the row

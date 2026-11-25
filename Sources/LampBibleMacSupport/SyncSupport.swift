@@ -176,6 +176,11 @@ public enum LampWorkspaceSync {
         // (`decisions/0010`). Resolving and comparing prefixes is not the
         // same thing: a folder linked to another folder *inside* the context
         // directory resolves inside it too, and the gather still skips it.
+        // The context folder itself included: a context directory that is a
+        // link leads every path under it somewhere the gather never goes.
+        guard let root = try? context.resourceValues(forKeys: [.isSymbolicLinkKey]),
+              root.isSymbolicLink != true
+        else { return false }
         var step = context
         for component in relativePath.split(separator: "/").dropLast() {
             step = step.appendingPathComponent(String(component))
@@ -295,9 +300,15 @@ public enum LampWorkspaceSync {
     public static func sourcesOnlyOnTheServer(
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
-    ) -> [String] {
+    ) -> [String]? {
+        // Nil, not empty, where the workspaces could not be listed: an
+        // inventory that could not be read must not lift a lock that guards
+        // the only copies.
+        guard let all = try? workspaces(in: libraryRoot, fileManager: fileManager) else {
+            return nil
+        }
         var members: [String] = []
-        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+        for workspace in all {
             for path in sourcesNotHere(in: workspace, fileManager: fileManager).keys {
                 if let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
