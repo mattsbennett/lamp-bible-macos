@@ -745,10 +745,43 @@ public enum DevotionalAgentRevisionStore {
         //
         // What that costs is in `0017`: where this Mac compacted an untagged
         // merge before every original had arrived, that merge may keep a
-        // turn's changes under no turn's name. Never a version of the text,
-        // which the merge carries whole — and `removingReplaced` still
-        // prefers the originals whenever all of them are present.
+        // turn's changes under no turn's name — and where the merge spans two
+        // changes, the state between them becomes unreachable here while
+        // another Mac can still restore to it. An earlier draft of `0017`
+        // claimed no version of the text was ever lost; that was wrong.
+        // `removingReplaced` still prefers the originals whenever all of them
+        // are present, and the un-retirement below is what gives it the
+        // chance to.
         let retiring = stored.filter { !keptIDs.contains($0.revision.id) }
+
+        // **Un-retirement.** A record that knows its turn, being dropped
+        // under an untagged merge: that merge is what `removingReplaced`
+        // would demote in its favour if the originals it covers were all
+        // here, and some of them are only missing because an earlier pass
+        // retired them. Those are taken off the list, so the next pass
+        // fetches them and the demotion gets its chance —
+        // `0017`'s named remedy for the one case it left open.
+        //
+        // This is not the demotion exception coming back. That guessed, at
+        // retirement time, about a file whose existence it could not know;
+        // this acts on an *arrival*, on files the list itself proves were
+        // published from here. And the failure mode is benign: if the server
+        // no longer has one, nothing is listed and nothing is fetched, so
+        // there is no loop — at worst one download that settles it.
+        let untaggedMerges = compacted.filter {
+            keptIDs.contains($0.id) && $0.turnID == nil && $0.kind == .agentEdit
+                && $0.replacedRevisionIDs?.isEmpty == false
+        }
+        if !untaggedMerges.isEmpty {
+            var wantedBack: Set<UUID> = []
+            for entry in retiring where entry.revision.turnID != nil {
+                for merge in untaggedMerges
+                where entry.revision.coveredRevisionIDs.isSubset(of: merge.coveredRevisionIDs) {
+                    wantedBack.formUnion(merge.coveredRevisionIDs)
+                }
+            }
+            if !wantedBack.isEmpty { try? unretire(wantedBack, in: workspace) }
+        }
 
         // Best effort, deliberately. `prepareLibraryForSync` compacts every
         // workspace before importing anything, so a throw here would stop
@@ -934,6 +967,38 @@ public enum DevotionalAgentRevisionStore {
     ///
     /// A torn line is skipped by the reader, so that revision is fetched
     /// once and retired again.
+    /// Takes ids off the retired list, so a pass fetches them again.
+    ///
+    /// `0017`'s remedy: a tagged record dropped under an untagged merge is
+    /// the one `removingReplaced` could put back, given the originals that
+    /// merge covers — and a retirement is what keeps them away. Rewritten
+    /// rather than appended, which is the one operation on this file that has
+    /// to be: removal cannot be expressed by adding a line. Rare enough that
+    /// the append-only hot path is untouched.
+    ///
+    /// Advisory like everything else here: a failure leaves the entries on
+    /// the list, which is where they already were.
+    private static func unretire(_ ids: Set<UUID>, in workspace: URL) throws {
+        guard !ids.isEmpty, let url = retiredRevisionsURL(in: workspace),
+              isAplainFile(url)
+        else { return }
+        let kept = retiredRevisions(in: workspace).filter { !ids.contains($0.id) }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let body = kept
+            .map { entry in
+                let encoded = entry.publishedName
+                    .addingPercentEncoding(withAllowedCharacters: allowed)
+                    ?? entry.publishedName
+                return "\(entry.id.uuidString) \(encoded);"
+            }
+            .sorted()
+            .joined(separator: "\n")
+        try Data((body.isEmpty ? "" : body + "\n").utf8).write(to: url, options: .atomic)
+        mutationLock.lock()
+        parsedRetirements[url.standardizedFileURL.path] = nil
+        mutationLock.unlock()
+    }
+
     private static func retire(
         _ revisions: some Sequence<RetiredRevision>, in workspace: URL
     ) throws {

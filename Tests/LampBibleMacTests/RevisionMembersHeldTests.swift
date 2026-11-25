@@ -173,6 +173,54 @@ struct RevisionMembersHeldTests {
         #expect(claimed == Set(members))
     }
 
+    /// `0017`'s remedy: a tagged record dropped under an untagged merge puts
+    /// that merge's originals back on the wanted list.
+    ///
+    /// The merge is what `removingReplaced` would demote in the tagged
+    /// record's favour if the originals it covers were all here — and a
+    /// retirement from an earlier pass is what keeps them away. Taking them
+    /// off the list lets the next pass fetch them, and the demotion gets its
+    /// chance. The case this closes is the one where the other Mac can
+    /// restore to an intermediate version and this one cannot.
+    @Test func putsBackWhatAdemotionWouldNeedWhenAtaggedRecordIsDropped() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let revisions = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: revisions, withIntermediateDirectories: true)
+
+        let a = UUID(), b = UUID(), c = UUID()
+        func sorted(_ ids: [UUID]) -> [UUID] { ids.sorted { $0.uuidString < $1.uuidString } }
+        // The tagged record, and the untagged merge that subsumes it.
+        let tagged = DevotionalAgentRevision(
+            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two",
+            replacedRevisionIDs: sorted([a, b]), turnID: UUID()
+        )
+        let untagged = DevotionalAgentRevision(
+            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two three",
+            replacedRevisionIDs: sorted([a, b, c])
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for revision in [tagged, untagged] {
+            try encoder.encode(revision).write(
+                to: revisions.appendingPathComponent("1700000001000-\(revision.id.uuidString).json")
+            )
+        }
+        // An earlier pass retired the originals the merge covers, plus one
+        // unrelated retirement that must survive untouched.
+        let unrelated = UUID()
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let lines = ([a, b, c, unrelated]).map { "\($0.uuidString) 1600000000000-\($0.uuidString).json;" }
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: list)
+
+        try DevotionalAgentRevisionStore.compact(in: workspace)
+
+        let retired = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
+        #expect(retired.isDisjoint(with: [a, b, c]), "the demotion's originals are fetchable again")
+        #expect(retired.contains(unrelated), "and nothing else was disturbed")
+    }
+
     /// Two missing members whose names fold alike are both left alone.
     ///
     /// A folded match would otherwise claim both on one retirement, and the
