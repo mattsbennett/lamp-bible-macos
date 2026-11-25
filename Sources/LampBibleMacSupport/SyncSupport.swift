@@ -100,6 +100,56 @@ public enum LampWorkspaceSync {
         return claimed
     }
 
+    /// When each source this library holds appeared here, by published path.
+    ///
+    /// `LampSyncFilePlan` needs it to tell a *replacement* from the copy a
+    /// deletion was of. Without it a source attached after another Mac synced
+    /// a deletion at the same path is taken for the deleted copy and removed
+    /// — with its stored object pruned, so the replacement is gone for good.
+    /// A reviewer found that the moment a source became deletable.
+    ///
+    /// From the ledger's `presentSince`, which is when this Mac noticed the
+    /// file, because a context file's modification time is the shared
+    /// object's and may predate its own attachment.
+    @WritingWorkspaceFiles
+    public static func sourceAttachmentTimes(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> [String: Int64] {
+        var times: [String: Int64] = [:]
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            let ledger = WorkspaceFileLedger.load(in: workspace)
+            let folder = workspace.lastPathComponent
+            for (key, when) in ledger.presentSince where WorkspaceFileLedger.isContextKey(key) {
+                let relative = String(key.dropFirst(WorkspaceFileLedger.contextKey("").count))
+                guard let path = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: folder, relativePath: relative
+                ) else { continue }
+                times[path] = max(times[path] ?? .min, when)
+            }
+            // A source present since before this ledger had a baseline has no
+            // stamp of its own: `noteChanges` records the first pass's files
+            // and nothing more. Answered as *now* rather than left out —
+            // left out, the plan takes a replacement for the copy a deletion
+            // was of and removes it, pruning its stored object with it. Now
+            // is wrong in the safe direction, which for this codebase is
+            // bringing a deleted file back once rather than destroying one.
+            //
+            // Not written to the ledger. `presentSince` is published inside
+            // the workspace, and stamping it here made the published bytes
+            // depend on when the pass ran.
+            let now = WorkspaceFileLedger.milliseconds(Date())
+            for (key, _) in ledger.synced ?? [:] where WorkspaceFileLedger.isContextKey(key) {
+                let relative = String(key.dropFirst(WorkspaceFileLedger.contextKey("").count))
+                guard let path = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: folder, relativePath: relative
+                ), times[path] == nil else { continue }
+                times[path] = now
+            }
+        }
+        return times
+    }
+
     /// Every source this library has offloaded, as published member paths.
     ///
     /// Read from each workspace's own ledger rather than inferred from what
@@ -1230,6 +1280,30 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// one. Absence is not a fact about intent.
     var offloaded: Set<String> = []
 
+    /// Decoded field by field, because a ledger written before a field
+    /// existed must still be read.
+    ///
+    /// Swift's synthesized `Decodable` demands every key, default value or
+    /// not, and `load` answers a *fresh* ledger when decoding throws — so
+    /// adding `offloaded` silently discarded every `sync-files.json` on
+    /// disk, losing what each workspace had last synced. A file removed
+    /// before the next pass would then have come back. Each field is
+    /// optional here so the next one added cannot do it again.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        synced = try container.decodeIfPresent([String: Int64].self, forKey: .synced)
+        deletedAt = try container.decodeIfPresent(
+            [String: Int64].self, forKey: .deletedAt
+        ) ?? [:]
+        presentSince = try container.decodeIfPresent(
+            [String: Int64].self, forKey: .presentSince
+        ) ?? [:]
+        offloaded = try container.decodeIfPresent(Set<String>.self, forKey: .offloaded) ?? []
+    }
+
+    init() {}
+
     struct Portable: Codable, Equatable {
         var formatVersion = 1
         var deletedAt: [String: Int64]
@@ -1338,13 +1412,15 @@ struct WorkspaceFileLedger: Codable, Equatable {
     @discardableResult
     mutating func noteChanges(present: [String: Int64], now: Date = Date()) -> [String] {
         let present = Dictionary(present.map { (Self.normalized($0.key), $0.value) }, uniquingKeysWith: max)
+        let time = Self.milliseconds(now)
         guard let recorded = self.synced else {
+            // The first pass records what is there and nothing more: a Mac
+            // first syncing after an upgrade must not treat its files as new.
             self.synced = present
             return []
         }
         let synced = Dictionary(recorded.map { (Self.normalized($0.key), $0.value) }, uniquingKeysWith: max)
         var deleted: [String] = []
-        let time = Self.milliseconds(now)
         for (key, modified) in synced where present[key] == nil {
             // **A missing context file is not a deletion.** Absence is not a
             // fact about intent: a source may be gone because the reader

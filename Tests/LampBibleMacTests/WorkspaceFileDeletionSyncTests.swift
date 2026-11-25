@@ -180,6 +180,90 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await contextFiles(macs.b) == ["map.txt"])
     }
 
+    /// A tombstone naming one source does not remove a folder put at that
+    /// path since.
+    ///
+    /// `removeSyncedContextFile` removes recursively, so accepting a
+    /// directory here would take everything inside it on the strength of a
+    /// tombstone for a single file.
+    @Test func adeletionDoesNotRemoveAfolderStandingWhereTheSourceWas() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let context = workspace(macs.a).appendingPathComponent("context")
+        try FileManager.default.createDirectory(
+            at: context.appendingPathComponent("history.pdf"), withIntermediateDirectories: true
+        )
+        try write("Inside", to: context.appendingPathComponent("history.pdf/page.txt"), at: 0)
+
+        try await WorkspaceContextFileStore.removeDeletedSource(
+            relativePath: "history.pdf", in: workspace(macs.a), libraryRootURL: macs.a
+        )
+
+        #expect(
+            FileManager.default.fileExists(
+                atPath: context.appendingPathComponent("history.pdf/page.txt").path
+            ),
+            "a folder is not the file the tombstone named"
+        )
+    }
+
+    /// A source carries when it was attached here, so a replacement can
+    /// supersede another Mac's deletion of the same path.
+    ///
+    /// Without it the plan takes the replacement for the copy the deletion
+    /// was of, removes it, and prunes its stored object — so the new file is
+    /// gone for good.
+    @Test func asourceCarriesWhenItWasAttached() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let context = workspace(macs.a).appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        // A sync is what notices it and stamps `presentSince`.
+        try await macs.sync(from: macs.a, to: macs.b)
+
+        let times = await LampWorkspaceSync.sourceAttachmentTimes(inLibraryAt: macs.a)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspace(macs.a).lastPathComponent, relativePath: "history.pdf"
+        )
+
+        #expect(times[path] != nil, "the plan can tell a replacement from the deleted copy")
+    }
+
+    /// A ledger written before `offloaded` existed still decodes.
+    ///
+    /// Adding a property to a `Codable` struct does **not** make its key
+    /// optional: Swift's synthesized `Decodable` still demands it, and
+    /// `load` answers a *fresh* ledger when decoding fails. Every
+    /// `sync-files.json` on disk would have been discarded on the first
+    /// launch after this change, losing `synced` — so a file removed before
+    /// the next sync would have come back. A reviewer caught it.
+    @Test func readsAledgerWrittenBeforeOffloadingExisted() throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        try FileManager.default.createDirectory(
+            at: workspaceURL.appendingPathComponent(".lamp"), withIntermediateDirectories: true
+        )
+        // Exactly the shape an older build wrote: no `offloaded` key.
+        let old = """
+            {
+              "formatVersion": 1,
+              "synced": { "Context/map.txt": 1000 },
+              "deletedAt": { "Context/gone.txt": 2000 },
+              "presentSince": { "Context/map.txt": 1000 }
+            }
+            """
+        try Data(old.utf8).write(
+            to: workspaceURL.appendingPathComponent(".lamp/sync-files.json")
+        )
+
+        let ledger = WorkspaceFileLedger.load(in: workspaceURL)
+
+        #expect(ledger.synced?["Context/map.txt"] == 1_000, "what was present survived")
+        #expect(ledger.deletedAt["Context/gone.txt"] == 2_000, "and what was deleted")
+        #expect(ledger.offloaded.isEmpty)
+    }
+
     /// Removing a source queues it for the **server**, so the store stops
     /// holding the bytes.
     ///

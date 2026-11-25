@@ -1325,7 +1325,13 @@ extension LibrarySyncController {
             rootURL: LampWritingWorkspace.root(libraryRootURL: library.rootURL, fileManager: fileManager)
         ).held().keys).map(Array.init) ?? [])
         let removals = LampSyncRemovedModules.load(fromLibraryAt: library.rootURL, fileManager: fileManager).removedAt
-        let restored = removals.keys.filter { heldDocuments.contains($0) }
+        // Sources too, now that one can be deleted. A reader who removes a
+        // source and attaches another at the same name before the next pass
+        // would otherwise have the queued deletion win: the path tombstoned,
+        // the server's copy reaped, and a later pass deleting the
+        // replacement here. A file that is present again is not deleted.
+        let heldSources = Set(described.files.lazy.map(\.path).filter(LampWorkspaceSync.namesAsource))
+        let restored = removals.keys.filter { heldDocuments.contains($0) || heldSources.contains($0) }
         if !restored.isEmpty {
             try LampSyncRemovedModules.forget(restored, inLibraryAt: library.rootURL, fileManager: fileManager)
         }
@@ -1457,6 +1463,12 @@ extension LibrarySyncController {
         // edited here after another device deleted it survives rather than
         // being deleted. The ledger records a presence for every item as it
         // is written, so the latest of those is the collection's last change.
+        // Sources carry when they were attached here, so a replacement put
+        // at a path another Mac deleted supersedes that deletion rather than
+        // being taken for the copy it deleted.
+        let sourceTimes = await LampWorkspaceSync.sourceAttachmentTimes(
+            inLibraryAt: library.rootURL, fileManager: fileManager
+        )
         result.gathered.savedAt = LampSyncSavedAt.paths(
             notesLastSaved: LampSyncSavedAt.lastSaved(.note, in: personal),
             writingsLastSaved: writings.compactMap(\.lastModified).max(),
@@ -1467,6 +1479,7 @@ extension LibrarySyncController {
                 return (candidate.path, modified)
             }
         )
+        result.gathered.savedAt.merge(sourceTimes) { _, source in source }
 
         // The paths no folder listing reaches: the manifest names them, and
         // their folders are listed for them — one request a folder rather

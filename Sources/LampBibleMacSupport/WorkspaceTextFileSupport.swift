@@ -503,7 +503,13 @@ public enum WorkspaceContextFileStore {
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
         )
         let file = contextDirectory.appendingPathComponent(relativePath)
-        guard fileManager.fileExists(atPath: file.path),
+        // A regular file, and only that. A tombstone names one source; if a
+        // folder has since been put at that path, removing it would take
+        // everything inside — and `removeSyncedContextFile` removes
+        // recursively. A link is refused for `decisions/0010`'s reason.
+        guard let values = try? file.resourceValues(forKeys: [
+            .isRegularFileKey, .isSymbolicLinkKey,
+        ]), values.isRegularFile == true, values.isSymbolicLink != true,
               file.resolvingSymlinksInPath().path
                 .hasPrefix(contextDirectory.resolvingSymlinksInPath().path + "/")
         else { return }
