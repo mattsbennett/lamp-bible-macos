@@ -470,34 +470,25 @@ struct AIProviderAuthenticationTerminal: View {
     }
 }
 
+/// One row of the Context list, as the view draws it: a `SourceRow` and
+/// where its file would be. Every state comes from `SourceRow`, which is a
+/// pure function of what the reader did and what is on disk
+/// (`WorkspaceSourceOffload.rows`); nothing here decides it.
 private struct DevotionalAgentContextFile: Identifiable, Equatable {
+    let row: SourceRow
     let url: URL
-    let isDirectory: Bool
-    let byteCount: Int?
-    /// Where this source is. A row can exist for one that is **not** here:
-    /// offloaded to free space, with the server still holding it
-    /// (`lamp-bible-core/Documentation/decisions/0018`). Before offloading
-    /// existed the list was whatever was on disk, and a source that was not
-    /// here had no row at all.
-    var isOffloaded = false
-    /// Asked back and not yet here. Clearing the offload note is what lets a
-    /// pass fetch it, and that also took it off this list — so a download
-    /// that failed left no row, no reason and nothing to press again.
-    var isAwaited = false
-    /// A folder with sources under it that are **not** here. Removing it
-    /// deletes them from the server too, and the row shows nothing of them —
-    /// a folder that looks empty can be the only copy of an 86 MB PDF.
-    var hidesSourcesOnlyOnTheServer = false
-    /// Where this source sits under the context directory, which is what a
-    /// ledger key and a member path are built from — and **not** the file's
-    /// name. The sweep offloads nested sources, so a row may stand for
-    /// `notes/history.pdf`; actioning that by its last component would clear
-    /// the note on a `history.pdf` that does not exist and leave the real one
-    /// withheld.
-    var relativePath: String
 
-    var id: String { url.path }
-    var name: String { url.lastPathComponent }
+    var id: String { row.relativePath }
+    /// The path under the context directory, which is what the row is called:
+    /// two offloaded `history.pdf`s in different folders are two sources,
+    /// and a reader about to delete one from the server has to see which.
+    var name: String { row.relativePath }
+    var relativePath: String { row.relativePath }
+    var byteCount: Int? { row.byteCount }
+    var isDirectory: Bool { if case .folder = row.state { true } else { false } }
+    var isOffloaded: Bool { row.state == .onTheServer }
+    var isAwaited: Bool { row.state == .comingBack }
+    var removesWhatIsNotHere: Bool { row.removesWhatIsNotHere }
 }
 
 private struct DevotionalAgentSkill: Identifiable, Equatable {
@@ -617,76 +608,19 @@ enum DevotionalAgentWorkspaceStore {
         try data.write(to: markerURL, options: [.atomic])
     }
 
-    @WritingWorkspaceFiles
-    fileprivate static func contextFiles(in workspace: URL) throws -> [DevotionalAgentContextFile] {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
-        return try FileManager.default.contentsOfDirectory(
-            at: contextDirectory(in: workspace),
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
-        ).map { url in
-            let values = try? url.resourceValues(forKeys: keys)
-            return DevotionalAgentContextFile(
-                url: url,
-                isDirectory: values?.isDirectory == true,
-                byteCount: values?.fileSize,
-                // A shallow listing, so an entry here is at the top of the
-                // context directory and its path is its name. A nested source
-                // reaches the list only by having been offloaded.
-                relativePath: url.lastPathComponent
-            )
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    /// The sources this writing has, on disk **and** offloaded.
-    ///
-    /// The offloaded ones are rows for files that are not here, which is the
-    /// whole point: a reader has to be able to see what a writing holds
-    /// before deciding to bring one back. Named by the ledger, which is what
-    /// records an offload — absence would not distinguish one this Mac let
-    /// go from one it never had.
+    /// The sources this writing has: on disk, let go to the server, and on
+    /// their way back. A reader has to be able to see what a writing holds
+    /// before deciding to bring one back.
     @WritingWorkspaceFiles
     fileprivate static func allContextFiles(
         in workspace: URL, libraryRootURL: URL
     ) throws -> [DevotionalAgentContextFile] {
-        let present = try contextFiles(in: workspace)
-        // Compared as relative paths, which is what the ledger holds. Against
-        // names, a nested `notes/history.pdf` never matched anything here and
-        // a top-level file of the same name hid it.
-        //
-        // In NFC, as the ledger's keys are: macOS hands back a name with a
-        // combining mark decomposed, and a source whose name carries one
-        // would otherwise match nothing here and be drawn twice — once as
-        // itself and once as "On the server".
-        let here = Set(present.map { $0.relativePath.precomposedStringWithCanonicalMapping })
-        func row(_ relativePath: String, offloaded: Bool) -> DevotionalAgentContextFile {
+        let context = contextDirectory(in: workspace)
+        return WorkspaceSourceOffload.rows(inWorkspaceAt: workspace).map {
             DevotionalAgentContextFile(
-                url: contextDirectory(in: workspace).appendingPathComponent(relativePath),
-                isDirectory: false,
-                byteCount: nil,
-                isOffloaded: offloaded,
-                isAwaited: !offloaded,
-                relativePath: relativePath
+                row: $0, url: context.appendingPathComponent($0.relativePath)
             )
         }
-        let notHere = LampWorkspaceSync.offloadedSourceNames(in: workspace)
-            + LampWorkspaceSync.awaitedSourceNames(in: workspace)
-        let onDisk = present.map { file -> DevotionalAgentContextFile in
-            guard file.isDirectory else { return file }
-            var file = file
-            file.hidesSourcesOnlyOnTheServer = notHere.contains {
-                $0.hasPrefix(file.relativePath + "/")
-            }
-            return file
-        }
-        let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
-            .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
-            .map { row($0, offloaded: true) }
-        let awaited = LampWorkspaceSync.awaitedSourceNames(in: workspace)
-            .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
-            .map { row($0, offloaded: false) }
-        return (onDisk + offloaded + awaited)
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Returns the entries that could not be copied, named relative to the item
@@ -853,19 +787,15 @@ enum DevotionalAgentWorkspaceStore {
 
     @WritingWorkspaceFiles
     private static func updateInstructions(in workspace: URL) throws {
-        let files = (try? contextFiles(in: workspace)) ?? []
-        // Awaited sources count as not downloaded too. Asking for one clears
-        // its offload note, so without this a slow or failed download takes
-        // the source out of the agent's inventory altogether while the pane
-        // still shows it — and the agent is told nothing rather than that it
-        // is on its way.
-        let notHere = LampWorkspaceSync.offloadedSourceNames(in: workspace)
-            + LampWorkspaceSync.awaitedSourceNames(in: workspace)
-        let offloaded = notHere
-            .filter { name in !files.contains { $0.relativePath == name } }
-            .sorted()
+        // The same rows the pane draws, so the agent and the reader are told
+        // the same thing. A source on its way counts as not downloaded, as
+        // one on the server does: told nothing, the agent would treat it as
+        // missing.
+        let rows = WorkspaceSourceOffload.rows(inWorkspaceAt: workspace)
+        let here = rows.filter(\.isHere).map(\.relativePath)
+        let offloaded = rows.filter { !$0.isHere }.map(\.relativePath)
         let instructions = instructions(
-            contextFiles: files.map(\.name),
+            contextFiles: here,
             offloadedSources: offloaded,
             reviewMarks: WritingReviewMarks.isEnabledNow
         )
@@ -1776,7 +1706,7 @@ struct DevotionalAgentWorkspaceView: View {
                     Button("Cancel", role: .cancel) { sourceToRemove = nil }
                 } message: {
                     Text(
-                        sourceToRemove?.hidesSourcesOnlyOnTheServer == true
+                        sourceToRemove?.isDirectory == true
                             ? """
                               This folder holds sources that are on the \
                               server and not on this Mac, so removing it \
@@ -2149,7 +2079,7 @@ struct DevotionalAgentWorkspaceView: View {
                 // disk this is a removal the reader can see the subject of;
                 // for an offloaded one the click destroys the only copy there
                 // is, with nothing left on this Mac to go back to.
-                if file.isOffloaded || file.isAwaited || file.hidesSourcesOnlyOnTheServer {
+                if file.removesWhatIsNotHere {
                     sourceToRemove = file
                 } else {
                     Task { await removeContextFile(file) }
@@ -2814,7 +2744,7 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
-            guard let observed = syncController.offloadObservation() else {
+            guard let observation = syncController.offloadObservation() else {
                 errorMessage = """
                     Lamp has not synced recently enough to tell whether the \
                     server still holds this source. Sync, then try again.
@@ -2825,8 +2755,7 @@ struct DevotionalAgentWorkspaceView: View {
                 relativePath: file.relativePath,
                 in: workspaceURL,
                 libraryRootURL: libraryRootURL,
-                source: observed.source,
-                seen: observed.revisions
+                observation: observation
             )
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” is on the server. Download it whenever you need it."

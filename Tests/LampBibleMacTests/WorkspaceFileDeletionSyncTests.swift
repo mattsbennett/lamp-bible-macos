@@ -196,7 +196,7 @@ struct WorkspaceFileDeletionSyncTests {
         await #expect(throws: WorkspaceContextFileStore.OffloadError.self) {
             try await WorkspaceContextFileStore.offloadSource(
                 relativePath: "history.pdf", in: workspace(macs.a), libraryRootURL: macs.a,
-                source: "webdav:example", seen: [:]
+                observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
             )
         }
         #expect(
@@ -232,7 +232,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
 
         #expect(await contextFiles(macs.a).isEmpty, "the space is back")
@@ -299,7 +299,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["one.pdf", "two.pdf", "stale.pdf", "elsewhere.pdf"],
-            in: workspaceURL, libraryRootURL: macs.a, source: source, seen: nil
+            in: workspaceURL, libraryRootURL: macs.a, observation: everythingRecorded(in: source, library: macs.a)
         )
 
         #expect(result.offloaded == ["one.pdf", "two.pdf"])
@@ -373,7 +373,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["locked/stuck.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil
+            observation: everythingRecorded(in: source, library: macs.a)
         )
 
         #expect(result.offloaded.isEmpty)
@@ -419,7 +419,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
         #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path))
 
@@ -461,7 +461,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["notes/history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil
+            observation: everythingRecorded(in: source, library: macs.a)
         )
         #expect(result.offloaded == ["notes/history.pdf"])
         #expect(
@@ -511,7 +511,7 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         _ = try await WorkspaceContextFileStore.offloadSources(
             ["notes/history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil
+            observation: everythingRecorded(in: source, library: macs.a)
         )
 
         try await WorkspaceContextFileStore.removeOffloadedSource(
@@ -561,11 +561,12 @@ struct WorkspaceFileDeletionSyncTests {
 
     /// The batch deletes the file it checked, not whatever is at the path.
     ///
-    /// Every candidate is hashed before any is deleted, so a batch leaves a
+    /// Every candidate is read before any is deleted, so a batch leaves a
     /// window in which Finder, a restore, or an agent running in this very
-    /// workspace can put different bytes at an already-checked path — and
-    /// those bytes were never on the server. Here the replacement lands while
-    /// the batch is deleting the file before it.
+    /// workspace can put other bytes at an already-checked path — and those
+    /// bytes were never on the server. The hold check runs in exactly that
+    /// window, between the verification and each unlink, so it is where the
+    /// replacement is made: through the real batch, not a stand-in for it.
     @Test func abatchWillNotDeleteBytesItDidNotVerify() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
@@ -589,25 +590,28 @@ struct WorkspaceFileDeletionSyncTests {
         }
         try records.save(toLibraryAt: macs.a)
 
+        // Written in place, keeping the inode — the harder case, and the one
+        // a process writing over an open path produces.
+        let b = context.appendingPathComponent("b.pdf")
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["a.pdf", "b.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil,
-            fileManager: ReplacingFileManager(
-                whenRemoving: context.appendingPathComponent("a.pdf"),
-                replace: context.appendingPathComponent("b.pdf"),
-                with: "different bytes entirely"
-            )
+            observation: everythingRecorded(in: source, library: macs.a),
+            while: {
+                if let handle = try? FileHandle(forWritingTo: b) {
+                    try? handle.write(contentsOf: Data("different bytes entirely".utf8))
+                    try? handle.close()
+                }
+                return true
+            }
         )
 
-        #expect(result.offloaded == ["a.pdf"], "the one it verified and nothing changed")
+        #expect(result.offloaded == ["a.pdf"], "the one whose bytes did not change goes")
         #expect(
             result.skipped["b.pdf"] == .changedSinceUpload,
             "and the one that changed under it is left alone"
         )
         #expect(
-            try String(
-                contentsOf: context.appendingPathComponent("b.pdf"), encoding: .utf8
-            ) == "different bytes entirely",
+            try String(contentsOf: b, encoding: .utf8) == "different bytes entirely",
             "the bytes that arrived in the window are still here"
         )
         let member = try LampWritingWorkspaceLayout.contextPath(
@@ -615,7 +619,57 @@ struct WorkspaceFileDeletionSyncTests {
         )
         #expect(
             await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(member),
-            "and it is not withheld, so the new bytes go up on the next pass"
+            "and nothing is left noted, so the new bytes go up on the next pass"
+        )
+    }
+
+    /// A folder at an offloaded file's path does not count as the file
+    /// being here.
+    ///
+    /// Counting it lifted the withholding, so the next pass tried to install
+    /// the server's copy over a directory and broke the workspace's import.
+    @Test func afolderAtAnOffloadedPathKeepsItWithheld() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let member = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try await ledger.save(in: workspaceURL)
+        try FileManager.default.createDirectory(
+            at: context.appendingPathComponent("history.pdf", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(member))
+    }
+
+    /// The unlink will not remove a folder, whatever has been put at a
+    /// checked path. `unlink(2)` refuses one, and the identity check before it
+    /// refuses anything that is not a regular file.
+    @Test func theUnlinkWillNotRemoveAfolderPutAtAcheckedPath() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let verified = try #require(
+            await VerifiedSource.verify(relativePath: "history.pdf", inContext: context)
+        )
+
+        try FileManager.default.removeItem(at: context.appendingPathComponent("history.pdf"))
+        let folder = context.appendingPathComponent("history.pdf", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("unrelated", to: folder.appendingPathComponent("inside.md"), at: 0)
+
+        await #expect(throws: (any Error).self) {
+            try await WorkspaceContextFileStore.unlink(verified, libraryRootURL: macs.a)
+        }
+        #expect(
+            FileManager.default.fileExists(atPath: folder.appendingPathComponent("inside.md").path)
         )
     }
 
@@ -646,7 +700,7 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
 
         try await WorkspaceContextFileStore.fetchSource(
@@ -668,7 +722,7 @@ struct WorkspaceFileDeletionSyncTests {
         // Offloaded a second time: one row, not two.
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
         #expect(
@@ -709,17 +763,17 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
 
         // A manifest that still counts it changes nothing.
-        await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+        await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
             inLibraryAt: macs.a, members: [path]
         )
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
 
         // One that does not is the other Mac's removal arriving.
-        let forgotten = await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+        let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
             inLibraryAt: macs.a, members: ["something/else"]
         )
         #expect(forgotten == [path])
@@ -757,7 +811,7 @@ struct WorkspaceFileDeletionSyncTests {
         let opened = OpenedPartWay()
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["a.pdf", "b.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil,
+            observation: everythingRecorded(in: source, library: macs.a),
             while: { await opened.stillClosed() }
         )
         #expect(result.offloaded == ["a.pdf"])
@@ -802,7 +856,7 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         _ = try await WorkspaceContextFileStore.offloadSources(
             ["notes/offloaded.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil
+            observation: everythingRecorded(in: source, library: macs.a)
         )
 
         try await WorkspaceContextFileStore.removeContextItem(
@@ -851,7 +905,7 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
         try await WorkspaceContextFileStore.fetchSource(
             relativePath: "history.pdf", in: workspaceURL
@@ -899,7 +953,7 @@ struct WorkspaceFileDeletionSyncTests {
         try records.save(toLibraryAt: macs.a)
         try await WorkspaceContextFileStore.offloadSource(
             relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: [path: "\"r1\""]
+            observation: ServerObservation(source: source, members: [path], revisions: [path: "\"r1\""])
         )
 
         try await WorkspaceContextFileStore.removeDeletedSource(
@@ -950,7 +1004,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["one.pdf", "two.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            source: source, seen: nil
+            observation: everythingRecorded(in: source, library: macs.a)
         )
         #expect(
             result.offloaded.sorted() == ["one.pdf", "two.pdf"],
@@ -988,7 +1042,7 @@ struct WorkspaceFileDeletionSyncTests {
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
         #expect(
-            body.contains("unlinkVerifiedContextFile"),
+            body.contains("try unlink(verified"),
             "the unlink that takes the digest already taken"
         )
         #expect(
@@ -1011,7 +1065,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             [], in: workspaceURL, libraryRootURL: macs.a,
-            source: "webdav:example", seen: nil
+            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
         )
         #expect(result.offloaded.isEmpty)
         #expect(result.skipped.isEmpty)
@@ -1100,7 +1154,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         #expect(ledger.synced?["Context/map.txt"] == 1_000, "what was present survived")
         #expect(ledger.deletedAt["Context/gone.txt"] == 2_000, "and what was deleted")
-        #expect(ledger.offloaded.isEmpty)
+        #expect(ledger.acts.isEmpty)
     }
 
     /// Removing a source queues it for the **server**, so the store stops
@@ -1225,30 +1279,6 @@ struct WorkspaceFileDeletionSyncTests {
     }
 }
 
-/// A `FileManager` that writes over one file while another is being removed —
-/// standing in for Finder, a restore, or an agent running in the workspace,
-/// arriving in the window between the batch's check and its unlink.
-private final class ReplacingFileManager: FileManager, @unchecked Sendable {
-    private let trigger: URL
-    private let target: URL
-    private let contents: String
-
-    init(whenRemoving trigger: URL, replace target: URL, with contents: String) {
-        self.trigger = trigger
-        self.target = target
-        self.contents = contents
-        super.init()
-    }
-
-    override func removeItem(at url: URL) throws {
-        if url.standardizedFileURL == trigger.standardizedFileURL {
-            // In place, keeping the inode: the harder case, and the one a
-            // process writing over an open path actually produces.
-            try? contents.write(to: target, atomically: false, encoding: .utf8)
-        }
-        try super.removeItem(at: url)
-    }
-}
 
 /// Says the writing is closed once, then open: the reader arriving while the
 /// batch is working.
@@ -1259,4 +1289,20 @@ private actor OpenedPartWay {
         asked += 1
         return asked <= 1
     }
+}
+
+/// A look at the server that shows every source this Mac has recorded, at the
+/// revision it recorded — what a pass would see had nothing changed on the
+/// server since.
+///
+/// Stands in where a test used to pass no observation at all, which skipped
+/// the look. There is no way to skip it now: an offload without one would be
+/// trusting a record nothing refreshes.
+private func everythingRecorded(in source: String, library: URL) -> ServerObservation {
+    let records = LampSyncFileRecords.load(fromLibraryAt: library)
+    var revisions: [String: String] = [:]
+    for (path, record) in records.sources[source]?.files ?? [:] {
+        if let revision = record.installedRevision { revisions[path] = revision }
+    }
+    return ServerObservation(source: source, members: Set(revisions.keys), revisions: revisions)
 }

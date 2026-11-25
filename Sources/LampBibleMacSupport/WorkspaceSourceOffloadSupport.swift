@@ -157,10 +157,11 @@ public enum WorkspaceSourceOffload {
 }
 
 extension WorkspaceSourceOffload {
-    /// How long a source asked back is left alone for, whatever the writing's
-    /// dates say. A week: long enough to read what you fetched, short enough
-    /// that a source fetched and forgotten goes back on its own.
-    static let fetchGrace: TimeInterval = 7 * 24 * 60 * 60
+    /// How long a source that has just arrived is left alone, whatever the
+    /// writing's dates say — however it arrived: fetched, attached, or copied
+    /// in by another Mac. A week: long enough to read what you fetched,
+    /// short enough that a source fetched and forgotten goes back on its own.
+    static let arrivalGrace: TimeInterval = 7 * 24 * 60 * 60
 
     /// Reads the policy's inputs off disk: one entry per workspace whose
     /// writing this library still has.
@@ -174,16 +175,16 @@ extension WorkspaceSourceOffload {
     /// rather than read here because the library is the caller's, and because
     /// a date that travels in the personal file reads the same on both Macs.
     ///
-    /// `seen` is what the pass that just finished saw when it listed those
-    /// folders. A source confirmed during *that* pass is not in it — the
-    /// listing is taken at the gather, before the uploads — so it waits one
-    /// more pass, which is the safe direction.
+    /// `observation` is what the pass that just finished saw. A source first
+    /// confirmed during *that* pass is not in it — the listing is taken at
+    /// the gather, before the uploads — so it waits one more pass, which is
+    /// the safe direction.
     @WritingWorkspaceFiles
     public static func workspaces(
         inLibraryAt libraryRootURL: URL,
         writings: [String: Date],
-        source: String,
-        seen: [String: String],
+        observation: ServerObservation,
+        now: Date = Date(),
         fileManager: FileManager = .default
     ) -> [Workspace] {
         guard let folders = try? LampWorkspaceSync.workspaces(
@@ -198,21 +199,21 @@ extension WorkspaceSourceOffload {
             guard let writingID = LampWritingWorkspaceLayout.writingID(
                 ofFolder: name, among: writings.keys
             ) else { continue }
-            // Left alone for a while after being asked for: see
-            // `recentlyFetchedSources`.
-            let justFetched = LampWorkspaceSync.recentlyFetchedSources(
-                in: folder, since: Date().addingTimeInterval(-Self.fetchGrace)
-            )
+            let ledger = WorkspaceFileLedger.load(in: folder)
+            // Not a candidate while it is new here, however it came: see
+            // `WorkspaceFileLedger.isNewHere`.
             let sources = contextRelativePaths(in: folder, fileManager: fileManager)
-                .filter { !justFetched.contains($0) }
+                .filter {
+                    !ledger.isNewHere(
+                        WorkspaceFileLedger.contextKey($0), now: now, grace: arrivalGrace
+                    )
+                }
             var onTheServer: Set<String> = []
             for relativePath in sources {
                 guard let path = try? LampWritingWorkspaceLayout.contextPath(
                     folder: name, relativePath: relativePath
-                ) else { continue }
-                guard let installed = records.record(path, in: source)?.installedRevision,
-                      let listed = seen[path],
-                      LampSyncConditionalWrite.namesSameRevision(listed, installed)
+                ),
+                observation.shows(path, atRevisionOf: records)
                 else { continue }
                 onTheServer.insert(relativePath)
             }
@@ -302,5 +303,223 @@ extension WorkspaceSourceOffload {
             if !relative.isEmpty { paths.append(relative) }
         }
         return paths.sorted()
+    }
+}
+
+/// What a finished sync pass saw of the server: which store it was, what the
+/// manifest counted as members, and what the listing of the workspaces'
+/// context folders said each source's revision was.
+///
+/// **One value, from one place.** It used to be three — a listing on the
+/// controller, a member set on the controller, and a copy for the pane —
+/// and a review found them disagreeing about which server they described.
+/// The gather writes it, labelled with the source its own store was built
+/// from; nothing else does.
+///
+/// It is the only thing that has looked at the server. A record's
+/// `installedRevision` is a memory of one upload that nothing refreshes, so
+/// a source deleted from the sync folder by hand keeps it for ever; an
+/// offload on that alone would delete the last copy (`decisions/0021`).
+public struct ServerObservation: Equatable, Sendable {
+    /// The store this came from, as the records name it.
+    public let source: String
+    /// Every path the manifest counted as a member.
+    public let members: Set<String>
+    /// What the listing of each source's folder said its revision was.
+    public let revisions: [String: String]
+    public let at: Date
+
+    /// How long a look at the server answers for anything. A pass runs every
+    /// few minutes while sync is on, so the sweep never reaches this; it
+    /// bites where it should — a button pressed with sync off, or on a Mac
+    /// that synced once days ago. A listing from last Tuesday has not seen
+    /// the server today.
+    public static let lifetime: TimeInterval = 15 * 60
+
+    public init(
+        source: String, members: Set<String>, revisions: [String: String], at: Date = Date()
+    ) {
+        self.source = source
+        self.members = members
+        self.revisions = revisions
+        self.at = at
+    }
+
+    /// Whether this can answer for `source` now: the same server, and
+    /// recently enough. Changing folders or turning sync off makes the last
+    /// look worthless however recent it is, because Offload would delete
+    /// against one server while Download fetched from another.
+    public func answers(for source: String, now: Date = Date()) -> Bool {
+        self.source == source && now.timeIntervalSince(at) < Self.lifetime
+    }
+
+    /// Whether the listing showed `path` at the revision this Mac recorded
+    /// for it on this server.
+    func shows(_ path: String, atRevisionOf records: LampSyncFileRecords) -> Bool {
+        guard let installed = records.record(path, in: source)?.installedRevision,
+              let listed = revisions[path]
+        else { return false }
+        return LampSyncConditionalWrite.namesSameRevision(listed, installed)
+    }
+}
+
+/// A source whose bytes have been hashed and whose identity was taken from
+/// the same open of the file, ready to be unlinked if nothing has changed.
+///
+/// Made only by `verify`: there is no other way to get one. The offload's
+/// unlink takes nothing else, so the step that hashes a path and then
+/// deletes whatever is at it — the ordinary removal — cannot stand in for
+/// it by accident. Four review rounds found a read creeping back in
+/// between the check and the deletion; this is the shape that keeps one out.
+public struct VerifiedSource: Equatable, Sendable {
+    public let relativePath: String
+    let file: URL
+    let read: LampVerifiedFileRead
+
+    public var digest: String { read.digest }
+
+    fileprivate init(relativePath: String, file: URL, read: LampVerifiedFileRead) {
+        self.relativePath = relativePath
+        self.file = file
+        self.read = read
+    }
+
+    /// Opens the source once and reads its identity and digest from that
+    /// descriptor (`lamp-bible-core/Documentation/decisions/0012`).
+    ///
+    /// Nil for anything that is not a plain file here — a link, a folder, a
+    /// file being written to while it was read. Each of those is a reason to
+    /// leave the path alone, not an error to report.
+    @WritingWorkspaceFiles
+    static func verify(relativePath: String, inContext context: URL) -> VerifiedSource? {
+        let file = context.appendingPathComponent(relativePath)
+        guard file.resolvingSymlinksInPath().path
+                .hasPrefix(context.resolvingSymlinksInPath().path + "/"),
+              let read = try? LampVerifiedFileRead.read(file)
+        else { return nil }
+        return VerifiedSource(relativePath: relativePath, file: file, read: read)
+    }
+}
+
+/// One row of a writing's Context list.
+///
+/// A pure function of two things: what the reader did to each source (the
+/// ledger's act) and what is on disk. Nothing about a row is stored, so a row
+/// cannot disagree with the withholding the pass does, or with what the
+/// agent is told — they read the same two inputs.
+public struct SourceRow: Equatable, Sendable, Identifiable {
+    public enum State: Equatable, Sendable {
+        /// A file on disk.
+        case here
+        /// A folder on disk. `holdsSourcesNotHere` when something under it
+        /// is only on the server, or on its way: removing the folder deletes
+        /// those everywhere too, and the row shows nothing of them.
+        case folder(holdsSourcesNotHere: Bool)
+        /// Let go to the server; not here.
+        case onTheServer
+        /// Asked back; not here yet.
+        case comingBack
+    }
+
+    /// Where the source is under the context directory. What a row is
+    /// called, too: two offloaded files named `history.pdf` in different
+    /// folders are two different sources, and a reader deleting one from the
+    /// server has to be able to tell which.
+    public let relativePath: String
+    public let state: State
+    public let byteCount: Int?
+
+    public var id: String { relativePath }
+    public var isHere: Bool {
+        switch state {
+        case .here, .folder: true
+        case .onTheServer, .comingBack: false
+        }
+    }
+    /// Whether Remove deletes something with no copy on this Mac, which it
+    /// asks about first.
+    public var removesWhatIsNotHere: Bool {
+        switch state {
+        case .onTheServer, .comingBack, .folder(holdsSourcesNotHere: true): true
+        case .here, .folder(holdsSourcesNotHere: false): false
+        }
+    }
+
+    public init(relativePath: String, state: State, byteCount: Int? = nil) {
+        self.relativePath = relativePath
+        self.state = state
+        self.byteCount = byteCount
+    }
+}
+
+extension WorkspaceSourceOffload {
+    /// One entry at the top of a context directory.
+    public struct DiskEntry: Equatable, Sendable {
+        public let name: String
+        public let isDirectory: Bool
+        public let byteCount: Int?
+
+        public init(name: String, isDirectory: Bool, byteCount: Int?) {
+            self.name = name
+            self.isDirectory = isDirectory
+            self.byteCount = byteCount
+        }
+    }
+
+    /// The table: every row, from what is on disk and what is not here.
+    ///
+    /// Compared in NFC, as the ledger's keys are — macOS hands back a name
+    /// with a combining mark decomposed, and a source would otherwise be
+    /// drawn twice, once as itself and once as "On the server".
+    public static func rows(
+        onDisk: [DiskEntry], notHere: [String: WorkspaceSourceAct]
+    ) -> [SourceRow] {
+        let notHere = Dictionary(
+            notHere.map { ($0.key.precomposedStringWithCanonicalMapping, $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var rows: [SourceRow] = []
+        var shown: Set<String> = []
+        for entry in onDisk {
+            let path = entry.name.precomposedStringWithCanonicalMapping
+            shown.insert(path)
+            if entry.isDirectory {
+                let holds = notHere.keys.contains { $0.hasPrefix(path + "/") }
+                rows.append(SourceRow(relativePath: path, state: .folder(holdsSourcesNotHere: holds)))
+            } else {
+                rows.append(SourceRow(relativePath: path, state: .here, byteCount: entry.byteCount))
+            }
+        }
+        for (path, act) in notHere where !shown.contains(path) {
+            rows.append(SourceRow(
+                relativePath: path, state: act == .offloaded ? .onTheServer : .comingBack
+            ))
+        }
+        return rows.sorted {
+            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+    }
+
+    /// The rows for one workspace, read now.
+    @WritingWorkspaceFiles
+    public static func rows(
+        inWorkspaceAt workspace: URL, fileManager: FileManager = .default
+    ) -> [SourceRow] {
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
+        let entries = ((try? fileManager.contentsOfDirectory(
+            at: context, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
+        )) ?? []).map { url -> DiskEntry in
+            let values = try? url.resourceValues(forKeys: keys)
+            return DiskEntry(
+                name: url.lastPathComponent,
+                isDirectory: values?.isDirectory == true,
+                byteCount: values?.fileSize
+            )
+        }
+        return rows(
+            onDisk: entries,
+            notHere: LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager)
+        )
     }
 }

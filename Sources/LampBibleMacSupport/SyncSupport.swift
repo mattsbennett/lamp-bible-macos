@@ -150,76 +150,72 @@ public enum LampWorkspaceSync {
         return times
     }
 
-    /// The names of the sources one workspace has offloaded, relative to its
-    /// `context` folder.
+    /// Whether a source is **here**: a regular file at its path under the
+    /// workspace's context directory.
     ///
-    /// For the pane, which lists what a writing holds whether or not the
-    /// bytes are here.
-    /// The sources asked back since `since`, by their path under the context
-    /// directory.
-    ///
-    /// A download advances no inactivity clock — the writing it belongs to is
-    /// old by definition, or the sweep would not have touched it — so without
-    /// this the next pass's sweep puts back on the server the file the reader
-    /// just asked for, and the two undo each other for ever.
-    @WritingWorkspaceFiles
-    public static func recentlyFetchedSources(
-        in workspace: URL, since: Date
-    ) -> Set<String> {
-        let ledger = WorkspaceFileLedger.load(in: workspace)
-        let prefix = WorkspaceFileLedger.contextKey("")
-        let cutoff = WorkspaceFileLedger.milliseconds(since)
-        var names: Set<String> = []
-        for (key, at) in ledger.fetchedAt where at >= cutoff && key.hasPrefix(prefix) {
-            let name = String(key.dropFirst(prefix.count))
-            if !name.isEmpty { names.insert(name) }
-        }
-        return names
+    /// Observed, never stored. A link does not count, as the digest walk
+    /// leaves one out (`decisions/0010`); nor does a folder that has taken
+    /// the path — counting one would stop withholding a member the gather
+    /// has no file for, and the next pass would then try to install the
+    /// server's copy over a directory.
+    static func isHere(
+        _ relativePath: String, inContextOf workspace: URL, fileManager: FileManager = .default
+    ) -> Bool {
+        let file = workspace
+            .appendingPathComponent("context", isDirectory: true)
+            .appendingPathComponent(relativePath)
+        guard let values = try? file.resourceValues(forKeys: [
+            .isRegularFileKey, .isSymbolicLinkKey,
+        ]) else { return false }
+        return values.isRegularFile == true && values.isSymbolicLink != true
     }
 
-    /// The sources asked back that have not arrived: a note cleared, a pass
-    /// asked for, and still no file.
-    ///
-    /// Clearing the note is what lets the next pass fetch them, but it also
-    /// took them off the list — so a download that failed, or one whose
-    /// server was briefly unreachable, left no row, no explanation and
-    /// nothing to press again. They are the ask, which outlives the attempt.
+    /// Every source this reader has done something to that is not here, with
+    /// what was done. The one derivation the withholding, the pane's rows and
+    /// the agent's inventory all read, so they cannot disagree.
     @WritingWorkspaceFiles
-    public static func awaitedSourceNames(
+    public static func sourcesNotHere(
         in workspace: URL, fileManager: FileManager = .default
-    ) -> [String] {
+    ) -> [String: WorkspaceSourceAct] {
         let ledger = WorkspaceFileLedger.load(in: workspace)
-        let prefix = WorkspaceFileLedger.contextKey("")
-        let context = workspace.appendingPathComponent("context", isDirectory: true)
-        var names: [String] = []
-        for key in ledger.fetchedAt.keys where key.hasPrefix(prefix) {
-            guard !ledger.offloaded.contains(key) else { continue }
-            let name = String(key.dropFirst(prefix.count))
-            guard !name.isEmpty,
-                  !fileManager.fileExists(
-                      atPath: context.appendingPathComponent(name).path
-                  )
-            else { continue }
-            names.append(name)
+        var notHere: [String: WorkspaceSourceAct] = [:]
+        for (path, act) in ledger.contextActs()
+        where !isHere(path, inContextOf: workspace, fileManager: fileManager) {
+            notHere[path] = WorkspaceSourceAct(act)
         }
-        return names.sorted()
+        return notHere
     }
 
-    /// Forgets that this Mac offloaded any source the server no longer counts
-    /// as a member.
+    /// The sources one workspace has let go to the server and does not hold.
+    @WritingWorkspaceFiles
+    public static func offloadedSourceNames(in workspace: URL) -> [String] {
+        sourcesNotHere(in: workspace).filter { $0.value == .offloaded }.keys.sorted()
+    }
+
+    /// The sources asked back that have not arrived.
+    ///
+    /// The ask outlives the attempt: a download that failed, or whose server
+    /// was briefly unreachable, keeps its row and something to press again.
+    @WritingWorkspaceFiles
+    public static func awaitedSourceNames(in workspace: URL) -> [String] {
+        sourcesNotHere(in: workspace).filter { $0.value == .wanted }.keys.sorted()
+    }
+
+    /// Forgets whatever this Mac did to any source the server no longer
+    /// counts as a member — offloaded or wanted alike.
     ///
     /// When both Macs have offloaded a source and one removes it, the other
     /// has no local file for the plan to delete, so nothing carries the
-    /// deletion out here: the note survives, the row keeps saying "On the
-    /// server", and a later attachment at that path could be withheld against
-    /// a member that no longer exists.
+    /// deletion out here: the row would go on saying "On the server", or
+    /// "Coming back" for something never coming, and a later attachment at
+    /// that path could be withheld against a member that no longer exists.
     ///
     /// Judged on the **manifest**, which is what membership means, and never
     /// on a folder listing — a listing that failed is not a deletion
     /// (`decisions/0018`).
     @discardableResult
     @WritingWorkspaceFiles
-    public static func forgetOffloadsNoLongerOnTheServer(
+    public static func forgetActsNoLongerOnTheServer(
         inLibraryAt libraryRoot: URL,
         members: Set<String>,
         fileManager: FileManager = .default
@@ -227,18 +223,14 @@ public enum LampWorkspaceSync {
         var forgotten: [String] = []
         for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
             var ledger = WorkspaceFileLedger.load(in: workspace)
-            guard !ledger.offloaded.isEmpty else { continue }
-            let prefix = [
-                portableDirectoryName,
-                WritingFolder.perFile.rawValue,
-                workspace.lastPathComponent,
-            ].joined(separator: "/")
+            let acted = ledger.contextActs()
+            guard !acted.isEmpty else { continue }
             var changed = false
-            for member in ledger.offloadedMembers(under: prefix) where !members.contains(member) {
-                guard let relativePath = LampWritingWorkspaceLayout.contextFile(
-                    ofPath: member
-                )?.relativePath else { continue }
-                ledger.forgetOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+            for path in acted.keys.sorted() {
+                guard let member = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: workspace.lastPathComponent, relativePath: path
+                ), !members.contains(member) else { continue }
+                ledger.forgetAct(WorkspaceFileLedger.contextKey(path))
                 forgotten.append(member)
                 changed = true
             }
@@ -247,33 +239,18 @@ public enum LampWorkspaceSync {
         return forgotten
     }
 
-    @WritingWorkspaceFiles
-    public static func offloadedSourceNames(in workspace: URL) -> [String] {
-        let ledger = WorkspaceFileLedger.load(in: workspace)
-        let prefix = WorkspaceFileLedger.contextKey("")
-        return ledger.offloaded
-            .filter { $0.hasPrefix(prefix) }
-            .map { String($0.dropFirst(prefix.count)) }
-            .filter { !$0.isEmpty }
-            .sorted()
-    }
-
-    /// Every source this library has offloaded, as published member paths.
+    /// Every source this library is withholding, as published member paths:
+    /// let go to the server, and no file here.
     ///
     /// Read from each workspace's own ledger rather than inferred from what
-    /// is missing. A new Mac has offloaded nothing, so it withholds nothing
-    /// and fetches the library's sources as it always did — which is the
-    /// regression the first version of this caused, and the fourth time
+    /// is missing. A new Mac has done nothing to any source, so it withholds
+    /// nothing and fetches the library's sources as it always did — which is
+    /// the regression the first version of this caused, and the fourth time
     /// absence turned out not to be a fact (`decisions/0018`).
     ///
-    /// A note alone is not enough, though: a source is withheld only while
-    /// there is **no file here**. The note says what this Mac let go of, and
-    /// a file back at that path says it has it again — by a fetch that
-    /// landed, or by the reader attaching something new under the same name.
-    /// Withholding on the note alone left a reattached source withheld for
-    /// ever and never uploaded, because nothing on the attaching side knew to
-    /// clear a note. This is strictly narrower than the note alone, so it
-    /// cannot bring `0018`'s regression back.
+    /// And only while there is no file: one back at the path — a fetch that
+    /// landed, something new attached under the name — is this Mac's again,
+    /// and withholding it would keep it from the server for ever.
     @WritingWorkspaceFiles
     public static func offloadedSources(
         inLibraryAt libraryRoot: URL,
@@ -281,20 +258,11 @@ public enum LampWorkspaceSync {
     ) -> Set<String> {
         var paths: Set<String> = []
         for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
-            let ledger = WorkspaceFileLedger.load(in: workspace)
-            guard !ledger.offloaded.isEmpty else { continue }
-            let prefix = [
-                portableDirectoryName,
-                WritingFolder.perFile.rawValue,
-                workspace.lastPathComponent,
-            ].joined(separator: "/")
-            let context = workspace.appendingPathComponent("context", isDirectory: true)
-            for member in ledger.offloadedMembers(under: prefix) {
-                guard let relativePath = LampWritingWorkspaceLayout.contextFile(
-                    ofPath: member
-                )?.relativePath else { continue }
-                let file = context.appendingPathComponent(relativePath)
-                guard !fileManager.fileExists(atPath: file.path) else { continue }
+            for (path, act) in sourcesNotHere(in: workspace, fileManager: fileManager)
+            where act == .offloaded {
+                guard let member = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: workspace.lastPathComponent, relativePath: path
+                ), namesAsource(member) else { continue }
                 paths.insert(member)
             }
         }
@@ -1391,19 +1359,37 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// objects whose modification times are those of whichever copy came
     /// first, so a file added again could look older than its own deletion.
     var presentSince: [String: Int64] = [:]
-    /// Sources this Mac has deliberately offloaded: still on the server,
-    /// dropped here to free space.
+    /// What this reader has done to each source, by key: let it go to the
+    /// server, or asked for it back. One act per path, or none.
     ///
     /// **Local only** — it is not in `Portable`, because it is this Mac's
-    /// housekeeping and no other device's business.
+    /// housekeeping and no other device's business. Whether the file is
+    /// *here* is never stored: it is observed, every time, from the disk.
+    /// Everything the feature shows or withholds is a function of the two
+    /// (`decisions/0021`, "one act per path").
+    ///
+    /// This replaced a set of offloaded keys and a dictionary of fetch times
+    /// whose value meant "asked at" until the file arrived and "landed at"
+    /// after. Four review rounds found defects in that pair, nearly all of
+    /// one shape: two representations that had to agree and did not. A key
+    /// cannot be both offloaded and wanted now, because it holds one value.
     ///
     /// Recorded rather than inferred, which is the fourth time that
     /// distinction has had to be made (`decisions/0016`, `0017`, `0018`).
     /// Withholding every absent source looked equivalent and is not: it
-    /// cannot tell a file this Mac offloaded from one it has never seen, so
-    /// a new Mac withheld every source in the library and could never fetch
+    /// cannot tell a file this Mac offloaded from one it has never seen, so a
+    /// new Mac withheld every source in the library and could never fetch
     /// one. Absence is not a fact about intent.
-    var offloaded: Set<String> = []
+    var acts: [String: SourceAct] = [:]
+
+    enum SourceAct: String, Codable, Equatable, Sendable {
+        /// This Mac let the file go; the server keeps it. Withheld while no
+        /// file is here.
+        case offloaded
+        /// The reader asked for it back. Not withheld, so a pass fetches it;
+        /// drawn as on its way until it arrives.
+        case wanted
+    }
 
     /// Decoded field by field, because a ledger written before a field
     /// existed must still be read.
@@ -1424,9 +1410,8 @@ struct WorkspaceFileLedger: Codable, Equatable {
         presentSince = try container.decodeIfPresent(
             [String: Int64].self, forKey: .presentSince
         ) ?? [:]
-        offloaded = try container.decodeIfPresent(Set<String>.self, forKey: .offloaded) ?? []
-        fetchedAt = try container.decodeIfPresent(
-            [String: Int64].self, forKey: .fetchedAt
+        acts = try container.decodeIfPresent(
+            [String: SourceAct].self, forKey: .acts
         ) ?? [:]
     }
 
@@ -1468,77 +1453,84 @@ struct WorkspaceFileLedger: Codable, Equatable {
         deletedAt[key] = max(deletedAt[key] ?? .min, Self.milliseconds(now))
         synced?[key] = nil
         presentSince[key] = nil
-        offloaded.remove(key)
-        // Nor is it on its way: a source being deleted everywhere is not one
-        // the pane should go on showing as "Coming back".
-        fetchedAt[key] = nil
+        // Neither on the server for this Mac nor on its way here.
+        acts[key] = nil
     }
 
-    /// Notes that a source was offloaded here: the file goes, the member
-    /// stays, and the gather withholds it until something asks for it.
-    mutating func recordOffload(of key: String) {
+    /// This Mac lets a source go. Noted before the file is unlinked, so a
+    /// crash between the two reads as "offloaded, and still here" — which the
+    /// next gather clears, because the file is present — rather than as a
+    /// file gone and unrecorded.
+    ///
+    /// Returns what the last sync recorded for the key, so a caller whose
+    /// unlink then fails can put it back.
+    @discardableResult
+    mutating func noteOffloaded(_ key: String) -> Int64? {
         let key = Self.normalized(key)
-        offloaded.insert(key)
+        let baseline = synced?[key]
+        acts[key] = .offloaded
         synced?[key] = nil
-        // No longer waiting for anything: the ask is answered by the file
-        // being here, and it has just gone again.
-        fetchedAt[Self.normalized(key)] = nil
+        return baseline
     }
 
-    /// Takes a source off the offloaded list, so the next pass fetches it.
-    /// When a source was last asked back, by key. Kept so the sweep does not
-    /// put a file back on the server minutes after the reader fetched it: a
-    /// download advances no inactivity clock, and the writing it belongs to
-    /// is old by definition, so without this Download and the next pass's
-    /// sweep would undo each other.
-    var fetchedAt: [String: Int64] = [:]
+    /// The reader asked for a source back.
+    mutating func noteWanted(_ key: String) {
+        acts[key] = .wanted
+    }
 
-    /// Drops the note without recording an ask: the source is gone from the
-    /// server, so there is nothing to come back and nothing to wait for.
-    mutating func forgetOffload(of key: String) {
+    /// Whatever this Mac had done to the source no longer applies: it
+    /// stayed, or another device deleted it, or the server no longer counts
+    /// it. Neither "on the server" nor "on its way".
+    ///
+    /// `baseline`, where given, is what the last sync had recorded before an
+    /// offload that did not go through; it is put back so the attempt leaves
+    /// nothing behind.
+    mutating func forgetAct(_ key: String, restoring baseline: Int64? = nil) {
         let key = Self.normalized(key)
-        offloaded.remove(key)
-        fetchedAt[key] = nil
+        acts[key] = nil
+        if let baseline { synced?[key] = baseline }
     }
 
-    mutating func clearOffload(of key: String) {
-        offloaded.remove(Self.normalized(key))
-        fetchedAt[Self.normalized(key)] = Self.milliseconds(Date())
+    /// The context paths holding `act`, relative to the context directory.
+    func contextPaths(withAct act: SourceAct) -> [String] {
+        let prefix = Self.contextKey("")
+        return acts
+            .filter { $0.value == act && $0.key.hasPrefix(prefix) }
+            .map { String($0.key.dropFirst(prefix.count)) }
+            .filter { !$0.isEmpty }
+            .sorted()
     }
 
-    /// The published member paths this Mac has offloaded, given the prefix
-    /// the workspace publishes under (`Workspaces/Writing/<id>`).
-    func offloadedMembers(under prefix: String) -> Set<String> {
-        // Checked against the published shape rather than trusted: a key that
-        // does not name a reader's source is not something to withhold, and
-        // the check is the same one that keeps a custom skill's own `Context`
-        // folder out of this.
-        Set(
-            offloaded.lazy
-                .filter(Self.isContextKey)
-                .map { "\(prefix)/\($0)" }
-                .filter(LampWorkspaceSync.namesAsource)
-        )
+    /// Every context path this Mac has done anything to, with what.
+    func contextActs() -> [String: SourceAct] {
+        let prefix = Self.contextKey("")
+        var paths: [String: SourceAct] = [:]
+        for (key, act) in acts where key.hasPrefix(prefix) {
+            let path = String(key.dropFirst(prefix.count))
+            if !path.isEmpty { paths[path] = act }
+        }
+        return paths
     }
 
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
 
-    /// The offloaded sources as paths under the context directory.
+    /// Whether a source arrived here recently enough to be left alone.
     ///
-    /// `offloadedMembers(under:)` answers in *published* paths and checks
-    /// them against the published shape, so it needs the workspace's whole
-    /// prefix; handed anything less it filters everything out and returns
-    /// nothing at all. A caller that already knows which workspace it is in
-    /// wants the relative paths, and asking the other way round is how a
-    /// folder removal came to look as though it took its offloaded children
-    /// while taking none.
-    func offloadedContextPaths() -> [String] {
-        let prefix = Self.contextKey("")
-        return offloaded
-            .filter { $0.hasPrefix(prefix) }
-            .map { String($0.dropFirst(prefix.count)) }
-            .filter { !$0.isEmpty }
-            .sorted()
+    /// The sweep's grace, by **arrival**, however the file came: a download
+    /// the reader asked for, an attachment, another Mac's copy. Not by when
+    /// anything was asked for — a download that took longer than the grace
+    /// itself arrived already expired — and not by any of the writing's
+    /// activity clocks, none of which an attachment moves: a PDF attached to
+    /// a six-month-old writing, in preparation for working on it, was
+    /// otherwise offloaded two passes later.
+    ///
+    /// `synced[key] == nil` covers the window between a file landing in one
+    /// pass and the next gather stamping `presentSince`.
+    func isNewHere(_ key: String, now: Date, grace: TimeInterval) -> Bool {
+        let key = Self.normalized(key)
+        guard let synced, synced[key] != nil else { return true }
+        guard let since = presentSince[key] else { return false }
+        return since >= Self.milliseconds(now.addingTimeInterval(-grace))
     }
 
     static func milliseconds(_ date: Date) -> Int64 {
@@ -1612,20 +1604,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
             presentSince[key] = max(presentSince[key] ?? .min, time)
-            // The grace a download earns starts when the bytes land, not when
-            // they were asked for. A fetch that took longer than the grace
-            // itself would otherwise arrive already expired, and the sweep
-            // that ran next could offload the file the same pass installed.
-            if fetchedAt[key] != nil { fetchedAt[key] = time }
         }
-        // A file at an offloaded path means this Mac has one again, however
-        // it got there: a fetch that landed, or the reader attaching
-        // something new under the same name. The gather already refuses to
-        // withhold a path it can see a file at, so this is tidiness rather
-        // than correctness — but a note nothing ever clears is a note that
-        // grows for ever and reads as a lie to anyone opening the ledger.
+        // A file here answers whatever was done to its path: an offload whose
+        // unlink never happened, a download that has landed, an attachment
+        // under a name that was let go of. The act is about a file that is
+        // not here; once one is, there is nothing left for it to say.
         for key in present.keys where Self.isContextKey(key) {
-            offloaded.remove(key)
+            acts[key] = nil
         }
         self.synced = present
         return deleted
@@ -1920,6 +1905,19 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
     }
 }
 
+    /// What a reader has done to a source, as the pane and the sweep see it.
+    /// The ledger's own value, made public; see `WorkspaceFileLedger.acts`.
+    public enum WorkspaceSourceAct: String, Equatable, Sendable {
+        case offloaded, wanted
+
+        init(_ act: WorkspaceFileLedger.SourceAct) {
+            switch act {
+            case .offloaded: self = .offloaded
+            case .wanted: self = .wanted
+            }
+        }
+    }
+
     /// A pass this Mac has been asked for that its own work would not start.
     ///
     /// The automatic pass runs when something a pass *carries* has changed —
@@ -1930,55 +1928,12 @@ public final class WorkspaceDocumentsTakenIn: @unchecked Sendable {
     /// on an idle library Download waited for some unrelated edit before the
     /// file came home.
     ///
-    /// So the ask is recorded here instead, and the poll that is already
-    /// running picks it up. Related: a new synced thing must also start a
-    /// pass, cheaply.
+    /// So the ask is recorded here, and picked up by whichever comes first:
+    /// the pane asking the controller directly, the reader window's poll, or
+    /// the end of a pass that was already running when it was made.
     @MainActor
     public enum LampSyncRequest {
         private static var isPending = false
-
-        /// What the last finished pass saw when it listed the workspaces'
-        /// context folders, and which server it was listing.
-        ///
-        /// The sweep is handed this directly. The pane's Offload button needs
-        /// it too and has no controller to ask, so it is left here: without a
-        /// look at the server, a press would be trusting a record that
-        /// nothing ever refreshes, and could delete the last copy of a source
-        /// somebody removed from the sync folder by hand (`decisions/0021`).
-        public private(set) static var lastSeen:
-            (source: String, revisions: [String: String], at: Date)?
-
-        /// How old an observation may be and still answer for a press.
-        ///
-        /// A pass runs every few minutes while sync is on, so this is
-        /// ordinarily never reached. It bites where it should: sync turned
-        /// off, or a Mac that synced once days ago and has not since. The
-        /// listing is the only thing that has seen the server, and a listing
-        /// from last Tuesday has not seen it today.
-        public static let observationLifetime: TimeInterval = 15 * 60
-
-        public static func noteObservation(source: String, revisions: [String: String]) {
-            lastSeen = (source, revisions, Date())
-        }
-
-        /// The last observation, if it is recent enough to act on.
-        public static func freshObservation(
-            now: Date = Date()
-        ) -> (source: String, revisions: [String: String])? {
-            guard let lastSeen,
-                  now.timeIntervalSince(lastSeen.at) < observationLifetime
-            else { return nil }
-            return (lastSeen.source, lastSeen.revisions)
-        }
-
-        /// Forgotten when a pass does not finish, or the server changes.
-        public static func forgetObservation() { lastSeen = nil }
-
-        /// What the last pass saw, if it was looking at `source`.
-        public static func observation(of source: String) -> [String: String]? {
-            guard let fresh = freshObservation(), fresh.source == source else { return nil }
-            return fresh.revisions
-        }
 
         /// Ask for a pass. Costs nothing if one is already wanted.
         public static func wantAPass() { isPending = true }

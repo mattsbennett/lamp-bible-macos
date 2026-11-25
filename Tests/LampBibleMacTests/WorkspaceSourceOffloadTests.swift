@@ -180,29 +180,111 @@ struct WorkspaceSourceOffloadTests {
     /// Changing the stored spelling orphans every Mac's saved choice, and
     /// adding this key to the synced settings would push one Mac's disk
     /// policy onto another.
-    /// A look at the server goes stale.
+    /// A look at the server goes stale, and belongs to one server.
     ///
-    /// The pane's Offload button has no pass behind it, so it acts on the
-    /// last one's listing. While sync is on a pass runs every few minutes and
-    /// this is never reached; it bites where it should — sync turned off, or
-    /// a Mac that synced once days ago. A listing from last Tuesday has not
-    /// seen the server today, and offloading on it would delete the last copy
-    /// of anything removed since.
-    @MainActor
-    @Test func alookAtTheServerIsOnlyGoodForSoLong() {
-        LampSyncRequest.forgetObservation()
-        #expect(LampSyncRequest.freshObservation() == nil, "and nothing at all before a pass")
-
-        LampSyncRequest.noteObservation(source: "webdav:example", revisions: ["a": "\"r1\""])
-        #expect(LampSyncRequest.freshObservation()?.source == "webdav:example")
-
-        let stale = Date().addingTimeInterval(LampSyncRequest.observationLifetime + 1)
+    /// The pane's Offload has no pass behind it, so it acts on the last
+    /// one's look. While sync is on a pass runs every few minutes and the
+    /// lifetime is never reached; it bites where it should — sync turned
+    /// off, or a Mac that synced once days ago. And a look at one server
+    /// answers for no other: Offload would otherwise delete against the old
+    /// folder while Download fetched from the new.
+    @Test func alookAtTheServerIsOnlyGoodForSoLongAndForOneServer() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let observation = ServerObservation(
+            source: "webdav:example", members: ["a"], revisions: ["a": "\"r1\""], at: at
+        )
+        #expect(observation.answers(for: "webdav:example", now: at))
         #expect(
-            LampSyncRequest.freshObservation(now: stale) == nil,
+            !observation.answers(
+                for: "webdav:example", now: at.addingTimeInterval(ServerObservation.lifetime)
+            ),
             "a quarter of an hour on, it is a memory again rather than a look"
         )
-        #expect(LampSyncRequest.observation(of: "webdav:example") != nil)
-        LampSyncRequest.forgetObservation()
+        #expect(
+            !observation.answers(for: "folder:/Volumes/Other", now: at),
+            "and it never answered for a server it did not look at"
+        )
+    }
+
+    /// The Context list is a table over two inputs — what the reader did,
+    /// and what is on disk — and nothing else. Every row state, enumerated.
+    @Test func everyRowComesFromWhatWasDoneAndWhatIsHere() {
+        typealias Entry = WorkspaceSourceOffload.DiskEntry
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [
+                Entry(name: "here.pdf", isDirectory: false, byteCount: 10),
+                Entry(name: "empty", isDirectory: true, byteCount: nil),
+                Entry(name: "notes", isDirectory: true, byteCount: nil),
+                // An act on a file that is here says nothing: the file is.
+                Entry(name: "back again.pdf", isDirectory: false, byteCount: 20),
+            ],
+            notHere: [
+                "away.pdf": .offloaded,
+                "coming.pdf": .wanted,
+                "notes/inside.pdf": .offloaded,
+            ]
+        )
+        #expect(rows == [
+            SourceRow(relativePath: "away.pdf", state: .onTheServer),
+            SourceRow(relativePath: "back again.pdf", state: .here, byteCount: 20),
+            SourceRow(relativePath: "coming.pdf", state: .comingBack),
+            SourceRow(relativePath: "empty", state: .folder(holdsSourcesNotHere: false)),
+            SourceRow(relativePath: "here.pdf", state: .here, byteCount: 10),
+            SourceRow(relativePath: "notes", state: .folder(holdsSourcesNotHere: true)),
+            SourceRow(relativePath: "notes/inside.pdf", state: .onTheServer),
+        ])
+        #expect(
+            rows.filter(\.removesWhatIsNotHere).map(\.relativePath)
+                == ["away.pdf", "coming.pdf", "notes", "notes/inside.pdf"],
+            """
+            Remove asks first exactly where it would delete something with no \
+            copy on this Mac — including a folder that looks empty but holds \
+            sources only on the server.
+            """
+        )
+    }
+
+    /// A name macOS hands back decomposed is the same source as the ledger's
+    /// composed key, not a second row.
+    @Test func adecomposedNameIsOneRow() {
+        let composed = "Grégoire.pdf"
+        let decomposed = composed.decomposedStringWithCanonicalMapping
+        // Equal as Swift strings, which compare by canonical equivalence —
+        // but not as the bytes a file system or a server path holds.
+        #expect(Array(composed.unicodeScalars) != Array(decomposed.unicodeScalars))
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: decomposed, isDirectory: false, byteCount: 1)],
+            notHere: [composed: .offloaded]
+        )
+        #expect(rows.count == 1, "drawn once, as itself, not again as “On the server”")
+        #expect(rows.first?.state == .here)
+    }
+
+    /// One act per path, by construction, and each verb is an assignment.
+    @Test func eachSourceHoldsOneActAndEachVerbSetsIt() {
+        let key = WorkspaceFileLedger.contextKey("history.pdf")
+        var ledger = WorkspaceFileLedger()
+        ledger.synced = [key: 7]
+
+        let baseline = ledger.noteOffloaded(key)
+        #expect(baseline == 7)
+        #expect(ledger.acts[key] == .offloaded)
+        #expect(ledger.synced?[key] == nil)
+
+        ledger.noteWanted(key)
+        #expect(ledger.acts[key] == .wanted, "asking back replaces the offload; it cannot be both")
+
+        ledger.forgetAct(key, restoring: baseline)
+        #expect(ledger.acts[key] == nil)
+        #expect(ledger.synced?[key] == 7, "an attempt that did not go through leaves nothing behind")
+
+        ledger.noteWanted(key)
+        ledger.recordDeletion(of: key)
+        #expect(ledger.acts[key] == nil, "a deleted source is neither on the server nor on its way")
+
+        ledger.noteOffloaded(key)
+        ledger.noteChanges(present: [key: 1])
+        #expect(ledger.acts[key] == nil, "a file here answers whatever was done to its path")
     }
 
     @Test func theSettingIsThisMacsOwn() {
@@ -258,6 +340,20 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
+    /// Records `names` as having been here since long ago: synced by an
+    /// earlier pass, and present since the epoch.
+    private static func settle(_ names: [String], in workspace: URL) async throws {
+        var ledger = await WorkspaceFileLedger.load(in: workspace)
+        var synced = ledger.synced ?? [:]
+        for name in names {
+            let key = WorkspaceFileLedger.contextKey(name)
+            synced[key] = 0
+            ledger.presentSince[key] = 0
+        }
+        ledger.synced = synced
+        try await ledger.save(in: workspace)
+    }
+
     /// A workspace holding one recorded source, gathered against a given
     /// listing. `seen` is the revision the pass's listing showed for that
     /// source, or nil for a listing that did not show it at all.
@@ -277,11 +373,19 @@ struct WorkspaceSourceOffloadGatheringTests {
         records.confirmRecorded([path: recorded], in: source)
         try records.save(toLibraryAt: fixture.library)
 
+        // Present for a long time, as the sources the sweep is for are: with
+        // no history a source counts as new here, is never a candidate, and
+        // every "is not offloaded" below would pass for the wrong reason.
+        try await Self.settle(["big.pdf"], in: fixture.workspace)
+
         let workspaces = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [writingID: Date()],
-            source: source,
-            seen: seen.map { [path: $0] } ?? [:]
+            observation: ServerObservation(
+                source: source,
+                members: [path],
+                revisions: seen.map { [path: $0] } ?? [:]
+            )
         )
         return workspaces[0]
     }
@@ -358,7 +462,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         // What an offload does: note it in the ledger, which lands inside the
         // workspace under `.lamp/`.
         var ledger = await WorkspaceFileLedger.load(in: fixture.workspace)
-        await ledger.recordOffload(of: WorkspaceFileLedger.contextKey("big.pdf"))
+        await ledger.noteOffloaded(WorkspaceFileLedger.contextKey("big.pdf"))
         try await ledger.save(in: fixture.workspace)
 
         let after = await WorkspaceSourceOffload.lastActivity(
@@ -459,6 +563,61 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
+    /// A source that has just arrived is left alone, however it came.
+    ///
+    /// None of the writing's activity clocks moves when a source is attached
+    /// — no draft is saved, nothing is said, no document changes. So a PDF
+    /// attached to a six-month-old writing, in preparation for working on
+    /// it, was uploaded on the next pass, listed on the one after, and
+    /// offloaded by the sweep after that. No review round found it; the
+    /// grace moving onto arrival closed it, which is how the rule was known
+    /// to be the right one.
+    @Test func asourceAttachedToAnOldWritingIsNotTakenStraightBack() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try Self.write("%PDF", to: fixture.context.appendingPathComponent("old.pdf"), modified: Date())
+        try Self.write("%PDF", to: fixture.context.appendingPathComponent("new.pdf"), modified: Date())
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var ledger = await WorkspaceFileLedger.load(in: fixture.workspace)
+        ledger.synced = [
+            WorkspaceFileLedger.contextKey("old.pdf"): 0,
+            WorkspaceFileLedger.contextKey("new.pdf"): 0,
+        ]
+        ledger.presentSince[WorkspaceFileLedger.contextKey("old.pdf")] = 0
+        // Attached yesterday.
+        ledger.presentSince[WorkspaceFileLedger.contextKey("new.pdf")] =
+            WorkspaceFileLedger.milliseconds(now.addingTimeInterval(-24 * 60 * 60))
+        try await ledger.save(in: fixture.workspace)
+
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [Self.writingID: Date(timeIntervalSince1970: 0)],
+            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:]),
+            now: now
+        )
+        #expect(
+            workspaces.first?.sources == ["old.pdf"],
+            "the one here for years is a candidate; the one attached yesterday is not"
+        )
+    }
+
+    /// A source not yet seen by any pass is new here too: it has landed, and
+    /// the gather that would stamp when has not run.
+    @Test func asourceNoPassHasRecordedIsNewHere() async throws {
+        let ledger = WorkspaceFileLedger()
+        #expect(
+            ledger.isNewHere(
+                WorkspaceFileLedger.contextKey("just landed.pdf"),
+                now: Date(), grace: WorkspaceSourceOffload.arrivalGrace
+            ),
+            """
+            Otherwise the sweep straight after the pass that installed a \
+            download could take the file that pass had just brought.
+            """
+        )
+    }
+
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
         let fixture = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: fixture.library) }
@@ -466,10 +625,11 @@ struct WorkspaceSourceOffloadGatheringTests {
             "%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date()
         )
 
+        try await Self.settle(["big.pdf"], in: fixture.workspace)
         let known = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [Self.writingID: Date()],
-            source: "webdav:example", seen: [:]
+            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
         )
         #expect(known.count == 1)
         #expect(known.first?.sources == ["big.pdf"])
@@ -481,7 +641,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let orphaned = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: ["personal-devotionals:SOMETHING-ELSE": Date()],
-            source: "webdav:example", seen: [:]
+            observation: ServerObservation(source: "webdav:example", members: [], revisions: [:])
         )
         #expect(
             orphaned.isEmpty,

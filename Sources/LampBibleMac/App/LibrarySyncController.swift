@@ -224,31 +224,28 @@ final class LibrarySyncController: ObservableObject {
         // measure from, once the server has had time to settle.
         lastSeenBundleRevision = nil
         lastPassFinishedAt = Date()
+        lastObservation = finished ? pendingObservation : nil
+        pendingObservation = nil
         if finished {
             await reconcileOffloadsWithTheServer(library: library)
             await offloadInactiveSources(library: library)
-        } else {
-            lastSeenUnlisted = [:]
-            lastSeenMembers = nil
-            LampSyncRequest.forgetObservation()
+        }
+        // An ask made while this pass ran — a Download pressed after the
+        // gather had already looked — is answered now rather than left for a
+        // poll that only the reader window runs.
+        if finished, LampSyncRequest.takePending() {
+            return await sync(library: library)
         }
         return finished
     }
 
-    /// Every path the last gather's manifest counted as a member. Empty until
-    /// a pass has read one. Membership is what the server says it holds; a
-    /// folder listing that failed is not a deletion.
-    /// nil where no manifest has been read — which is not the same as a
-    /// manifest that holds nothing, and must not be taken for one: a pass
-    /// that never got a manifest would otherwise look like a server that has
-    /// dropped every source.
-    private var lastSeenMembers: Set<String>?
-
-    /// What the last gather's listing of the unlisted-kind folders said, by
-    /// member path and revision. Empty until a pass has taken one, and
-    /// emptied when a pass does not finish: a sweep must act on a look the
-    /// server actually answered, not on the one before last.
-    private var lastSeenUnlisted: [String: String] = [:]
+    /// What the last **finished** pass saw of the server. Nil until one has,
+    /// and nil again after one that did not finish: what runs after a pass
+    /// must act on a look the server answered, not on the one before last.
+    private var lastObservation: ServerObservation?
+    /// What the pass now running saw at its gather, promoted to
+    /// `lastObservation` only if the pass finishes.
+    private var pendingObservation: ServerObservation?
 
     /// When this Mac last looked for sources to put back on the server.
     private var lastOffloadSweepAt = Date.distantPast
@@ -272,18 +269,19 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
-    /// What the last pass saw, if it was looking at the server this Mac is
-    /// configured for **now** and looked recently enough to answer for a
+    /// What the last finished pass saw, if it was looking at the server this
+    /// Mac is configured for **now**, and recently enough to answer for a
     /// button press.
     ///
     /// Turning sync off, or changing folders, makes the last look worthless
     /// however recent it is: Offload would delete against one server while
     /// Download fetched from another.
-    func offloadObservation() -> (source: String, revisions: [String: String])? {
+    func offloadObservation(now: Date = Date()) -> ServerObservation? {
         guard let source = currentSource,
-              let revisions = LampSyncRequest.observation(of: source)
+              let observation = lastObservation,
+              observation.answers(for: source, now: now)
         else { return nil }
-        return (source, revisions)
+        return observation
     }
 
     /// Forgets this Mac's offloads of sources the server no longer holds.
@@ -294,8 +292,10 @@ final class LibrarySyncController: ObservableObject {
     /// would survive and the pane would keep offering Download for something
     /// that is gone.
     private func reconcileOffloadsWithTheServer(library: LampLibrary) async {
-        guard let members = lastSeenMembers else { return }
-        let forgotten = await LampWorkspaceSync.forgetOffloadsNoLongerOnTheServer(
+        // Unread is not empty: a pass that never got a manifest must not look
+        // like a server that has dropped every source.
+        guard let members = lastObservation?.members else { return }
+        let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
             inLibraryAt: library.rootURL, members: members
         )
         if !forgotten.isEmpty {
@@ -319,7 +319,7 @@ final class LibrarySyncController: ObservableObject {
         guard after.days != nil else { return 0 }
         let now = Date()
         guard now.timeIntervalSince(lastOffloadSweepAt) > Self.offloadSweepInterval,
-              let source = currentSource
+              let observation = offloadObservation(now: now)
         else { return 0 }
         lastOffloadSweepAt = now
 
@@ -333,11 +333,8 @@ final class LibrarySyncController: ObservableObject {
         }
         // Read on this actor, where the editors register themselves.
         let held = OpenWritingEditors.writingIDs
-        guard let seen = LampSyncRequest.observation(of: source),
-              !seen.isEmpty
-        else { return 0 }
         let workspaces = await WorkspaceSourceOffload.workspaces(
-            inLibraryAt: libraryRoot, writings: writings, source: source, seen: seen
+            inLibraryAt: libraryRoot, writings: writings, observation: observation, now: now
         )
         let candidates = WorkspaceSourceOffload.offloadable(
             from: workspaces, after: after, heldBy: held, now: now
@@ -361,7 +358,7 @@ final class LibrarySyncController: ObservableObject {
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
-                    libraryRootURL: libraryRoot, source: source, seen: seen,
+                    libraryRootURL: libraryRoot, observation: observation,
                     // Asked again before each file goes, not once before the
                     // batch: hashing a workspace's sources takes long enough
                     // for a reader to open the writing in the middle of it.
@@ -1663,23 +1660,19 @@ extension LibrarySyncController {
                 .map(\.path),
             from: store
         )
-        // Kept for the source-offload sweep, which runs after this pass and
-        // has no other way to know the server still holds a source. This is
-        // the only look any pass takes at those folders; a record's
-        // `installedRevision` is a memory of one upload and is never
-        // refreshed (`decisions/0021`).
-        lastSeenUnlisted = unlisted
-        lastSeenMembers = Set(manifest.members.map(\.path))
-        // Tied to the server it came from. A folder provider's revisions are
-        // content digests, so an old folder's listing could otherwise match a
-        // record kept for a different folder and authorise an offload the new
-        // one knows nothing about.
-        // The source this gather's store was built from, not whatever the
-        // settings say now: a provider changed while the listing was in
-        // flight would otherwise label the old folder's answers with the new
-        // folder's name, and two folders that once held the same bytes have
-        // matching digests.
-        LampSyncRequest.noteObservation(source: source, revisions: unlisted)
+        // The one look any pass takes at those folders, kept for what runs
+        // after it: a record's `installedRevision` is a memory of one upload
+        // and is never refreshed (`decisions/0021`). Labelled with the
+        // source this gather's store was built from, not whatever the
+        // settings say by the time anyone reads it — two folders that once
+        // held the same bytes have matching digests, so a mislabelled
+        // listing is enough to authorise deleting a copy the new server
+        // never had.
+        pendingObservation = ServerObservation(
+            source: source,
+            members: Set(manifest.members.map(\.path)),
+            revisions: unlisted
+        )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
     }
