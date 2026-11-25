@@ -752,36 +752,47 @@ public enum DevotionalAgentRevisionStore {
         // `removingReplaced` still prefers the originals whenever all of them
         // are present, and the un-retirement below is what gives it the
         // chance to.
-        let retiring = stored.filter { !keptIDs.contains($0.revision.id) }
-
-        // **Un-retirement.** A record that knows its turn, being dropped
-        // under an untagged merge: that merge is what `removingReplaced`
-        // would demote in its favour if the originals it covers were all
-        // here, and some of them are only missing because an earlier pass
-        // retired them. Those are taken off the list, so the next pass
-        // fetches them and the demotion gets its chance —
-        // `0017`'s named remedy for the one case it left open.
+        // **Un-retirement, and what must stay with it.** A record that knows
+        // its turn, being dropped under an untagged merge: that merge is what
+        // `removingReplaced` would demote in its favour if the originals it
+        // covers were all here, and some are missing only because an earlier
+        // pass retired them. Those come off the list.
+        //
+        // And the tagged record itself is **not** retired. Freeing the
+        // originals alone was useless: the demotion needs a holder that knows
+        // a turn, so retiring the very record that supplies it meant the next
+        // pass got the originals, still could not demote, deleted and retired
+        // them again — and with two such records arriving on separate passes
+        // the downloads alternate for ever. A reviewer found that; it is the
+        // whole reason this is one step and not two.
         //
         // This is not the demotion exception coming back. That guessed, at
         // retirement time, about a file whose existence it could not know;
         // this acts on an *arrival*, on files the list itself proves were
-        // published from here. And the failure mode is benign: if the server
-        // no longer has one, nothing is listed and nothing is fetched, so
-        // there is no loop — at worst one download that settles it.
+        // published from here. Benign when it cannot help: a server that no
+        // longer has one lists nothing, so nothing is fetched and nothing
+        // loops.
         let untaggedMerges = compacted.filter {
             keptIDs.contains($0.id) && $0.turnID == nil && $0.kind == .agentEdit
                 && $0.replacedRevisionIDs?.isEmpty == false
         }
+        var wantedBack: Set<UUID> = []
+        var keepFetchable: Set<UUID> = []
         if !untaggedMerges.isEmpty {
-            var wantedBack: Set<UUID> = []
-            for entry in retiring where entry.revision.turnID != nil {
+            for entry in stored
+            where !keptIDs.contains(entry.revision.id) && entry.revision.turnID != nil {
                 for merge in untaggedMerges
                 where entry.revision.coveredRevisionIDs.isSubset(of: merge.coveredRevisionIDs) {
                     wantedBack.formUnion(merge.coveredRevisionIDs)
+                    keepFetchable.insert(entry.revision.id)
                 }
             }
-            if !wantedBack.isEmpty { try? unretire(wantedBack, in: workspace) }
         }
+
+        let retiring = stored.filter {
+            !keptIDs.contains($0.revision.id) && !keepFetchable.contains($0.revision.id)
+        }
+        if !wantedBack.isEmpty { try? unretire(wantedBack, in: workspace) }
 
         // Best effort, deliberately. `prepareLibraryForSync` compacts every
         // workspace before importing anything, so a throw here would stop
@@ -978,11 +989,29 @@ public enum DevotionalAgentRevisionStore {
     ///
     /// Advisory like everything else here: a failure leaves the entries on
     /// the list, which is where they already were.
+    /// `unretire`, for the tests that hold its two edge cases: a name in
+    /// another case still suppressing a wanted revision, and a log that
+    /// cannot be read being left alone rather than truncated.
+    static func unretireForTesting(_ ids: Set<UUID>, in workspace: URL) throws {
+        try unretire(ids, in: workspace)
+    }
+
     private static func unretire(_ ids: Set<UUID>, in workspace: URL) throws {
         guard !ids.isEmpty, let url = retiredRevisionsURL(in: workspace),
               isAplainFile(url)
         else { return }
-        let kept = retiredRevisions(in: workspace).filter { !ids.contains($0.id) }
+        // A read that *failed* is not an empty list. Rewriting on a failed
+        // read replaced the whole log with nothing and sent the workspace's
+        // every compacted file down again — advisory means leaving it alone,
+        // never truncating it.
+        guard (try? Data(contentsOf: url)) != nil else { return }
+        let all = retiredRevisions(in: workspace)
+        // By folded name as well as by id. A different entry carrying the
+        // same published name, in another case or normalisation, would keep
+        // that name in `claimableRetiredNames` and go on suppressing the very
+        // file this is trying to free.
+        let freedNames = Set(all.lazy.filter { ids.contains($0.id) }.map { foldedName($0.publishedName) })
+        let kept = all.filter { !ids.contains($0.id) && !freedNames.contains(foldedName($0.publishedName)) }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let body = kept
             .map { entry in

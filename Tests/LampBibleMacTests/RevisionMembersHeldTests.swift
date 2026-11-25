@@ -219,6 +219,74 @@ struct RevisionMembersHeldTests {
         let retired = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
         #expect(retired.isDisjoint(with: [a, b, c]), "the demotion's originals are fetchable again")
         #expect(retired.contains(unrelated), "and nothing else was disturbed")
+
+        // And the tagged record itself is not retired. Freeing the originals
+        // alone is useless — the demotion needs a holder that knows a turn,
+        // so retiring the record that supplies it means the next pass fetches
+        // the originals, still cannot demote, and retires them again.
+        #expect(
+            !retired.contains(tagged.id),
+            "the holder the demotion needs stays fetchable too"
+        )
+    }
+
+    /// An entry carrying the same published name in another case does not go
+    /// on suppressing a revision the demotion wants back.
+    @Test func freesEveryRetirementUnderAwantedName() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+        // Some readable history, or `claimableRetiredNames` answers nothing
+        // whatever the list says and the check is vacuous.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let wanted = UUID(), twin = UUID()
+        let name = "1600000000000-\(wanted.uuidString).json"
+        let list = metadata.appendingPathComponent("retired-revisions.json")
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((
+            existing
+                + "\(wanted.uuidString) \(name);\n"
+                + "\(twin.uuidString) \(name.lowercased());\n"
+        ).utf8).write(to: list)
+
+        try DevotionalAgentRevisionStore.unretireForTesting([wanted], in: workspace)
+
+        let names = DevotionalAgentRevisionStore.claimableRetiredNames(in: workspace)
+        #expect(
+            !names.contains(DevotionalAgentRevisionStore.foldedName(name)),
+            "no spelling of that name is left suppressing it"
+        )
+    }
+
+    /// A log that cannot be read is left exactly as it is, never truncated.
+    @Test func leavesAnunreadableLogAlone() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+        let list = metadata.appendingPathComponent("retired-revisions.json")
+        let kept = UUID()
+        try Data("\(kept.uuidString) a.json;\n".utf8).write(to: list)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: list.path)
+        defer { try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o644], ofItemAtPath: list.path
+        ) }
+
+        try DevotionalAgentRevisionStore.unretireForTesting([UUID()], in: workspace)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644], ofItemAtPath: list.path
+        )
+        #expect(
+            DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id) == [kept],
+            "the log survived a pass that could not read it"
+        )
     }
 
     /// Two missing members whose names fold alike are both left alone.
