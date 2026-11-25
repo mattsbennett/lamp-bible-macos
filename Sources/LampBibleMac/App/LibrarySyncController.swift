@@ -1481,20 +1481,26 @@ extension LibrarySyncController {
         // pass fetched a file it had fetched before. The phone did it to
         // every reading plan for months without a word anywhere.
         // (`LampSyncUnclaimedInstalls`.)
+        //
+        // Through `Self.log` and not `print`, for the reason the logger's own
+        // comment gives: an installed app launched from Finder has nowhere
+        // for stdout to go, so these two reports — the only warning anything
+        // gives for this fault — reached nobody. Two days of the unified log
+        // held not one of them while a library was fetching 43 revision
+        // members again on every pass.
         if !outcome.fetchedAgain.isEmpty {
-            print(
-                "[Sync] fetched again, so something here holds these without saying so: "
-                    + outcome.fetchedAgain.sorted().joined(separator: ", ")
+            let paths = outcome.fetchedAgain.sorted().joined(separator: ", ")
+            Self.log.warning(
+                "Fetched again, so something here holds these without saying so: \(paths, privacy: .public)"
             )
         }
         // The same fault from the other end, and the end somebody notices:
         // a thing deleted on another device that this one will not delete,
         // because as far as the plan can tell it has nothing to delete.
         if !outcome.deletionsNotCarriedOut.isEmpty {
-            print(
-                "[Sync] deleted elsewhere but not here, so something here holds these "
-                    + "without saying so: "
-                    + outcome.deletionsNotCarriedOut.sorted().joined(separator: ", ")
+            let paths = outcome.deletionsNotCarriedOut.sorted().joined(separator: ", ")
+            Self.log.warning(
+                "Deleted elsewhere but not here, so something here holds these without saying so: \(paths, privacy: .public)"
             )
         }
     }
