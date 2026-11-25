@@ -1195,6 +1195,11 @@ struct DevotionalEditorView: View {
                 // slide studio's inspector does.
                 .background(Color.lampPaneGround)
                 .accessibilityHidden(!usesSidePane)
+                // Closed, it is still in the tree at no width, and clipping
+                // hides only what it draws: its content went on taking the
+                // clicks meant for the writing's trailing edge, so the tab
+                // bar's workspace buttons did nothing with both panes shut.
+                .allowsHitTesting(usesSidePane)
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
             // The side pane's flags: `showsDetails` is kept in defaults, so
