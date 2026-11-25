@@ -818,6 +818,78 @@ struct WorkspaceSourceOffloadGatheringTests {
         }
     }
 
+    /// A weak validator vouches for nothing: it promises the same meaning,
+    /// not the same bytes, so Download might not give back the copy that was
+    /// deleted.
+    @Test func aweakValidatorVouchesForNothing() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try Self.write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: "webdav:example", digest: "d", revision: "W/\"r1\"")
+        records.confirmRecorded([path: "W/\"r1\""], in: "webdav:example")
+        try records.save(toLibraryAt: fixture.library)
+        try await Self.settle(["big.pdf"], in: fixture.workspace)
+
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [(Self.writingID, Date())],
+            observation: ServerObservation(
+                source: "webdav:example", members: [path], revisions: [path: "W/\"r1\""]
+            )
+        )
+        #expect(workspaces.first?.onTheServer.isEmpty == true)
+    }
+
+    /// After a change of account at the same address, a record made as the
+    /// old account is no proof, even at the same path and tag; once the new
+    /// account records the path again, it is.
+    /// A request to offload a file goes when the file does: a file attached
+    /// at the same path later is not the one the reader asked about.
+    @Test func arequestToOffloadGoesWithItsFile() {
+        let key = WorkspaceFileLedger.contextKey("big.pdf")
+        var ledger = WorkspaceFileLedger()
+        ledger.noteChanges(present: [key: 1])
+        ledger.noteLeaving(key)
+        ledger.noteChanges(present: [key: 1])
+        #expect(ledger.contextPaths(withAct: .leaving) == ["big.pdf"])
+
+        ledger.noteChanges(present: [:])
+        ledger.noteChanges(present: [key: 2])
+        #expect(ledger.contextPaths(withAct: .leaving).isEmpty)
+    }
+
+    @Test func arecordMadeAsAnotherAccountIsNoProof() async throws {
+        let source = "webdav:example"
+        var records = LampSyncFileRecords()
+        records.recordUpload("a.pdf", in: source, digest: "d", revision: "\"1\"")
+        records.confirmRecorded(["a.pdf": "\"1\""], in: source)
+        var history = SyncAccountHistory()
+
+        #expect(history.passStarts(at: source, as: "anna", records: records).isEmpty)
+        #expect(history.passStarts(at: source, as: "anna", records: records).isEmpty)
+        let inherited = history.passStarts(at: source, as: "ben", records: records)
+        #expect(inherited == ["a.pdf": "\"1\""])
+        let observation = ServerObservation(
+            source: source, account: "ben", members: ["a.pdf"],
+            revisions: ["a.pdf": "\"1\""], recordedAsAnotherAccount: inherited
+        )
+        #expect(!observation.shows("a.pdf", atRevisionOf: records))
+        #expect(ServerObservation(
+            source: source, account: "ben", members: ["a.pdf"], revisions: ["a.pdf": "\"1\""]
+        ).shows("a.pdf", atRevisionOf: records))
+
+        // Uploaded again as ben: a revision of its own, and proof again.
+        records.recordUpload("a.pdf", in: source, digest: "d2", revision: "\"2\"")
+        records.confirmRecorded(["a.pdf": "\"2\""], in: source)
+        #expect(history.passStarts(at: source, as: "ben", records: records).isEmpty)
+        // Back to anna: ben's records are now the other account's.
+        #expect(history.passStarts(at: source, as: "anna", records: records) == ["a.pdf": "\"2\""])
+    }
+
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
         let fixture = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: fixture.library) }

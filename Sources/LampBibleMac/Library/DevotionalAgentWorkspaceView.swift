@@ -2105,8 +2105,13 @@ struct DevotionalAgentWorkspaceView: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                // With sync off there is no pass to bring it, and a request
+                // recorded now would sit promising one that never comes.
+                .disabled(syncController.provider == .off)
                 .help(
-                    file.isAwaited
+                    syncController.provider == .off
+                        ? "Turn sync on to bring this source back"
+                        : file.isAwaited
                         ? "Ask for this source again"
                         : "Bring this source back to this Mac"
                 )
@@ -2129,7 +2134,12 @@ struct DevotionalAgentWorkspaceView: View {
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .help("Free the space here after the next sync, keeping this source on the server")
+                    .disabled(syncController.provider == .off)
+                    .help(
+                        syncController.provider == .off
+                            ? "Turn sync on to put sources back on the server"
+                            : "Free the space here after the next sync, keeping this source on the server"
+                    )
                 }
             }
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {

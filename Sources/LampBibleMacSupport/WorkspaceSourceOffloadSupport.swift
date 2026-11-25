@@ -350,6 +350,11 @@ public struct ServerObservation: Equatable, Sendable {
     public let members: Set<String>
     /// What the listing of each source's folder said its revision was.
     public let revisions: [String: String]
+    /// Revisions this Mac recorded at this address while signed in as a
+    /// different account, and has not recorded again since. A listing that
+    /// matches one of these proves nothing: the other account's file and
+    /// this one's can share a path and a tag (`SyncAccountHistory`).
+    public let recordedAsAnotherAccount: [String: String]
     public let at: Date
 
     /// How long a look at the server answers for anything. A pass runs every
@@ -361,12 +366,14 @@ public struct ServerObservation: Equatable, Sendable {
 
     public init(
         source: String, account: String = "",
-        members: Set<String>, revisions: [String: String], at: Date = Date()
+        members: Set<String>, revisions: [String: String],
+        recordedAsAnotherAccount: [String: String] = [:], at: Date = Date()
     ) {
         self.source = source
         self.account = account
         self.members = members
         self.revisions = revisions
+        self.recordedAsAnotherAccount = recordedAsAnotherAccount
         self.at = at
     }
 
@@ -400,7 +407,15 @@ public struct ServerObservation: Equatable, Sendable {
               let record = records.record(path, in: source),
               record.pendingRevision == nil,
               let installed = record.installedRevision,
-              let listed = revisions[path]
+              let listed = revisions[path],
+              // Strong validators only. A weak one (`W/`) promises the same
+              // meaning, not the same bytes, and the comparison below would
+              // strip its prefix and match — so an unchanged weak tag could
+              // vouch for a copy that Download would not give back byte for
+              // byte. Every revision on the owner's server is strong.
+              !listed.hasPrefix("W/"), !installed.hasPrefix("W/"),
+              // Not a record made as another account at this address.
+              recordedAsAnotherAccount[path] != installed
         else { return false }
         return LampSyncConditionalWrite.namesSameRevision(listed, installed)
     }
@@ -628,5 +643,50 @@ public struct FolderIdentity: Equatable, Sendable {
         guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
         device = Int64(info.st_dev)
         inode = UInt64(info.st_ino)
+    }
+}
+
+/// Which account this Mac's records at each address were made as.
+///
+/// The records name a WebDAV store by its address alone, and a different
+/// account at the same address can be a different set of files — a home
+/// folder, say. Change the username, and a record made as the old account
+/// can meet a listing from the new one at the same path and the same tag:
+/// a server that numbers each file's versions from one does exactly that.
+/// The digest would then vouch for bytes Download would not give back. So
+/// on a change of account, what was recorded until then stops counting as
+/// proof for an offload, path by path, until the new account's own upload
+/// or download records it again.
+///
+/// An address seen for the first time takes the account it is seen with:
+/// records made before this was kept are taken as that account's.
+public struct SyncAccountHistory: Codable, Equatable, Sendable {
+    /// The account each source's records were last made as.
+    public var accounts: [String: String] = [:]
+    /// Per source, the revisions recorded as another account.
+    public var recordedAsAnotherAccount: [String: [String: String]] = [:]
+
+    public init() {}
+
+    /// A pass is starting at `source` as `account`. Returns the revisions
+    /// recorded there as another account that the records still hold.
+    public mutating func passStarts(
+        at source: String, as account: String, records: LampSyncFileRecords
+    ) -> [String: String] {
+        if let previous = accounts[source], previous != account {
+            // Every record, not only the layout's listed kinds: a source
+            // is a context file, which `listedRevisions` leaves out.
+            let held = (records.sources[source]?.files ?? [:])
+                .compactMapValues(\.effectiveRevision)
+            recordedAsAnotherAccount[source, default: [:]].merge(held) { earlier, _ in earlier }
+        }
+        accounts[source] = account
+        // A record made again since — by an upload or a download as this
+        // account — carries a revision of its own and is proof again.
+        let kept = (recordedAsAnotherAccount[source] ?? [:]).filter { path, revision in
+            records.record(path, in: source)?.installedRevision == revision
+        }
+        recordedAsAnotherAccount[source] = kept.isEmpty ? nil : kept
+        return kept
     }
 }

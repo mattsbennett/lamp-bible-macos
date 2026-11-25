@@ -1137,7 +1137,14 @@ private struct ReaderSettingsView: View {
                                         )
                                     }
                                 }
-                                .disabled(syncController.isSyncing)
+                                // Off, there is no pass to bring them; turning
+                                // sync back on to the same server is allowed.
+                                .disabled(syncController.isSyncing || syncController.provider == .off)
+                                .help(
+                                    syncController.provider == .off
+                                        ? "Turn sync back on to download them"
+                                        : "Bring every source back to this Mac"
+                                )
                             }
                         }
                         if syncController.destinationIsLocked,

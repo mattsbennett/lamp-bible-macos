@@ -1755,8 +1755,19 @@ struct WorkspaceFileLedger: Codable, Equatable {
         return ledger
     }
 
+    struct UnreadableLedger: LocalizedError {
+        var errorDescription: String? {
+            "This writing's sync record could not be read, so Lamp left it alone rather than write over it."
+        }
+    }
+
     func save(in workspace: URL) throws {
         let destination = Self.url(in: workspace)
+        // Never over one that is there and will not read: it may hold the
+        // last offload, and the lock on where sync points depends on it
+        // reading as unknown. Every mutation goes through here, so the button
+        // that would have written a fresh ledger over it now fails instead.
+        guard Self.loadIfReadable(in: workspace) != nil else { throw UnreadableLedger() }
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -1826,6 +1837,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
         // unlink never happened, a download that has landed — except a
         // request to offload it, which is about a file that is here.
         for key in present.keys where Self.isContextKey(key) && acts[key] != .leaving {
+            acts[key] = nil
+        }
+        // And a request to offload a file that has since gone goes with it:
+        // a file attached later at that path is another file, which nobody
+        // asked to send away. An offload notes `.offloaded` before it
+        // unlinks, so its own removal never reads as this.
+        for key in synced.keys where present[key] == nil && acts[key] == .leaving {
             acts[key] = nil
         }
         self.synced = present

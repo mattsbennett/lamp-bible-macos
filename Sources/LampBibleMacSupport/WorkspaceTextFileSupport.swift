@@ -444,8 +444,12 @@ public enum WorkspaceContextFileStore {
             .dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
         // Offloaded and wanted alike: neither has a file to be enumerated,
         // and both are the reader's sources.
+        // Only when what is removed is a folder. A file put where a folder of
+        // offloaded sources used to be shares their path prefix and nothing
+        // else, and its row confirms nothing about them.
+        let isFolder = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         let offloadedDescendants = ledger.contextActs().keys
-            .filter { $0 == relative || $0.hasPrefix(relative + "/") }
+            .filter { $0 == relative || (isFolder && $0.hasPrefix(relative + "/")) }
             .map(WorkspaceFileLedger.contextKey)
         let allKeys = Set(keys).union(offloadedDescendants)
         guard !allKeys.isEmpty else { return }
@@ -955,13 +959,15 @@ public enum WorkspaceContextFileStore {
         libraryRootURL: URL,
         fileManager: FileManager = .default
     ) throws {
-        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         let key = WorkspaceFileLedger.contextKey(relativePath)
         // Forgotten, not asked for. Another device deleting a source is not
         // this reader wanting it back, and an ask would leave the pane
-        // showing "Coming back" for something that is never coming.
-        ledger.forgetAct(key)
-        try ledger.save(in: workspaceURL)
+        // showing "Coming back" for something that is never coming. A ledger
+        // that will not read is left alone, and the file still goes.
+        if var ledger = WorkspaceFileLedger.loadIfReadable(in: workspaceURL) {
+            ledger.forgetAct(key)
+            try ledger.save(in: workspaceURL)
+        }
 
         let contextDirectory = try validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager

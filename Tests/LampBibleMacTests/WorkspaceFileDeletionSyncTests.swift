@@ -1325,6 +1325,54 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(queued.lowerBound < cleared.lowerBound)
     }
 
+    /// Removing a file that stands where a folder of offloaded sources used
+    /// to be removes the file, and nothing of the folder's.
+    @Test func removingAfileTakesNoneOfAfoldersOffloadedChildren() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("notes/history.pdf"))
+        try await ledger.save(in: workspaceURL)
+        // A file put where the folder was.
+        try write("a file now", to: workspaceURL.appendingPathComponent("context/notes"), at: 0)
+
+        try await WorkspaceContextFileStore.removeContextItem(
+            at: workspaceURL.appendingPathComponent("context/notes"),
+            from: workspaceURL, libraryRootURL: macs.a
+        )
+
+        let child = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "notes/history.pdf"
+        )
+        #expect(await LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[child] == nil)
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["notes/history.pdf"])
+    }
+
+    /// No mutation writes a fresh ledger over one that will not read: the
+    /// button fails instead, and the file is left for the lock to keep
+    /// reading as unknown.
+    @Test func amutationRefusesToWriteOverAnUnreadableLedger() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let ledgerFile = workspaceURL.appendingPathComponent(".lamp/sync-files.json")
+        try FileManager.default.createDirectory(
+            at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let damaged = Data("not a ledger".utf8)
+        try damaged.write(to: ledgerFile)
+        try write("x", to: workspaceURL.appendingPathComponent("context/other.pdf"), at: 0)
+
+        await #expect(throws: WorkspaceFileLedger.UnreadableLedger.self) {
+            try await WorkspaceContextFileStore.queueOffload(relativePath: "other.pdf", in: workspaceURL)
+        }
+        await #expect(throws: WorkspaceFileLedger.UnreadableLedger.self) {
+            try await WorkspaceContextFileStore.fetchSource(relativePath: "other.pdf", in: workspaceURL)
+        }
+        #expect(try Data(contentsOf: ledgerFile) == damaged)
+    }
+
     /// Remove refuses when the row the reader confirmed is no longer the row
     /// there is: a file turned up and the gather answered the offload, so
     /// what is at the path is not the source the dialog named.

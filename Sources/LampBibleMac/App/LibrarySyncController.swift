@@ -399,6 +399,24 @@ final class LibrarySyncController: ObservableObject {
     private var passGate = false
     /// The account the running pass's store was built with.
     private var accountOfThisPass = ""
+    /// What the records at this pass's address hold from another account.
+    private var recordedAsAnotherAccountThisPass: [String: String] = [:]
+
+    private static let accountHistoryKey = "sync.accountHistory"
+
+    private func noteAccount(_ account: String, at source: String, libraryRoot: URL) -> [String: String] {
+        var history = defaults.data(forKey: Self.accountHistoryKey)
+            .flatMap { try? JSONDecoder().decode(SyncAccountHistory.self, from: $0) }
+            ?? SyncAccountHistory()
+        let inherited = history.passStarts(
+            at: source, as: account,
+            records: LampSyncFileRecords.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        )
+        if let data = try? JSONEncoder().encode(history) {
+            defaults.set(data, forKey: Self.accountHistoryKey)
+        }
+        return inherited
+    }
 
     private func passAndItsAftermath(library: LampLibrary) async -> Bool {
         let finished = await runSyncPass(library: library)
@@ -960,6 +978,7 @@ final class LibrarySyncController: ObservableObject {
         isSyncing = true
         // A folder has no account; a WebDAV pass sets its own below.
         accountOfThisPass = ""
+        recordedAsAnotherAccountThisPass = [:]
         Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -1001,6 +1020,9 @@ final class LibrarySyncController: ObservableObject {
                 // a file it never had.
                 let account = username
                 accountOfThisPass = account
+                recordedAsAnotherAccountThisPass = noteAccount(
+                    account, at: LampSyncFileRecords.webDAVSource(url), libraryRoot: library.rootURL
+                )
                 let credentials = account.isEmpty && storedPassword.isEmpty
                     ? nil : LampWebDAVCredentials(username: account, password: storedPassword)
                 try await sync(
@@ -1518,6 +1540,7 @@ extension LibrarySyncController {
                 account: opened.account,
                 members: Set(written.manifest.members.map(\.path)),
                 revisions: opened.revisions,
+                recordedAsAnotherAccount: opened.recordedAsAnotherAccount,
                 at: opened.at
             )
         }
@@ -2007,7 +2030,8 @@ extension LibrarySyncController {
             source: source,
             account: accountOfThisPass,
             members: Set(manifest.members.map(\.path)),
-            revisions: unlisted
+            revisions: unlisted,
+            recordedAsAnotherAccount: recordedAsAnotherAccountThisPass
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
