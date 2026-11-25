@@ -415,6 +415,17 @@ public enum WorkspaceContextFileStore {
         // Every source about to go, by its published key, taken *before* the
         // removal while the files are still there to enumerate.
         let keys = publishedKeys(under: item, below: contextDirectory, fileManager: fileManager)
+        // Whether it is a folder, asked of the disk before it goes. Asked
+        // after, only a cached answer on the URL could say.
+        var status = stat()
+        let isFolder = lstat(item.path, &status) == 0 && (status.st_mode & S_IFMT) == S_IFDIR
+        // And the ledger, read before anything is touched: one that will not
+        // read cannot name the offloaded sources under a folder, and a save
+        // over it would be refused only after the files were gone and their
+        // removals queued.
+        guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspaceURL) else {
+            throw WorkspaceFileLedger.UnreadableLedger()
+        }
 
         let digests = try regularFileDigests(including: item, fileManager: fileManager)
         try fileManager.removeItem(at: item)
@@ -439,7 +450,6 @@ public enum WorkspaceContextFileStore {
         // folder has to take its offloaded descendants too, or they stay on
         // the server for ever with nothing left here to name them
         // (`decisions/0019`).
-        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         let relative = item.standardizedFileURL.path
             .dropFirst(contextDirectory.standardizedFileURL.path.count + 1)
         // Offloaded and wanted alike: neither has a file to be enumerated,
@@ -447,7 +457,6 @@ public enum WorkspaceContextFileStore {
         // Only when what is removed is a folder. A file put where a folder of
         // offloaded sources used to be shares their path prefix and nothing
         // else, and its row confirms nothing about them.
-        let isFolder = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         let offloadedDescendants = ledger.contextActs().keys
             .filter { $0 == relative || (isFolder && $0.hasPrefix(relative + "/")) }
             .map(WorkspaceFileLedger.contextKey)
@@ -650,7 +659,12 @@ public enum WorkspaceContextFileStore {
     @WritingWorkspaceFiles
     public static func queueOffload(relativePath: String, in workspaceURL: URL) throws {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
-        ledger.noteLeaving(WorkspaceFileLedger.contextKey(relativePath))
+        let file = workspaceURL.appendingPathComponent("context", isDirectory: true)
+            .appendingPathComponent(relativePath)
+        ledger.noteLeaving(
+            WorkspaceFileLedger.contextKey(relativePath),
+            file: (try? LampFileIdentity(regularFileAt: file)).map(WorkspaceFileLedger.place(of:))
+        )
         try ledger.save(in: workspaceURL)
     }
 
@@ -824,6 +838,15 @@ public enum WorkspaceContextFileStore {
                 skipped[verified.relativePath] = .withdrawn
                 continue
             }
+            // And still about this file: the request goes with the file it
+            // was made about, not with its name.
+            let place = WorkspaceFileLedger.place(of: verified.read.identity)
+            if onlyWhileRequested, let chosen = ledger.leavingFile[key], chosen != place {
+                ledger.forgetAct(key)
+                try ledger.save(in: workspaceURL)
+                skipped[verified.relativePath] = .withdrawn
+                continue
+            }
             let baseline = ledger.noteOffloaded(key)
             // Its quarantine goes into the same save as the note, before the
             // file does: the mark is the one thing a download cannot bring
@@ -849,7 +872,7 @@ public enum WorkspaceContextFileStore {
                     // put back here, before anything else can run, rather
                     // than by the caller afterwards — when Keep Here may
                     // since have been pressed and would be undone.
-                    if onlyWhileRequested { ledger.noteLeaving(key) }
+                    if onlyWhileRequested { ledger.noteLeaving(key, file: place) }
                     try? ledger.save(in: workspaceURL)
                     skipped[verified.relativePath] =
                         error is UnlinkRefusal ? .changedSinceUpload : .couldNotRemove

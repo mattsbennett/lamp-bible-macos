@@ -1288,6 +1288,114 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(String(decoding: value, as: UTF8.self) == mark)
     }
 
+    /// A download whose quarantine will not take does not stay here without
+    /// it: the copy goes again, and the source is back on the server with its
+    /// mark still kept.
+    @Test func adownloadWhoseQuarantineWillNotTakeGoesBack() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let a = workspace(macs.a)
+        let context = a.appendingPathComponent("context")
+        let file = context.appendingPathComponent("history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let mark = "0083;6750a1b2;Safari;"
+        _ = Data(mark.utf8).withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+        }
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: a.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        try write("Daniell", to: workspace(macs.b).appendingPathComponent("context/history.pdf"), at: 0)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: a, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a)
+        )
+        #expect(result.offloaded == ["history.pdf"])
+        try await WorkspaceContextFileStore.fetchSource(relativePath: "history.pdf", in: a)
+
+        // Every attribute write refused in this Mac's library, as an ACL
+        // would; removing a file is still allowed.
+        let deny = Process()
+        deny.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        deny.arguments = ["-R", "+a", "everyone deny writeextattr,file_inherit,directory_inherit", macs.a.path]
+        try deny.run()
+        deny.waitUntilExit()
+        #expect(deny.terminationStatus == 0)
+
+        try await macs.sync(from: macs.b, to: macs.a)
+
+        #expect(!FileManager.default.fileExists(atPath: file.path), "not left here unmarked")
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: a) == ["history.pdf"])
+    }
+
+    /// A request to offload is about the file it was made about. One put in
+    /// its place under the same name is not sent away.
+    @Test func arequestGoesWithItsFileNotItsName() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let file = workspaceURL.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        try await WorkspaceContextFileStore.queueOffload(relativePath: "history.pdf", in: workspaceURL)
+        // Deleted in Finder and another dropped in under the name, with the
+        // same bytes, so only which file it is differs.
+        try FileManager.default.removeItem(at: file)
+        try write("Daniell", to: file, at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            onlyWhileRequested: true
+        )
+        #expect(result.offloaded.isEmpty)
+        #expect(result.skipped["history.pdf"] == .withdrawn)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        #expect(await LampWorkspaceSync.leavingSourceNames(in: workspaceURL).isEmpty)
+    }
+
+    /// Remove reads the ledger before it touches anything: one that will not
+    /// read cannot name a folder's offloaded sources, and the save that
+    /// refuses it would come after the files had gone.
+    @Test func removeTouchesNothingOverAnUnreadableLedger() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let file = workspaceURL.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let ledgerFile = workspaceURL.appendingPathComponent(".lamp/sync-files.json")
+        try FileManager.default.createDirectory(
+            at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("not a ledger".utf8).write(to: ledgerFile)
+
+        await #expect(throws: WorkspaceFileLedger.UnreadableLedger.self) {
+            try await WorkspaceContextFileStore.removeContextItem(
+                at: file, from: workspaceURL, libraryRootURL: macs.a
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        #expect(await LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.isEmpty)
+    }
+
     /// A pass never saves a fresh ledger over one it could not read: the file
     /// may hold the last offload, and left as it is, the lock on where sync
     /// points keeps reading it as unknown and holds.

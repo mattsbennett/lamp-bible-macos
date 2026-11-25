@@ -860,6 +860,62 @@ struct WorkspaceSourceOffloadGatheringTests {
         ledger.noteChanges(present: [:])
         ledger.noteChanges(present: [key: 2])
         #expect(ledger.contextPaths(withAct: .leaving).isEmpty)
+
+        // Attached since the last pass, asked about, and gone before the
+        // next: never synced, and still not carried over to a newcomer.
+        let fresh = WorkspaceFileLedger.contextKey("fresh.pdf")
+        ledger.noteLeaving(fresh)
+        ledger.noteChanges(present: [key: 2])
+        ledger.noteChanges(present: [key: 2, fresh: 3])
+        #expect(ledger.contextPaths(withAct: .leaving).isEmpty)
+    }
+
+    /// Each switch marks what the record holds then — not an older mark at
+    /// the path, which the prune would drop along with the newer revision.
+    @Test func eachSwitchMarksWhatTheRecordHoldsThen() {
+        let source = "webdav:example"
+        var records = LampSyncFileRecords()
+        records.recordUpload("a.pdf", in: source, digest: "d", revision: "\"1\"")
+        records.confirmRecorded(["a.pdf": "\"1\""], in: source)
+        var history = SyncAccountHistory()
+        _ = history.passStarts(at: source, as: "anna", records: records)
+        _ = history.passStarts(at: source, as: "ben", records: records)
+        // Ben's pass records its own revision; the next switch comes before
+        // another pass as ben.
+        records.recordUpload("a.pdf", in: source, digest: "d2", revision: "\"2\"")
+        records.confirmRecorded(["a.pdf": "\"2\""], in: source)
+        #expect(history.passStarts(at: source, as: "carl", records: records) == ["a.pdf": "\"2\""])
+    }
+
+    /// Anonymous requests and signed-in ones are different accounts, even
+    /// signed in with no username.
+    @Test func anonymousIsNotAnEmptyUsername() {
+        #expect(SyncAccountHistory.identity(username: "", password: "") == "")
+        #expect(SyncAccountHistory.identity(username: "", password: "secret") != "")
+        #expect(SyncAccountHistory.identity(username: "anna", password: "a")
+            == SyncAccountHistory.identity(username: "anna", password: "b"))
+        #expect(SyncAccountHistory.identity(username: "anna", password: "")
+            != SyncAccountHistory.identity(username: "ben", password: ""))
+    }
+
+    /// The look as a pass leaves the server keeps a listed revision only
+    /// where nobody changed the path's entry while the pass ran.
+    @Test func achangedEntryDropsItsListing() throws {
+        let kept = try LampWritingWorkspaceLayout.contextPath(folder: "w", relativePath: "kept.pdf")
+        let replaced = try LampWritingWorkspaceLayout.contextPath(folder: "w", relativePath: "replaced.pdf")
+        let opening = try LampSyncLibraryManifest()
+            .recordingWrite(kept, revision: "\"k1\"", replacing: nil, at: 1)
+            .recordingWrite(replaced, revision: "\"r1\"", replacing: nil, at: 1)
+        // Another device replaced one after this pass listed it.
+        let closing = try opening.recordingWrite(replaced, revision: "\"r2\"", replacing: "\"r1\"", at: 2)
+        let observation = ServerObservation(
+            source: "webdav:example", members: [kept, replaced],
+            revisions: [kept: "\"k1\"", replaced: "\"r1\""],
+            openingEntries: Dictionary(uniqueKeysWithValues: opening.members.map { ($0.path, $0) })
+        )
+        let closed = observation.closed(by: closing)
+        #expect(closed.revisions == [kept: "\"k1\""])
+        #expect(closed.members == [kept, replaced])
     }
 
     @Test func arecordMadeAsAnotherAccountIsNoProof() async throws {

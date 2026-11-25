@@ -355,6 +355,9 @@ public struct ServerObservation: Equatable, Sendable {
     /// matches one of these proves nothing: the other account's file and
     /// this one's can share a path and a tag (`SyncAccountHistory`).
     public let recordedAsAnotherAccount: [String: String]
+    /// Each member's entry in the manifest the pass opened with, so the
+    /// closing manifest can say which of them changed while it ran.
+    public let openingEntries: [String: LampSyncLibraryManifest.Entry]
     public let at: Date
 
     /// How long a look at the server answers for anything. A pass runs every
@@ -367,14 +370,42 @@ public struct ServerObservation: Equatable, Sendable {
     public init(
         source: String, account: String = "",
         members: Set<String>, revisions: [String: String],
-        recordedAsAnotherAccount: [String: String] = [:], at: Date = Date()
+        recordedAsAnotherAccount: [String: String] = [:],
+        openingEntries: [String: LampSyncLibraryManifest.Entry] = [:],
+        at: Date = Date()
     ) {
+        self.openingEntries = openingEntries
         self.source = source
         self.account = account
         self.members = members
         self.revisions = revisions
         self.recordedAsAnotherAccount = recordedAsAnotherAccount
         self.at = at
+    }
+
+    /// The look as the pass leaves the server: membership from the manifest
+    /// it wrote, and the listing only where that manifest's entry is the
+    /// one the pass opened with.
+    ///
+    /// The listing is taken at the gather. Another device can replace a
+    /// source after that and before the update, and the closing manifest
+    /// then records the new write at the same path; the opening listing
+    /// would still show the old revision, match this Mac's record of the old
+    /// bytes, and vouch for deleting the last copy of them — while Download
+    /// fetched the new ones. An entry that changed at all, by anyone, drops
+    /// its listing: the pass cannot tell which of its writes it saw.
+    public func closed(by written: LampSyncLibraryManifest) -> ServerObservation {
+        ServerObservation(
+            source: source,
+            account: account,
+            members: Set(written.members.map(\.path)),
+            revisions: revisions.filter { path, _ in
+                openingEntries[path] != nil && openingEntries[path] == written.entry(at: path)
+            },
+            recordedAsAnotherAccount: recordedAsAnotherAccount,
+            openingEntries: openingEntries,
+            at: at
+        )
     }
 
     /// Whether this can answer for `source` now: the same server, and
@@ -668,6 +699,15 @@ public struct SyncAccountHistory: Codable, Equatable, Sendable {
 
     public init() {}
 
+    /// Who a WebDAV store is reached as. No username and no password is no
+    /// account at all — the client sends no credentials — and a server can
+    /// answer anonymous requests with a different library from signed-in
+    /// ones, even one signed in with an empty username. So the two never
+    /// share a name.
+    public static func identity(username: String, password: String) -> String {
+        username.isEmpty && password.isEmpty ? "" : "user:" + username
+    }
+
     /// A pass is starting at `source` as `account`. Returns the revisions
     /// recorded there as another account that the records still hold.
     public mutating func passStarts(
@@ -678,7 +718,11 @@ public struct SyncAccountHistory: Codable, Equatable, Sendable {
             // is a context file, which `listedRevisions` leaves out.
             let held = (records.sources[source]?.files ?? [:])
                 .compactMapValues(\.effectiveRevision)
-            recordedAsAnotherAccount[source, default: [:]].merge(held) { earlier, _ in earlier }
+            // What the record holds now is what the last account recorded,
+            // so it replaces any older mark at that path: keeping the older
+            // one would let the prune below drop it, and with it the only
+            // mark on the newer revision.
+            recordedAsAnotherAccount[source, default: [:]].merge(held) { _, current in current }
         }
         accounts[source] = account
         // A record made again since — by an upload or a download as this

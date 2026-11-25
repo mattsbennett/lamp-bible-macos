@@ -860,8 +860,22 @@ public enum LampWorkspaceSync {
             fileLedger.recordSynced(try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             // An offloaded source that has just been downloaded gets back the
-            // quarantine it went away with.
-            fileLedger.restoreQuarantine(inContextOf: workspace)
+            // quarantine it went away with. One whose mark will not take —
+            // an ACL that denies attribute writes, say — does not stay here
+            // without it: the download goes again, and the source is back on
+            // the server, offloaded, with its mark still kept for the next
+            // Download. Left in place, it would sit unmarked, and nothing
+            // makes a later pass import this workspace again to retry.
+            for path in fileLedger.restoreQuarantine(inContextOf: workspace) {
+                try? WorkspaceContextFileStore.removeSyncedContextFile(
+                    at: workspace.appendingPathComponent("context", isDirectory: true)
+                        .appendingPathComponent(path),
+                    libraryRootURL: libraryRoot, fileManager: fileManager
+                )
+                if !LampWorkspaceSync.isHere(path, inContextOf: workspace, fileManager: fileManager) {
+                    _ = fileLedger.noteOffloaded(WorkspaceFileLedger.contextKey(path))
+                }
+            }
             if readableLedger != nil { try fileLedger.save(in: workspace) }
 
             let portableSelection = portableWorkspace.appendingPathComponent("EnabledSkills.json")
@@ -1553,6 +1567,18 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// is cheaper than keeping every downloaded PDF on disk.
     var quarantine: [String: String] = [:]
 
+    /// Which file a request to offload was made about, as its place on disk
+    /// (`device:inode`). A file attached later at the same path — the first
+    /// one deleted in Finder and another dropped in under its name, between
+    /// two passes or before the first — is not the one the reader chose, and
+    /// carrying the request over to it would send away a file nobody asked
+    /// about. Absent for a request from before this was kept.
+    var leavingFile: [String: String] = [:]
+
+    static func place(of identity: LampFileIdentity) -> String {
+        "\(identity.device):\(identity.inode)"
+    }
+
     enum SourceAct: String, Codable, Equatable, Sendable {
         /// The reader asked for this source to go back to the server. Its
         /// file is still here: the offload happens after the next sync
@@ -1596,6 +1622,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         ) ?? [:]
         quarantine = try container.decodeIfPresent(
             [String: String].self, forKey: .quarantine
+        ) ?? [:]
+        leavingFile = try container.decodeIfPresent(
+            [String: String].self, forKey: .leavingFile
         ) ?? [:]
     }
 
@@ -1665,8 +1694,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
 
     /// The reader asked for a source to go back to the server, after the
     /// next sync.
-    mutating func noteLeaving(_ key: String) {
+    mutating func noteLeaving(_ key: String, file: String? = nil) {
         acts[key] = .leaving
+        leavingFile[key] = file
     }
 
     /// Whatever this Mac had done to the source no longer applies: it
@@ -1774,7 +1804,10 @@ struct WorkspaceFileLedger: Codable, Equatable {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: destination, options: .atomic)
+        // A binding outlives nothing but its request.
+        var saved = self
+        saved.leavingFile = leavingFile.filter { acts[$0.key] == .leaving }
+        try encoder.encode(saved).write(to: destination, options: .atomic)
     }
 
     static func portable(in url: URL) -> Portable? {
@@ -1841,9 +1874,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
         // And a request to offload a file that has since gone goes with it:
         // a file attached later at that path is another file, which nobody
-        // asked to send away. An offload notes `.offloaded` before it
-        // unlinks, so its own removal never reads as this.
-        for key in synced.keys where present[key] == nil && acts[key] == .leaving {
+        // asked to send away. Any such request, synced or not — one made
+        // about a file attached since the last pass has no synced entry. An
+        // offload notes `.offloaded` before it unlinks, so its own removal
+        // never reads as this. A file replaced between two passes is caught
+        // by `leavingFile` instead.
+        for (key, act) in acts
+        where act == .leaving && Self.isContextKey(key) && present[Self.normalized(key)] == nil {
             acts[key] = nil
         }
         self.synced = present
@@ -1861,9 +1898,11 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// Puts back the quarantine of every source here that left with one, and
     /// forgets those that went back. One that will not take stays, to be
     /// tried after the next pass.
-    mutating func restoreQuarantine(inContextOf workspace: URL) {
+    /// Returns the sources here whose mark would not take.
+    mutating func restoreQuarantine(inContextOf workspace: URL) -> [String] {
         let context = workspace.appendingPathComponent("context", isDirectory: true)
         let prefix = Self.contextKey("")
+        var refused: [String] = []
         for (key, value) in quarantine where key.hasPrefix(prefix) {
             let path = String(key.dropFirst(prefix.count))
             guard LampWorkspaceSync.isHere(path, inContextOf: workspace) else { continue }
@@ -1883,8 +1922,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
                 setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
             }
             if lifted { chmod(file.path, mode) }
-            if set == 0 { quarantine[key] = nil }
+            if set == 0 { quarantine[key] = nil } else { refused.append(path) }
         }
+        return refused
     }
 
     mutating func recordSynced(_ present: [String: Int64], now: Date = Date()) {

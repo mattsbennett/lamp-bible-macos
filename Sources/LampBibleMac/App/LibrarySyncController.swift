@@ -290,6 +290,18 @@ final class LibrarySyncController: ObservableObject {
     }
 
     func updateWebDAVPassword(_ password: String) -> Bool {
+        // A first password with no username turns anonymous requests into
+        // signed-in ones, and clearing the last one turns them back: another
+        // account, as far as the offloads are concerned. A new password for
+        // the same account is not.
+        let current = SyncSecretStore.password ?? ""
+        guard SyncAccountHistory.identity(username: username, password: password)
+                == SyncAccountHistory.identity(username: username, password: current)
+                || !destinationIsLocked
+        else {
+            sayWhyTheDestinationIsLocked()
+            return false
+        }
         do {
             try SyncSecretStore.setPassword(password)
             errorMessage = nil
@@ -476,6 +488,7 @@ final class LibrarySyncController: ObservableObject {
         let root = library.rootURL
         var offloaded = 0
         var refused: [String] = []
+        var waiting: [String] = []
         var awaitingTheServer = false
         defer {
             // Once per pass, however many sources are waiting: the passes
@@ -504,6 +517,7 @@ final class LibrarySyncController: ObservableObject {
                     }
                     if reason == .notSeenOnTheServer || reason == .notOnTheServer {
                         awaitingTheServer = true
+                        waiting.append(path)
                     }
                     if reason.isLasting {
                         try? await WorkspaceContextFileStore.cancelOffload(
@@ -527,7 +541,16 @@ final class LibrarySyncController: ObservableObject {
             errorMessage = message
             // And where Offload was pressed, not only in Sync settings.
             offloadRefusal = message
+        } else if !waiting.isEmpty, offloadFollowUps == 0 {
+            // The follow-ups are spent and the server still has not shown
+            // the copy this Mac uploaded — a server that never answers with a
+            // strong tag, say. The request stays, for a later pass that can
+            // confirm it; the pane that asked says why nothing has happened.
+            offloadRefusal = waiting.count == 1
+                ? "“\(waiting[0])” is waiting: Lamp hasn't yet seen this copy on the server, so it stays on this Mac until a sync does."
+                : "\(waiting.count) sources are waiting: Lamp hasn't yet seen these copies on the server, so they stay on this Mac until a sync does."
         } else if offloaded > 0 {
+            offloadRefusal = nil
             statusMessage = offloaded == 1
                 ? "1 source put back on the server."
                 : "\(offloaded) sources put back on the server."
@@ -575,7 +598,13 @@ final class LibrarySyncController: ObservableObject {
         guard let source = currentSource,
               let observation = lastObservation,
               observation.answers(
-                  for: source, account: provider == .webDAV ? username : "", now: now
+                  for: source,
+                  account: provider == .webDAV
+                      ? SyncAccountHistory.identity(
+                          username: username, password: SyncSecretStore.password ?? ""
+                      )
+                      : "",
+                  now: now
               )
         else { return nil }
         return observation
@@ -1018,13 +1047,15 @@ final class LibrarySyncController: ObservableObject {
                 // mid-pass labelled the old account's listing with the new
                 // one, and an offload took that as proof the new account held
                 // a file it never had.
-                let account = username
+                let account = SyncAccountHistory.identity(
+                    username: username, password: storedPassword
+                )
                 accountOfThisPass = account
                 recordedAsAnotherAccountThisPass = noteAccount(
                     account, at: LampSyncFileRecords.webDAVSource(url), libraryRoot: library.rootURL
                 )
-                let credentials = account.isEmpty && storedPassword.isEmpty
-                    ? nil : LampWebDAVCredentials(username: account, password: storedPassword)
+                let credentials = account.isEmpty
+                    ? nil : LampWebDAVCredentials(username: username, password: storedPassword)
                 try await sync(
                     library: library,
                     store: LampWebDAVClient(baseURL: url, credentials: credentials),
@@ -1534,15 +1565,10 @@ extension LibrarySyncController {
         // with that deletion in, and reconciling against the opening manifest
         // would leave its source drawn as "On the server". The listing stays
         // the gather's: revisions are what was seen, not what was written.
+        // A listed revision survives only where the entry did not change
+        // while the pass ran (`ServerObservation.closed(by:)`).
         if let written = outcome.written?.bundle, let opened = pendingObservation {
-            pendingObservation = ServerObservation(
-                source: opened.source,
-                account: opened.account,
-                members: Set(written.manifest.members.map(\.path)),
-                revisions: opened.revisions,
-                recordedAsAnotherAccount: opened.recordedAsAnotherAccount,
-                at: opened.at
-            )
+            pendingObservation = opened.closed(by: written.manifest)
         }
         if let written = outcome.written?.bundle,
            let incoming = LampSyncBundleLedgers.bookReading(in: written),
@@ -2031,7 +2057,10 @@ extension LibrarySyncController {
             account: accountOfThisPass,
             members: Set(manifest.members.map(\.path)),
             revisions: unlisted,
-            recordedAsAnotherAccount: recordedAsAnotherAccountThisPass
+            recordedAsAnotherAccount: recordedAsAnotherAccountThisPass,
+            openingEntries: Dictionary(
+                manifest.members.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }
+            )
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
