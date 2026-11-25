@@ -449,14 +449,14 @@ public enum WorkspaceContextFileStore {
             .map(WorkspaceFileLedger.contextKey)
         let allKeys = Set(keys).union(offloadedDescendants)
         guard !allKeys.isEmpty else { return }
-        for key in allKeys { ledger.recordDeletion(of: key) }
-        try ledger.save(in: workspaceURL)
 
-        // And queued for the *server*, which is new: until a source became a
-        // deletable kind its removal travelled only inside the workspace
-        // tree, so every device dropped its copy and the store kept the bytes
-        // for ever. This is what lets the store shrink
-        // (`lamp-bible-core/Documentation/decisions/0019`).
+        // Queued for the *server* first: until a source became a deletable
+        // kind its removal travelled only inside the workspace tree, so every
+        // device dropped its copy and the store kept the bytes for ever
+        // (`lamp-bible-core/Documentation/decisions/0019`). And first, before
+        // the acts are cleared below: the other way round, a crash between the
+        // two would leave an offloaded child gone from the list with nothing
+        // telling the server, and the lock on where sync points free to lift.
         let folder = workspaceURL.lastPathComponent
         let members = allKeys.compactMap { key -> String? in
             let relative = String(key.dropFirst(WorkspaceFileLedger.contextKey("").count))
@@ -464,13 +464,17 @@ public enum WorkspaceContextFileStore {
                 folder: folder, relativePath: relative
             )
         }
-        guard !members.isEmpty else { return }
-        var removed = LampSyncRemovedModules.load(
-            fromLibraryAt: libraryRootURL, fileManager: fileManager
-        )
-        let now = WorkspaceFileLedger.milliseconds(Date())
-        for member in members { removed.record(member, at: now) }
-        try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
+        if !members.isEmpty {
+            var removed = LampSyncRemovedModules.load(
+                fromLibraryAt: libraryRootURL, fileManager: fileManager
+            )
+            let now = WorkspaceFileLedger.milliseconds(Date())
+            for member in members { removed.record(member, at: now) }
+            try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
+        }
+
+        for key in allKeys { ledger.recordDeletion(of: key) }
+        try ledger.save(in: workspaceURL)
     }
 
     /// The published keys of every regular file at or under `item`.
@@ -817,6 +821,12 @@ public enum WorkspaceContextFileStore {
                 continue
             }
             let baseline = ledger.noteOffloaded(key)
+            // Its quarantine goes into the same save as the note, before the
+            // file does: the mark is the one thing a download cannot bring
+            // back by itself.
+            if let mark = quarantineMark(of: verified.file) {
+                ledger.quarantine[key] = mark
+            }
             try ledger.save(in: workspaceURL)
             do {
                 try unlink(verified, libraryRootURL: libraryRootURL, fileManager: fileManager)
@@ -845,6 +855,16 @@ public enum WorkspaceContextFileStore {
             }
         }
         return (offloaded, skipped)
+    }
+
+    /// A file's quarantine marker, or nil where it has none.
+    private static func quarantineMark(of file: URL) -> String? {
+        let size = getxattr(file.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW)
+        guard size > 0 else { return nil }
+        var value = [UInt8](repeating: 0, count: size)
+        guard getxattr(file.path, "com.apple.quarantine", &value, size, 0, XATTR_NOFOLLOW) == size
+        else { return nil }
+        return String(decoding: value, as: UTF8.self)
     }
 
     private struct UnlinkRefusal: Error {}

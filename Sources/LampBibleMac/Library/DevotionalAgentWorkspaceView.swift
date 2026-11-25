@@ -663,8 +663,19 @@ enum DevotionalAgentWorkspaceStore {
         _ file: DevotionalAgentContextFile,
         from workspace: URL,
         libraryRootURL: URL,
-        heldBy holdingServer: String?
+        heldBy holdingServer: String?,
+        confirmedFolder: FolderIdentity?
     ) throws {
+        // A folder whose removal the reader confirmed is checked here, on the
+        // owner, immediately before it goes — not on the main actor before
+        // the hop, after which this may wait behind a pass and the folder be
+        // replaced meanwhile. A confirmed folder with no identity taken is
+        // refused rather than waved through.
+        if file.removesWhatIsNotHere, file.isDirectory {
+            guard let confirmedFolder, FolderIdentity(of: file.url) == confirmedFolder else {
+                throw WorkspaceContextFileStore.OffloadError.replacedSinceConfirmed(file.relativePath)
+            }
+        }
         if let confirmed = file.actBeingRemoved {
             // No bytes here to remove, and possibly a nested path — neither
             // of which `removeContextItem` takes. A row waiting for a
@@ -2854,7 +2865,7 @@ struct DevotionalAgentWorkspaceView: View {
         guard let workspaceURL else { return }
         errorMessage = nil
         contextNote = nil
-        // Still the folder the reader confirmed, or nothing is removed.
+        // An early answer; the store decides, immediately before removing.
         if let confirmedFolder, FolderIdentity(of: file.url) != confirmedFolder {
             errorMessage = """
                 “\(file.name)” has changed since you chose to remove it, so \
@@ -2867,7 +2878,8 @@ struct DevotionalAgentWorkspaceView: View {
                 file,
                 from: workspaceURL,
                 libraryRootURL: libraryRootURL,
-                heldBy: syncController.serverHoldingOffloads
+                heldBy: syncController.serverHoldingOffloads,
+                confirmedFolder: confirmedFolder
             )
             // Removing a source that was only on the server can lift the
             // lock on where sync points.

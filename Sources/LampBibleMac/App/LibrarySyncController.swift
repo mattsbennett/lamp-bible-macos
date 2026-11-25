@@ -458,6 +458,16 @@ final class LibrarySyncController: ObservableObject {
         let root = library.rootURL
         var offloaded = 0
         var refused: [String] = []
+        var awaitingTheServer = false
+        defer {
+            // Once per pass, however many sources are waiting: the passes
+            // asked for coalesce into one, so spending the budget per source
+            // used both follow-ups on a single pass.
+            if awaitingTheServer, offloadFollowUps > 0 {
+                offloadFollowUps -= 1
+                LampSyncRequest.wantAPass()
+            }
+        }
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: root) {
             willOffload(to: observation.source)
             do {
@@ -474,10 +484,8 @@ final class LibrarySyncController: ObservableObject {
                         // Keep Here won; there is nothing to put back.
                         continue
                     }
-                    if reason == .notSeenOnTheServer || reason == .notOnTheServer,
-                       offloadFollowUps > 0 {
-                        offloadFollowUps -= 1
-                        LampSyncRequest.wantAPass()
+                    if reason == .notSeenOnTheServer || reason == .notOnTheServer {
+                        awaitingTheServer = true
                     }
                     if reason.isLasting {
                         try? await WorkspaceContextFileStore.cancelOffload(
@@ -1148,6 +1156,17 @@ extension LibrarySyncController {
         guard let offer = moveOffer, let imported = importedArchiveRevision,
               !isSyncing, !passGate
         else { return false }
+        // A move runs its own pass, not through `sync(library:)`, so the
+        // offloads that come after a pass do not run after it. Any the reader
+        // has asked for get a pass of their own once the move is done.
+        defer {
+            Task { [weak self] in
+                guard let self,
+                      await !LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL).isEmpty
+                else { return }
+                _ = await self.sync(library: library)
+            }
+        }
         isSyncing = true
         errorMessage = nil
         defer { isSyncing = false }

@@ -1240,6 +1240,91 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(queued.lowerBound < cleared.lowerBound)
     }
 
+    /// A source comes back from the server with the quarantine it left with.
+    ///
+    /// No store carries extended attributes. The mark is kept while the
+    /// source is away and put back when it arrives — after consolidation has
+    /// made it a read-only shared object, which macOS will not write an
+    /// attribute to unless the write bit is lifted for the call.
+    @Test func asourceComesBackWithItsQuarantine() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let a = workspace(macs.a)
+        let file = a.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let mark = "0083;6750a1b2;Safari;"
+        let set = Data(mark.utf8).withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+        }
+        #expect(set == 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: a.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        // Mac B holds the same source, as the server does.
+        try write("Daniell", to: workspace(macs.b).appendingPathComponent("context/history.pdf"), at: 0)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: a, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a)
+        )
+        #expect(result.offloaded == ["history.pdf"])
+        try await WorkspaceContextFileStore.fetchSource(relativePath: "history.pdf", in: a)
+
+        try await macs.sync(from: macs.b, to: macs.a)
+
+        #expect(FileManager.default.fileExists(atPath: file.path), "downloaded")
+        let size = getxattr(file.path, "com.apple.quarantine", nil, 0, 0, 0)
+        #expect(size > 0, "and marked again")
+        var value = [UInt8](repeating: 0, count: max(size, 0))
+        _ = getxattr(file.path, "com.apple.quarantine", &value, value.count, 0, 0)
+        #expect(String(decoding: value, as: UTF8.self) == mark)
+    }
+
+    /// A pass never saves a fresh ledger over one it could not read: the file
+    /// may hold the last offload, and left as it is, the lock on where sync
+    /// points keeps reading it as unknown and holds.
+    @Test func apassLeavesAnUnreadableLedgerAsItIs() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let b = workspace(macs.b)
+        let ledgerFile = b.appendingPathComponent(".lamp/sync-files.json")
+        try FileManager.default.createDirectory(
+            at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let damaged = Data("not a ledger".utf8)
+        try damaged.write(to: ledgerFile)
+        try write("from A", to: workspace(macs.a).appendingPathComponent("context/notes.pdf"), at: 0)
+
+        try await macs.sync(from: macs.a, to: macs.b)
+        try await macs.sync(from: macs.b, to: macs.a)
+
+        #expect(try Data(contentsOf: ledgerFile) == damaged, "left exactly as it was")
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.b) == nil)
+    }
+
+    /// A folder's removal is queued for the server before its acts are
+    /// cleared, as a single source's is.
+    @Test func afoldersRemovalIsQueuedBeforeItsActsAreCleared() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let start = try #require(source.range(of: "public static func removeContextItem("))
+        let end = try #require(source.range(of: "\n    /// ", range: start.upperBound..<source.endIndex))
+        let body = source[start.upperBound..<end.lowerBound]
+        let queued = try #require(body.range(of: "removed.save("))
+        let cleared = try #require(body.range(of: "ledger.recordDeletion("))
+        #expect(queued.lowerBound < cleared.lowerBound)
+    }
+
     /// Remove refuses when the row the reader confirmed is no longer the row
     /// there is: a file turned up and the gather answered the offload, so
     /// what is at the path is not the source the dialog named.

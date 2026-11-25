@@ -722,11 +722,17 @@ public enum LampWorkspaceSync {
                 fileManager: fileManager
             )
 
-            var fileLedger = WorkspaceFileLedger.load(in: workspace)
+            // A ledger that is there and will not read is left exactly as it
+            // is: it may hold the last offload, and the lock on where sync
+            // points reads it as unknown and holds. This pass works from a
+            // fresh one in memory — the worst that does is fetch an offloaded
+            // source back, which loses nothing.
+            let readable = WorkspaceFileLedger.loadIfReadable(in: workspace)
+            var fileLedger = readable ?? WorkspaceFileLedger()
             let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
-            try fileLedger.save(in: workspace)
+            if readable != nil { try fileLedger.save(in: workspace) }
             if !fileLedger.isEmpty {
                 // Possibly all that's left of the workspace to send. Written,
                 // not placed: these bytes exist nowhere else.
@@ -800,7 +806,9 @@ public enum LampWorkspaceSync {
 
             // Deletions made here since the last sync are noted before anything
             // arrives, or the incoming copies would simply put the files back.
-            var fileLedger = WorkspaceFileLedger.load(in: workspace)
+            // An unreadable ledger is left as it is; see the export.
+            let readableLedger = WorkspaceFileLedger.loadIfReadable(in: workspace)
+            var fileLedger = readableLedger ?? WorkspaceFileLedger()
             let deleted = fileLedger.noteChanges(present: try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
@@ -851,7 +859,10 @@ public enum LampWorkspaceSync {
             }
             fileLedger.recordSynced(try workspaceFiles(in: workspace, fileManager: fileManager)
                 .mapValues(\.modified))
-            try fileLedger.save(in: workspace)
+            // An offloaded source that has just been downloaded gets back the
+            // quarantine it went away with.
+            fileLedger.restoreQuarantine(inContextOf: workspace)
+            if readableLedger != nil { try fileLedger.save(in: workspace) }
 
             let portableSelection = portableWorkspace.appendingPathComponent("EnabledSkills.json")
             let hasPortableSelection = fileManager.fileExists(atPath: portableSelection.path)
@@ -1531,6 +1542,17 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// both places stamp this.
     var arrivedAt: [String: Int64] = [:]
 
+    /// The quarantine marker each offloaded source carried, kept while it is
+    /// away and put back when it is downloaded. Local only.
+    ///
+    /// No store carries extended attributes, so a source downloaded from the
+    /// server comes back without the mark macOS uses to treat a file as having
+    /// come from outside. For a document that changes nothing; for a script
+    /// attached as a source, which an agent in the workspace might run, it
+    /// would turn a file macOS checks into one it does not. Keeping the mark
+    /// is cheaper than keeping every downloaded PDF on disk.
+    var quarantine: [String: String] = [:]
+
     enum SourceAct: String, Codable, Equatable, Sendable {
         /// The reader asked for this source to go back to the server. Its
         /// file is still here: the offload happens after the next sync
@@ -1571,6 +1593,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         ) ?? [:]
         arrivedAt = try container.decodeIfPresent(
             [String: Int64].self, forKey: .arrivedAt
+        ) ?? [:]
+        quarantine = try container.decodeIfPresent(
+            [String: String].self, forKey: .quarantine
         ) ?? [:]
     }
 
@@ -1614,6 +1639,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
         presentSince[key] = nil
         // Neither on the server for this Mac nor on its way here.
         acts[key] = nil
+        quarantine[key] = nil
     }
 
     /// This Mac lets a source go. Noted before the file is unlinked, so a
@@ -1812,6 +1838,35 @@ struct WorkspaceFileLedger: Codable, Equatable {
     mutating func noteSynced(_ key: String, modified: Int64?) {
         guard synced != nil else { return }
         synced?[key] = modified
+    }
+
+    /// Puts back the quarantine of every source here that left with one, and
+    /// forgets those that went back. One that will not take stays, to be
+    /// tried after the next pass.
+    mutating func restoreQuarantine(inContextOf workspace: URL) {
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        let prefix = Self.contextKey("")
+        for (key, value) in quarantine where key.hasPrefix(prefix) {
+            let path = String(key.dropFirst(prefix.count))
+            guard LampWorkspaceSync.isHere(path, inContextOf: workspace) else { continue }
+            let file = context.appendingPathComponent(path)
+            // After consolidation, which may have swapped the download for a
+            // link to an object already in the store: a mark set before it
+            // would be on a copy that no longer exists. The object is
+            // read-only, and macOS will not write an attribute to a file this
+            // process cannot write, so the owner's write bit is lifted for the
+            // one call and put back.
+            var info = stat()
+            guard lstat(file.path, &info) == 0 else { continue }
+            let mode = info.st_mode & 0o7777
+            let lifted = mode & S_IWUSR == 0
+            if lifted { chmod(file.path, mode | S_IWUSR) }
+            let set = Data(value.utf8).withUnsafeBytes {
+                setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
+            }
+            if lifted { chmod(file.path, mode) }
+            if set == 0 { quarantine[key] = nil }
+        }
     }
 
     mutating func recordSynced(_ present: [String: Int64], now: Date = Date()) {
