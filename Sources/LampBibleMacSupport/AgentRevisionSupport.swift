@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LampModuleKit
 
 public enum DevotionalAgentRevisionKind: String, Codable, Sendable {
     case agentEdit
@@ -841,6 +842,22 @@ public enum DevotionalAgentRevisionStore {
         return type == .typeRegular
     }
 
+    /// The list's path, but only where `.lamp` is a real directory of this
+    /// workspace's own.
+    ///
+    /// Checking the file and not the folder above it left a hole: a symlink
+    /// at `.lamp` is followed, so compaction appended retirements into
+    /// *another* workspace's log and a pass then read them as evidence about
+    /// the wrong workspace. `attributesOfItem` does not follow a link, so
+    /// this sees the link rather than its target.
+    private static func retiredRevisionsURL(in workspace: URL) -> URL? {
+        let directory = metadataDirectory(in: workspace)
+        guard let info = try? FileManager.default.attributesOfItem(atPath: directory.path),
+              info[.type] as? FileAttributeType == .typeDirectory
+        else { return nil }
+        return directory.appendingPathComponent(retiredRevisionsFilename)
+    }
+
     /// Parsed lists, against the file each was parsed from.
     ///
     /// The list only grows, and a pass asks for it once per workspace that
@@ -854,19 +871,19 @@ public enum DevotionalAgentRevisionStore {
     private static var parsedRetirementsOrder: [String] = []
 
     public static func retiredRevisions(in workspace: URL) -> [RetiredRevision] {
-        let url = metadataDirectory(in: workspace)
-            .appendingPathComponent(retiredRevisionsFilename)
-        guard isAplainFile(url) else { return [] }
+        guard let url = retiredRevisionsURL(in: workspace), isAplainFile(url) else { return [] }
 
         mutationLock.lock()
         let key = url.standardizedFileURL.path
-        let stamp: String? = (try? FileManager.default.attributesOfItem(atPath: url.path))
-            .flatMap { info in
-                guard let size = info[.size] as? Int,
-                      let modified = info[.modificationDate] as? Date
-                else { return nil }
-                return "\(size)-\(modified.timeIntervalSince1970)"
-            }
+        // The whole file identity, not a size and a date. A restore can put
+        // different contents at the same path with both of those preserved,
+        // and the cache then answered with the old names — which is
+        // `decisions/0007`'s reasoning for the digest cache, and the same
+        // mistake made again here.
+        let stamp: String? = (try? LampFileIdentity(url: url)).map {
+            "\($0.device)-\($0.inode)-\($0.size)-\($0.modifiedSeconds)."
+                + "\($0.modifiedNanoseconds)-\($0.changedSeconds)"
+        }
         if let stamp, let remembered = parsedRetirements[key], remembered.stamp == stamp {
             mutationLock.unlock()
             return remembered.revisions
@@ -924,7 +941,9 @@ public enum DevotionalAgentRevisionStore {
         guard !fresh.isEmpty else { return }
         let directory = metadataDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(retiredRevisionsFilename)
+        guard let url = retiredRevisionsURL(in: workspace) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
         // The name percent-encoded, so it round-trips whatever it holds: a
         // space would be read as the end of the field and a newline as the
         // end of the record.
