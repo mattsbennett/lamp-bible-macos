@@ -157,11 +157,15 @@ public enum LampWorkspaceSync {
         // *planned downloads* — which a claim has already taken them out of,
         // so the collision would go unreported and the other member, which
         // may be a revision a demotion needs, would be silently dropped.
+        // Folded whole **paths**, and over every member with no file rather
+        // than only the revisions among them. Counting basenames made two
+        // workspaces' `autosave.json` look like a collision — so both were
+        // left unclaimed and fetched for ever, the thing this is here to
+        // stop — and missed a real collision with a name this claim filters
+        // out before counting.
         var spellings: [String: Int] = [:]
-        for path in missing {
-            guard let name = path.split(separator: "/").last else { continue }
-            let folded = DevotionalAgentRevisionStore.foldedName(String(name))
-            spellings[folded, default: 0] += 1
+        for path in members where !heldAsFiles.contains(path) {
+            spellings[DevotionalAgentRevisionStore.foldedName(path), default: 0] += 1
         }
 
         var claimable: [String: Set<String>] = [:]
@@ -184,8 +188,9 @@ public enum LampWorkspaceSync {
             // extension. So the only key with the store's own tolerance is
             // the name itself, and a matcher that parsed the convention broke
             // on the convention's second shape (`decisions/0017`).
+            guard spellings[DevotionalAgentRevisionStore.foldedName(path)] == 1 else { continue }
             let folded = DevotionalAgentRevisionStore.foldedName(String(name))
-            if spellings[folded] == 1, names.contains(folded) { claimed.insert(path) }
+            if names.contains(folded) { claimed.insert(path) }
         }
         return claimed
     }

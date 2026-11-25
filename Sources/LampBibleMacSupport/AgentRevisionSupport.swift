@@ -743,8 +743,17 @@ public enum DevotionalAgentRevisionStore {
         // entirely, and that is exactly the thing `removingReplaced` could
         // use, with one more original, to put a turn's name back. A reviewer
         // found the gap between this filter and what `0017` says it does.
-        let retiring = goingAway.filter {
-            !$0.revision.coveredRevisionIDs.isSubset(of: demotableCoverage)
+        let retiring = goingAway.filter { entry in
+            // Only something that could actually *be* a holder is withheld.
+            // `removingReplaced` takes its holders from revisions that are
+            // not themselves up for demotion, and an untagged merge always
+            // is — so an untagged intermediate (`A+B` under `A+B+C`) can
+            // never help, and withholding it only had it fetched and deleted
+            // on every pass, which is the loop this record exists to stop.
+            let couldHold = entry.revision.turnID != nil
+                || entry.revision.replacedRevisionIDs?.isEmpty != false
+            guard couldHold else { return true }
+            return !entry.revision.coveredRevisionIDs.isSubset(of: demotableCoverage)
         }
         // Best effort, deliberately. `prepareLibraryForSync` compacts every
         // workspace before importing anything, so a throw here would stop
@@ -841,7 +850,10 @@ public enum DevotionalAgentRevisionStore {
             // newline, which is this file's own record separator. Trimming
             // read ` run.json` back as `run.json` and would have claimed the
             // wrong member; a newline truncated the name outright.
-            guard let name = String(parts[1]).removingPercentEncoding, !name.isEmpty
+            let field = String(parts[1])
+            guard field.hasSuffix(";"),
+                  let name = String(field.dropLast()).removingPercentEncoding,
+                  !name.isEmpty
             else { continue }
             retired.append(RetiredRevision(id: id, publishedName: name))
         }
@@ -873,7 +885,11 @@ public enum DevotionalAgentRevisionStore {
                 let encoded = entry.publishedName
                     .addingPercentEncoding(withAllowedCharacters: allowed)
                     ?? entry.publishedName
-                return "\(entry.id.uuidString) \(encoded)"
+                // Ended with a sentinel, so a torn append is skipped
+                // rather than read as a shorter name: an append of
+                // `draft.json.backup.json` cut short left `draft.json`,
+                // which is a different file that really exists.
+                return "\(entry.id.uuidString) \(encoded);"
             }
             .sorted()
             .joined(separator: "\n") + "\n"
@@ -938,11 +954,19 @@ public enum DevotionalAgentRevisionStore {
             && entry.revision.replacedRevisionIDs?.isEmpty == false {
             wantedBack.formUnion(entry.revision.coveredRevisionIDs)
         }
+        // A wanted revision vetoes its *name*, not just its id. Two
+        // retirements whose names differ only in case fold alike, so
+        // dropping the wanted entry and keeping the other left the same
+        // folded name in the answer — and claimed the very revision the
+        // demotion was waiting for.
+        let vetoed = Set(
+            retired.lazy.filter { wantedBack.contains($0.id) }.map { foldedName($0.publishedName) }
+        )
         return Set(
             retired.lazy
                 .filter { !wantedBack.contains($0.id) }
                 .map { foldedName($0.publishedName) }
-        )
+        ).subtracting(vetoed)
     }
 
     public static func lastSyncedDraft(in workspace: URL) throws -> String? {

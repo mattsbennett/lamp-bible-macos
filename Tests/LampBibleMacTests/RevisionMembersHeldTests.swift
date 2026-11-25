@@ -86,7 +86,7 @@ struct RevisionMembersHeldTests {
         )
         let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+        try Data((existing + "\(UUID().uuidString) \(name);\n").utf8).write(to: list)
 
         let member = "Workspaces/Writing/W1/Revisions/\(name)"
         let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
@@ -110,7 +110,7 @@ struct RevisionMembersHeldTests {
         let name = "1700000001000-7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json"
         let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+        try Data((existing + "\(UUID().uuidString) \(name);\n").utf8).write(to: list)
 
         // The id's hex in the other case, with the extension left alone:
         // `.JSON` would be a different kind of file altogether, which
@@ -237,7 +237,7 @@ struct RevisionMembersHeldTests {
         let name = "1700000001000-7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json"
         let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+        try Data((existing + "\(UUID().uuidString) \(name);\n").utf8).write(to: list)
 
         let one = "Workspaces/Writing/W1/Revisions/\(name)"
         let other = "Workspaces/Writing/W1/Revisions/"
@@ -249,6 +249,57 @@ struct RevisionMembersHeldTests {
         )
 
         #expect(claimed.isEmpty)
+    }
+
+    /// Two workspaces using the same filename are not a collision.
+    ///
+    /// Counting basenames rather than whole paths made every workspace's
+    /// `autosave.json` collide with every other's, so none of them was ever
+    /// claimed and all were fetched for ever — the loop this exists to stop,
+    /// reintroduced by the guard against a different one.
+    @Test func doesNotMistakeTwoWorkspacesForAcollision() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var members: [String] = []
+        for name in ["W1", "W2"] {
+            let workspace = try workspaceURL(in: root, named: name)
+            _ = try DevotionalAgentRevisionStore.record(
+                kind: .userEdit, before: "A", after: "A B",
+                in: workspace, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+            let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+            try Data((existing + "\(UUID().uuidString) autosave.json;\n").utf8).write(to: list)
+            members.append("Workspaces/Writing/\(name)/Revisions/autosave.json")
+        }
+
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: members, heldAsFiles: [], inLibraryAt: root
+        )
+
+        #expect(claimed == Set(members))
+    }
+
+    /// A record cut short is skipped, not read as a shorter name.
+    ///
+    /// An append of `draft.json.backup.json` interrupted after `draft.json`
+    /// would otherwise be a valid retirement for a different file that
+    /// really exists — and the next append, which starts a line of its own,
+    /// would leave the fragment looking complete for ever.
+    @Test func skipsArecordCutShortRatherThanReadingAshorterName() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+        let id = UUID()
+        try Data("\(id.uuidString) draft.json\n".utf8).write(
+            to: metadata.appendingPathComponent("retired-revisions.json")
+        )
+
+        let read = DevotionalAgentRevisionStore.retiredRevisions(in: workspace)
+
+        #expect(read.isEmpty, "no terminator, so the name may be a truncation of another")
     }
 
     /// A published name is recorded as it is, whatever it holds. The store
@@ -276,7 +327,7 @@ struct RevisionMembersHeldTests {
             )
         )!
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(id.uuidString) \(encoded)\n").utf8).write(to: list)
+        try Data((existing + "\(id.uuidString) \(encoded);\n").utf8).write(to: list)
 
         let read = DevotionalAgentRevisionStore.retiredRevisions(in: workspace)
 
@@ -436,7 +487,7 @@ struct RevisionMembersHeldTests {
         // merge turned up and made it wanted again.
         let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + "\(covered.uuidString) 1600000000000-\(covered.uuidString).json\n").utf8)
+        try Data((existing + "\(covered.uuidString) 1600000000000-\(covered.uuidString).json;\n").utf8)
             .write(to: list)
         try #require(Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
             .contains(covered))
@@ -465,7 +516,7 @@ struct RevisionMembersHeldTests {
             to: revisions.appendingPathComponent("1700000002000-\(UUID().uuidString).json")
         )
         let retired = UUID()
-        try Data("\(retired.uuidString) 1600000000000-\(retired.uuidString).json\n".utf8).write(
+        try Data("\(retired.uuidString) 1600000000000-\(retired.uuidString).json;\n".utf8).write(
             to: workspace.appendingPathComponent(".lamp/retired-revisions.json")
         )
         try #require(Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
@@ -491,7 +542,7 @@ struct RevisionMembersHeldTests {
         // newline after it. Writing straight onto that fragment would glue
         // the next good id to it and lose the retirement.
         let old = UUID()
-        try Data("\(old.uuidString) old.json\n9F3A17".utf8).write(to: list)
+        try Data("\(old.uuidString) old.json;\n9F3A17".utf8).write(to: list)
 
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         _ = try DevotionalAgentRevisionStore.record(
@@ -529,9 +580,9 @@ struct RevisionMembersHeldTests {
 
         let before = UUID()
         let after = UUID()
-        var bytes = Data("\(before.uuidString) a.json\n".utf8)
+        var bytes = Data("\(before.uuidString) a.json;\n".utf8)
         bytes.append(contentsOf: [0xFF, 0xFE, UInt8(ascii: "\n")])
-        bytes.append(Data("\(after.uuidString) b.json\n".utf8))
+        bytes.append(Data("\(after.uuidString) b.json;\n".utf8))
         try bytes.write(to: metadata.appendingPathComponent("retired-revisions.json"))
 
         let ids = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
