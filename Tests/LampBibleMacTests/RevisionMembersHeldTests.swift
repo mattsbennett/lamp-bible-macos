@@ -2,8 +2,9 @@ import Foundation
 @testable import LampBibleMacSupport
 import Testing
 
-/// `lamp-bible-core/Documentation/decisions/0016`: a revision this Mac
-/// compacted away is claimed as held, so the plan stops downloading it on
+/// `lamp-bible-core/Documentation/decisions/0017`: a revision this Mac
+/// compacted away is claimed as held, on the evidence of the retired list
+/// compaction writes as it deletes — so the plan stops downloading it on
 /// every pass.
 ///
 /// The gather itself lives in `LibrarySyncController`, which is in the app
@@ -12,41 +13,28 @@ import Testing
 struct RevisionMembersHeldTests {
     private let workspace = "Workspaces/Writing/W1-abc"
 
-    @Test func claimsArevisionThatIsRecordedButNoLongerAfile() {
-        let kept = "\(workspace)/Revisions/1700000002000-B.json"
-        let compactedAway = "\(workspace)/Revisions/1700000001000-A.json"
-
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [kept, compactedAway],
-            heldAsFiles: [kept]
-        )
-
-        #expect(claimed == [compactedAway])
+    private func library() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-retired-\(UUID().uuidString)")
     }
 
-    /// The whole point: a member still on disk is published as a file, so
-    /// claiming it as held-without-a-file would be a lie — and a lie that
-    /// would stop it being uploaded.
-    @Test func doesNotClaimArevisionItStillHoldsAsAfile() {
-        let path = "\(workspace)/Revisions/1700000001000-A.json"
-
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [path], heldAsFiles: [path]
-        )
-
-        #expect(claimed.isEmpty)
+    private func workspaceURL(in library: URL, named name: String) throws -> URL {
+        let url = LampWritingWorkspace.root(libraryRootURL: library, fileManager: .default)
+            .appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
-    /// Nothing but a revision is claimed. A workspace's document, its
-    /// context, a deck, a module: absence there means what it has always
-    /// meant, and claiming it would stop a real download.
+    // MARK: which paths are revisions at all
+
+    /// Nothing but a writing's revision is ever a candidate. A workspace's
+    /// document, its context, a deck, a module: absence there means what it
+    /// has always meant, and claiming it would stop a real download.
     ///
     /// `Workspaces/Skills/…/Revisions/index.json` is the one a reviewer
     /// found. A custom skill is published by copying its whole directory
     /// with no extension filter, so a skill that happens to keep a folder
-    /// called `Revisions` publishes files that match this shape exactly —
-    /// and they are ordinary files of the skill's, with none of the
-    /// write-once, compaction-only history this claim reasons about.
+    /// called `Revisions` publishes files that match this shape exactly.
     @Test(arguments: [
         "Workspaces/Writing/W1-abc/draft.md",
         "Workspaces/Writing/W1-abc/context/notes.pdf",
@@ -60,123 +48,22 @@ struct RevisionMembersHeldTests {
         "Workspaces/Writing//Revisions/1700000001000-A.json",
         "Revisions/1700000001000-A.json",
     ])
-    func claimsNothingButArevision(path: String) {
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [path], heldAsFiles: []
+    func treatsNothingButArevisionAsAcandidate(path: String) {
+        #expect(
+            LampWorkspaceSync.claimableRevisionMembers(among: [path], heldAsFiles: []).isEmpty,
+            "offered \(path)"
         )
-
-        #expect(claimed.isEmpty, "claimed \(path)")
     }
 
-    /// The shape the real library was in: one surviving merge and the run of
-    /// intermediate merges it replaced, none of which it names.
-    ///
-    /// This is why matching `replacedRevisionIDs` was not enough — a merge
-    /// unions its two sides' *covered* ids, never their own, so an
-    /// intermediate merge is named by nothing that outlives it. On the real
-    /// library that rule reached 10 of 43 members; absence reaches all of
-    /// them.
-    @Test func claimsEveryIntermediateMergeOfArun() {
-        let survivor = "\(workspace)/Revisions/1700000000900-FINAL.json"
-        let intermediates = (1...8).map {
-            "\(workspace)/Revisions/17000000000\($0)0-M\($0).json"
-        }
+    @Test func offersArevisionThatHasNoFile() {
+        let kept = "\(workspace)/Revisions/1700000002000-B.json"
+        let gone = "\(workspace)/Revisions/1700000001000-A.json"
 
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: intermediates + [survivor],
-            heldAsFiles: [survivor]
+        #expect(
+            LampWorkspaceSync.claimableRevisionMembers(
+                among: [kept, gone], heldAsFiles: [kept]
+            ) == [gone]
         )
-
-        #expect(claimed == Set(intermediates))
-    }
-
-    /// A demotion needs every id the untagged merge replaced. One of them
-    /// claimed as held never arrives, so the merge keeps a turn's changes
-    /// under no turn's name for good — so that one is left unclaimed.
-    @Test func leavesArevisionAdemotionIsStillWaitingFor() {
-        let wanted = UUID()
-        let other = UUID()
-        let needed = "\(workspace)/Revisions/1700000001000-\(wanted.uuidString).json"
-        let ordinary = "\(workspace)/Revisions/1700000002000-\(other.uuidString).json"
-        let survivor = "\(workspace)/Revisions/1700000003000-C.json"
-
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [needed, ordinary, survivor],
-            heldAsFiles: [survivor],
-            stillWantedForDemotion: [wanted]
-        )
-
-        #expect(claimed == [ordinary], "the wanted one stays fetchable")
-    }
-
-    /// The names on disk are a UUID as Foundation spells it, upper case. A
-    /// store or a server that spelled one in lower case must still match, or
-    /// the exception silently stops applying.
-    @Test func matchesAwantedIDWhateverItsCase() {
-        let wanted = UUID()
-        let lower = "\(workspace)/Revisions/1700000001000-\(wanted.uuidString.lowercased()).json"
-
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [lower], heldAsFiles: [], stillWantedForDemotion: [wanted]
-        )
-
-        #expect(claimed.isEmpty)
-    }
-
-    /// A wanted id is matched as the whole name, not anywhere in it: a
-    /// different revision whose name merely contains one must still be
-    /// claimed, or one id keeps a second file downloading for ever.
-    @Test func doesNotMistakeAdifferentRevisionForAwantedOne() {
-        let wanted = UUID()
-        let different = "\(workspace)/Revisions/1700000001000-\(wanted.uuidString)-B.json"
-
-        let claimed = LampWorkspaceSync.claimableRevisionMembers(
-            among: [different], heldAsFiles: [], stillWantedForDemotion: [wanted]
-        )
-
-        #expect(claimed == [different])
-    }
-
-    /// The log line says where, never what the reader called it.
-    ///
-    /// The first version took the first two components of the whole path,
-    /// which for anything two deep is the folder *and the filename* — so a
-    /// review of a document published as `WritingReview/<id>__<name>.json`
-    /// put that document's name in the public part of the log, which is what
-    /// a sysdiagnose collects and a person sends on.
-    @Test func namesTheFolderAndNotTheReadersOwnFilename() {
-        let review = "WritingReview/W1__My Private Doubts.json"
-        let folders = LampSyncDiagnostics.folders(named: [
-            review,
-            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
-            "Workspaces/Presentations/easter.lampdeck",
-        ])
-
-        #expect(!folders.contains("My Private Doubts"))
-        #expect(!folders.contains(".json"))
-        #expect(folders == "Workspaces/Presentations, Workspaces/Writing, WritingReview")
-    }
-
-    /// And nothing a publisher named either. A book's picture lives under its
-    /// module id, and a module id carries words from the book's title, so a
-    /// second component is kept only where the layout fixes it.
-    @Test func namesNoModuleTheReaderHas() {
-        let folders = LampSyncDiagnostics.folders(named: [
-            "BookMedia/nic-romans-moo/plate-3.png",
-            "Media/Notes/43011035/tomb.png",
-            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
-        ])
-
-        #expect(!folders.contains("nic-romans-moo"))
-        #expect(!folders.contains("moo"))
-        #expect(folders == "BookMedia, Media, Workspaces/Writing")
-    }
-
-    /// A bare name is all name, so it gives up none of itself.
-    @Test func givesUpNothingForAbareFilename() {
-        let folders = LampSyncDiagnostics.folders(named: ["My Private Doubts.lamp"])
-
-        #expect(!folders.contains("My Private Doubts"))
     }
 
     /// The id is read off the end of the name, past the four dashes a UUID
@@ -188,7 +75,6 @@ struct RevisionMembersHeldTests {
                 named: "\(workspace)/Revisions/1700000001000-\(id.uuidString).json"
             ) == id
         )
-        // Nothing that is not one, rather than something near enough.
         #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/Revisions/17-A.json") == nil)
         #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/draft.md") == nil)
         #expect(
@@ -199,8 +85,6 @@ struct RevisionMembersHeldTests {
         )
     }
 
-    /// Which workspace a member belongs to, for reading only the histories
-    /// that can change the answer.
     @Test func namesTheWorkspaceAmemberBelongsTo() {
         #expect(
             LampWorkspaceSync.workspaceIdentifier(
@@ -214,85 +98,248 @@ struct RevisionMembersHeldTests {
         )
     }
 
-    /// The reading half, against a real workspace.
-    ///
-    /// Worth its own test because the way this fails is silent: a field read
-    /// by the wrong name, or a decode that throws, gives an empty set — and
-    /// an empty set is exactly "claim everything", which is the bug back
-    /// again with no sign of it.
-    @Test func readsTheWantedIDsOutOfArealWorkspace() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lamp-wanted-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    // MARK: the claim, end to end against a real workspace
+
+    /// Two of the reader's own edits close enough together to be merged: the
+    /// originals are deleted and retired, so their published copies are
+    /// claimed rather than fetched back for ever.
+    @Test func claimsWhatCompactionRetired() async throws {
+        let root = library()
         defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
 
-        // Two of the reader's own edits, close enough together to be merged
-        // into one record. Nothing the person typed carries a turn, so the
-        // merge is untagged and is what a demotion would be weighed against.
         let start = Date(timeIntervalSince1970: 1_700_000_000)
-        let first = try DevotionalAgentRevisionStore.record(
+        _ = try DevotionalAgentRevisionStore.record(
             kind: .userEdit, before: "A lamp", after: "A lamp unto",
-            in: root, createdAt: start
+            in: workspace, createdAt: start
         )
-        let second = try DevotionalAgentRevisionStore.record(
+        _ = try DevotionalAgentRevisionStore.record(
             kind: .userEdit, before: "A lamp unto", after: "A lamp unto my feet",
-            in: root, createdAt: start.addingTimeInterval(60)
+            in: workspace, createdAt: start.addingTimeInterval(60)
         )
 
-        let wanted = try DevotionalAgentRevisionStore.idsWantedForDemotion(in: root)
+        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        try #require(!retired.isEmpty, "compaction merged the two and retired the originals")
 
-        // Whatever the store chose to keep, the ids the surviving untagged
-        // merge names are the ones a demotion would need.
-        let kept = try DevotionalAgentRevisionStore.revisions(in: root)
-        let merges = kept.filter { $0.turnID == nil && $0.replacedRevisionIDs?.isEmpty == false }
-        try #require(!merges.isEmpty, "the two edits were merged into one record")
-        // A user edit's merge is not one a demotion can ever be waiting for:
-        // nothing the person typed carries a turn, and a merge never crosses
-        // kinds, so its parts can never supply the tagged holder a demotion
-        // needs. Keeping them fetchable would download and discard a
-        // revision every pass for a demotion that cannot happen.
-        #expect(merges.allSatisfy { $0.kind == .userEdit })
-        #expect(wanted.isEmpty, "a user edit's merge wants nothing fetched")
-        #expect(first != nil || second != nil)
+        let members = retired.map {
+            "Workspaces/Writing/W1/Revisions/1700000001000-\($0.uuidString).json"
+        }
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: members, heldAsFiles: [], inLibraryAt: root
+        )
 
-        // An agent's merge does want its parts, and the same workspace says
-        // so once one is there.
-        let turn = UUID()
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, turnID: turn, before: "one", after: "one two",
-            in: root, createdAt: start.addingTimeInterval(3_600)
-        )
-        _ = try DevotionalAgentRevisionStore.record(
-            kind: .agentEdit, turnID: turn, before: "one two", after: "one two three",
-            in: root, createdAt: start.addingTimeInterval(3_660)
-        )
-        // Those two carry a turn, so their merge does too and is not a
-        // candidate. What this proves is the kind test, not the turn test:
-        // the set stays empty while every untagged merge is a user's.
-        #expect(try DevotionalAgentRevisionStore.idsWantedForDemotion(in: root).isEmpty)
+        #expect(claimed == Set(members))
     }
 
-    /// A workspace whose history is gone altogether claims nothing.
-    ///
-    /// The claim says a missing revision was superseded by one that is here.
-    /// Where none is here — a folder restored without its `.lamp`, a
-    /// directory deleted by hand — nothing superseded anything, and the
-    /// server's copies are the only way back. Claiming them would be worse
-    /// than fetching them.
-    @Test func claimsNothingFromAworkspaceWithNoHistoryLeft() async throws {
-        let library = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lamp-lost-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: library) }
-        let root = LampWritingWorkspace.root(libraryRootURL: library, fileManager: .default)
-        let emptied = root.appendingPathComponent("W-lost", isDirectory: true)
-        try FileManager.default.createDirectory(at: emptied, withIntermediateDirectories: true)
+    /// A revision this Mac never retired is not claimed, however plausible
+    /// its name — that is the difference between evidence and a guess, and
+    /// it is what keeps a member another Mac wrote coming down the first
+    /// time.
+    @Test func claimsNothingItDidNotRetire() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "one", after: "one two",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
 
-        let member = "Workspaces/Writing/W-lost/Revisions/1700000001000-A.json"
+        let stranger = "Workspaces/Writing/W1/Revisions/1700000001000-\(UUID().uuidString).json"
         let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
-            members: [member], heldAsFiles: [], inLibraryAt: library
+            members: [stranger], heldAsFiles: [], inLibraryAt: root
         )
 
         #expect(claimed.isEmpty)
-        #expect(!DevotionalAgentRevisionStore.holdsAnyRevision(in: emptied))
+    }
+
+    /// A workspace whose history is gone altogether, list and all, claims
+    /// nothing and fetches once.
+    ///
+    /// This is the case the previous design got wrong: it inferred
+    /// supersession from *any* local history existing, so one new edit saved
+    /// into an emptied folder made it claim every older member and the
+    /// server's only copies were skipped. With the list, an emptied `.lamp`
+    /// has no evidence and claims nothing.
+    @Test func claimsNothingWhenTheListIsGoneToo() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W-lost")
+
+        // The history is gone, and then the writer saves something new.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "fresh", after: "fresh start",
+            in: workspace, createdAt: Date()
+        )
+
+        let older = "Workspaces/Writing/W-lost/Revisions/1600000000000-\(UUID().uuidString).json"
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: [older], heldAsFiles: [], inLibraryAt: root
+        )
+
+        #expect(claimed.isEmpty, "a new edit is not evidence that an old revision was compacted")
+    }
+
+    /// A retirement says the replacement was here *then*. If the history is
+    /// lost afterwards, the replacement went with it and the server's copy of
+    /// the retired original may be the only one left — so a workspace holding
+    /// no revision file claims nothing, list or no list.
+    @Test func claimsNothingOnceTheReplacementIsGoneToo() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A B", after: "A B C",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        try #require(!retired.isEmpty)
+        let members = retired.map {
+            "Workspaces/Writing/W1/Revisions/1700000001000-\($0.uuidString).json"
+        }
+
+        // The history is lost; the list survives beside it.
+        try FileManager.default.removeItem(
+            at: workspace.appendingPathComponent(".lamp/revisions")
+        )
+        try #require(!DevotionalAgentRevisionStore.holdsAnyRevisionFile(in: workspace))
+        try #require(!DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace).isEmpty)
+
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: members, heldAsFiles: [], inLibraryAt: root
+        )
+
+        #expect(claimed.isEmpty, "the only recoverable copies must stay fetchable")
+    }
+
+    /// Everything a surviving demotable merge covers stays fetchable —
+    /// including an *untagged* original, which the first version of this
+    /// retired. `removingReplaced` needs a holder for every id the merge
+    /// covers and only one of them has to know a turn, so retiring the
+    /// untagged one blocks the demotion for good.
+    @Test func keepsEverythingAdemotableMergeCoversFetchable() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // An agent's run, merged without a turn — the legacy shape.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "one", after: "one two",
+            in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "one two", after: "one two three",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+
+        let kept = try DevotionalAgentRevisionStore.revisions(in: workspace)
+        let merges = kept.filter {
+            $0.turnID == nil && $0.kind == .agentEdit && $0.replacedRevisionIDs?.isEmpty == false
+        }
+        try #require(!merges.isEmpty, "the two agent edits merged, untagged")
+        let covered = Set(merges.flatMap { $0.replacedRevisionIDs ?? [] })
+        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+
+        #expect(
+            retired.intersection(covered).isEmpty,
+            "nothing a demotable merge covers may be retired"
+        )
+    }
+
+    /// The list is appended to, not rewritten: an autosave that compacts must
+    /// not pay for every id retired before it.
+    @Test func appendsToTheListRatherThanRewritingIt() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+        let list = metadata.appendingPathComponent("retired-revisions.json")
+
+        // An id written by some earlier version of this file, and one line
+        // that is not an id at all — a torn append.
+        let old = UUID()
+        try Data("\(old.uuidString)\nnot-a-uuid\n".utf8).write(to: list)
+
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A B", after: "A B C",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+
+        let ids = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        #expect(ids.contains(old), "what was already retired is still retired")
+        #expect(ids.count > 1, "and the new retirements were added")
+        let text = try String(contentsOf: list, encoding: .utf8)
+        #expect(text.hasPrefix(old.uuidString), "appended, so the first line is untouched")
+        #expect(!text.contains("\"ids\""), "a line per id, not a rewritten document")
+    }
+
+    /// The list is local state and must never be published: it lives in
+    /// `.lamp`, where only `revisions/` is carried out.
+    @Test func keepsTheListOutOfWhatSyncCarries() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A B", after: "A B C",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+        try #require(FileManager.default.fileExists(
+            atPath: workspace.appendingPathComponent(".lamp/retired-revisions.json").path
+        ))
+
+        let exported = root.appendingPathComponent("Exported", isDirectory: true)
+        try await LampWorkspaceSync.exportPortableWorkspaces(from: root, to: exported)
+
+        let published = FileManager.default.enumerator(at: exported, includingPropertiesForKeys: nil)
+        var names: [String] = []
+        while case let url as URL = published?.nextObject() { names.append(url.lastPathComponent) }
+        #expect(!names.contains("retired-revisions.json"))
+    }
+
+    // MARK: what the log may say
+
+    /// The log line says where, never what the reader called it.
+    @Test func namesTheFolderAndNotTheReadersOwnFilename() {
+        let folders = LampSyncDiagnostics.folders(named: [
+            "WritingReview/W1__My Private Doubts.json",
+            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
+            "Workspaces/Presentations/easter.lampdeck",
+        ])
+
+        #expect(!folders.contains("My Private Doubts"))
+        #expect(!folders.contains(".json"))
+        #expect(folders == "Workspaces/Presentations, Workspaces/Writing, WritingReview")
+    }
+
+    /// And nothing a publisher named either. A book's picture lives under its
+    /// module id, and a module id carries words from the book's title.
+    @Test func namesNoModuleTheReaderHas() {
+        let folders = LampSyncDiagnostics.folders(named: [
+            "BookMedia/nic-romans-moo/plate-3.png",
+            "Media/Notes/43011035/tomb.png",
+            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
+        ])
+
+        #expect(!folders.contains("nic-romans-moo"))
+        #expect(folders == "BookMedia, Media, Workspaces/Writing")
+    }
+
+    /// A bare name is all name, so it gives up none of itself.
+    @Test func givesUpNothingForAbareFilename() {
+        #expect(!LampSyncDiagnostics.folders(named: ["My Private Doubts.lamp"])
+            .contains("My Private Doubts"))
     }
 }

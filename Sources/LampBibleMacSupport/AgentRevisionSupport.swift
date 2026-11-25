@@ -397,63 +397,12 @@ public enum DevotionalAgentRevisionStore {
     private static let metadataDirectoryName = ".lamp"
     private static let revisionsDirectoryName = "revisions"
     private static let syncStateFilename = "draft-sync.json"
+    private static let retiredRevisionsFilename = "retired-revisions.json"
     /// Recording and compacting both rewrite the revision folder. Compaction of a
     /// large backlog runs in the background when a workspace opens, so an
     /// autosave arriving meanwhile waits for it rather than racing it. Recursive,
     /// because recording compacts.
     private static let mutationLock = NSRecursiveLock()
-
-    /// The ids this workspace still wants a file for, although nothing here
-    /// holds one at that name.
-    ///
-    /// `lamp-bible-core/Documentation/decisions/0016` claims a revision member
-    /// with no local file as held, because compaction only ever removes one it
-    /// has replaced. There is one exception, and it is the demotion in
-    /// `removingReplaced`: an untagged merge is dropped in favour of the
-    /// records that know which turn made the changes, and that needs **every**
-    /// id it replaced to be held by something which is not itself up for
-    /// demotion. A replaced id nobody here holds stops the demotion, so if its
-    /// file is also claimed as held it never arrives and the untagged merge
-    /// keeps a turn's changes under no turn's name, for good.
-    ///
-    /// So these are not claimed. It costs a download each until one of them
-    /// settles the demotion, after which the merge no longer names them and
-    /// they are claimed like anything else.
-    ///
-    /// Only an **agent** edit's merge. A demotion needs a holder that knows a
-    /// turn, and nothing the person typed carries one; `canMerge` refuses two
-    /// revisions of different kinds, so a `.userEdit` merge covers user edits
-    /// and nothing else, none of which can ever name a turn. Keeping those
-    /// fetchable would download a revision and compact it away again on every
-    /// pass to settle a demotion that cannot happen — the very loop this is
-    /// part of fixing. On the owner's library every untagged merge is a user
-    /// edit, so this is the difference between claiming 34 of the 43 and all
-    /// of them.
-    public static func idsWantedForDemotion(in workspace: URL) throws -> Set<UUID> {
-        var wanted: Set<UUID> = []
-        for stored in try storedRevisions(in: workspace) {
-            guard stored.revision.turnID == nil,
-                  stored.revision.kind == .agentEdit,
-                  let replaced = stored.revision.replacedRevisionIDs,
-                  !replaced.isEmpty
-            else { continue }
-            wanted.formUnion(replaced)
-        }
-        return wanted
-    }
-
-    /// Whether this workspace holds any revision at all that can be read.
-    ///
-    /// `0016`'s claim rests on compaction having left a replacement behind,
-    /// so it needs there to *be* a replacement. A workspace whose history is
-    /// gone altogether — a folder restored without its `.lamp`, a directory
-    /// deleted by hand — holds no replacement for anything, and absence there
-    /// means loss rather than supersession. Asked before any member of such a
-    /// workspace is claimed.
-    public static func holdsAnyRevision(in workspace: URL) -> Bool {
-        guard let stored = try? storedRevisions(in: workspace) else { return false }
-        return !stored.isEmpty
-    }
 
     /// The history to show for one document, newest first.
     public static func revisions(
@@ -755,19 +704,135 @@ public enum DevotionalAgentRevisionStore {
         for revision in compacted where !storedIDs.contains(revision.id) {
             try write(revision, in: workspace)
         }
+
+        // What is about to be deleted is deleted *on purpose*, and only this
+        // code knows that. Written down before the delete, so a pass can
+        // claim the published copy rather than fetching it back for ever
+        // (`lamp-bible-core/Documentation/decisions/0017`).
+        //
+        // One exception, decided here because here is where everything is
+        // decoded: anything a surviving *demotable* merge covers.
+        //
+        // `removingReplaced` drops an untagged merge in favour of the records
+        // that name the turn, and it needs a holder for **every** id that
+        // merge covers — only one of them has to know a turn. So withholding
+        // just the tagged ones is not enough: an untagged original the merge
+        // covers is equally required, and retiring it would keep the
+        // demotion from ever completing while the tagged one was fetched and
+        // discarded for ever. A reviewer found that; the first version of
+        // this test only asked about the deleted revision's own turn.
+        //
+        // Only an agent's merge, though. `canMerge` refuses two revisions of
+        // different kinds and nothing the person typed carries a turn, so a
+        // `.userEdit` merge can never be demoted and nothing needs holding
+        // back for it.
+        let demotable = compacted.filter {
+            keptIDs.contains($0.id) && $0.turnID == nil && $0.kind == .agentEdit
+                && $0.replacedRevisionIDs?.isEmpty == false
+        }
+        let goingAway = stored.filter { !keptIDs.contains($0.revision.id) }
+        let retiring = goingAway.filter { entry in
+            !demotable.contains { $0.coveredRevisionIDs.contains(entry.revision.id) }
+        }
+        try retire(retiring.map(\.revision.id), in: workspace)
+
         var removed = Set<URL>()
-        for entry in stored where !keptIDs.contains(entry.revision.id) {
+        for entry in goingAway {
             forgetDecodedHistory(in: workspace)
             try FileManager.default.removeItem(at: entry.url)
             removed.insert(entry.url)
         }
         // The same revision stored under two names keeps only one of them.
+        //
+        // The id is retired here as well, although the revision itself stays:
+        // what is published under the name just deleted now has no file, and
+        // nothing else would ever say why. Retiring an id that is still on
+        // disk under its other name costs nothing, because the claim is only
+        // consulted for a member with no local file — and the kept name has
+        // one (`decisions/0017`).
         var seen = Set<UUID>()
         for entry in stored.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent })
         where !removed.contains(entry.url) && !seen.insert(entry.revision.id).inserted {
             forgetDecodedHistory(in: workspace)
+            try retire([entry.revision.id], in: workspace)
             try FileManager.default.removeItem(at: entry.url)
         }
+    }
+
+    /// The revisions this workspace has removed on purpose, so a pass can say
+    /// it holds their history without a file to show for it.
+    ///
+    /// `0017`. The distinction this exists for: a sync record says *installed
+    /// here once*, and what a claim needs is *removed here deliberately, with
+    /// its replacement on disk*. Only the code that did the removing can say
+    /// the second, so `compact` writes it down as it goes.
+    ///
+    /// An unreadable or missing list answers empty, which claims nothing —
+    /// the members come down once, compaction removes and retires them, and
+    /// they are claimed from the next pass. That is one extra pass of
+    /// downloads and no lost history, the same shape of recovery a forgotten
+    /// sync record has.
+    public static func retiredRevisionIDs(in workspace: URL) -> Set<UUID> {
+        let url = metadataDirectory(in: workspace)
+            .appendingPathComponent(retiredRevisionsFilename)
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8)
+        else { return [] }
+        var ids: Set<UUID> = []
+        for line in text.split(separator: "\n") {
+            if let id = UUID(uuidString: String(line)) { ids.insert(id) }
+        }
+        return ids
+    }
+
+    /// Adds `ids` to this workspace's retired list.
+    ///
+    /// Called by `compact` between writing the replacements and deleting what
+    /// they replace. That order is deliberate: a crash after this and before
+    /// the delete leaves a retired id whose file is still there, which
+    /// changes nothing because the claim is only ever consulted for a member
+    /// with no local file. A crash the other way round leaves a deleted
+    /// revision unretired, which costs one download and then retires itself.
+    /// **Appended, never rewritten.** One id a line, because this is on the
+    /// autosave path: an autosave that compacts used to decode, sort and
+    /// rewrite the whole list under the store's lock, which a reviewer
+    /// measured at 44 ms against 3 ms once fifteen thousand ids had
+    /// accumulated — latency that grew for ever with the file. An append of
+    /// thirty-seven bytes does not care how long the file is.
+    ///
+    /// A torn append leaves one unparseable line, which the reader skips:
+    /// that id is unretired, so its member is fetched once and retired
+    /// again. The same self-healing a missing list has.
+    private static func retire(_ ids: some Sequence<UUID>, in workspace: URL) throws {
+        let fresh = Set(ids)
+        guard !fresh.isEmpty else { return }
+        let directory = metadataDirectory(in: workspace)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(retiredRevisionsFilename)
+        let line = Data(
+            (fresh.map(\.uuidString).sorted().joined(separator: "\n") + "\n").utf8
+        )
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } else {
+            try line.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Whether this workspace holds any revision file at all.
+    ///
+    /// A directory listing, not a decode: the claim in `0017` needs to know
+    /// that *some* replacement is still here before it trusts a retirement,
+    /// and asking what each file says would put the library's whole history
+    /// on the pass again.
+    public static func holdsAnyRevisionFile(in workspace: URL) -> Bool {
+        let directory = revisionsDirectory(in: workspace)
+        guard let names = try? FileManager.default.contentsOfDirectory(
+            atPath: directory.path
+        ) else { return false }
+        return names.contains { $0.hasSuffix(".json") }
     }
 
     public static func lastSyncedDraft(in workspace: URL) throws -> String? {

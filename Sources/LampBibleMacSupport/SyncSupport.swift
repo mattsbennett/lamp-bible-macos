@@ -89,22 +89,12 @@ public enum LampWorkspaceSync {
     /// as held, so those do not come back from the server. It is the same
     /// wrong case `mergedIntoTheLibrary` already accepts, and the alternative
     /// is fetching them for ever.
-    /// - Parameter stillWantedForDemotion: revision ids some untagged merge
-    ///   here still needs a file for, from
-    ///   `DevotionalAgentRevisionStore.idsWantedForDemotion`. These are left
-    ///   unclaimed, so they can still come down: a demotion needs every id a
-    ///   merge replaced, and a claim would keep one away for good.
     public static func claimableRevisionMembers(
         among members: some Sequence<String>,
-        heldAsFiles: Set<String>,
-        stillWantedForDemotion: Set<UUID> = []
+        heldAsFiles: Set<String>
     ) -> Set<String> {
         var claimed: Set<String> = []
         for path in members where !heldAsFiles.contains(path) && namesARevision(path) {
-            // The id read off the name once and looked up, rather than every
-            // wanted id tried against the name: a library with thousands of
-            // each made that the whole cost of the claim.
-            if let id = revisionID(named: path), stillWantedForDemotion.contains(id) { continue }
             claimed.insert(path)
         }
         return claimed
@@ -155,21 +145,21 @@ public enum LampWorkspaceSync {
     }
 
     /// The revision members this Mac holds the history of although no file
-    /// sits at the path, reading only the workspaces that can affect the
-    /// answer.
+    /// sits at the path.
     ///
-    /// Which workspaces those are is decided before anything is opened. A
-    /// pass over an unchanged library has no missing member at all and so
-    /// reads nothing: deciding first and reading second is the difference
-    /// between that and decoding the library's whole history every pass,
-    /// which on 250 workspaces of fifty revisions is some 430 ms — spent
-    /// holding `WritingWorkspaceFiles`, which is the owner the editor's own
-    /// writes queue behind.
+    /// `decisions/0017`. Each workspace that has a missing member is asked
+    /// for its retired list — the ids its own compaction removed on purpose —
+    /// and a member whose id is on that list is claimed. Nothing is decoded:
+    /// one small file per workspace, and only for workspaces that have a
+    /// missing member at all, so an unchanged library reads nothing.
     ///
-    /// A workspace that cannot be read contributes no wanted ids. That is the
-    /// unsafe direction for the claim — a member is claimed that a demotion
-    /// might have wanted — and it is the same exposure as before
-    /// `decisions/0016`, never worse.
+    /// This replaced two guesses that stood in for the list and each left a
+    /// hole a reviewer found: inferring supersession from *any* local history
+    /// existing, which a single new edit in an emptied folder satisfied; and
+    /// scanning every untagged merge's replaced ids, which decoded the whole
+    /// library's history on every pass while holding the owner the editor
+    /// queues behind. A record says *installed here once*; only the deleter
+    /// can say *removed here deliberately*.
     @WritingWorkspaceFiles
     public static func revisionMembersHeldWithoutAFile(
         members: some Sequence<String>,
@@ -177,40 +167,43 @@ public enum LampWorkspaceSync {
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
     ) -> Set<String> {
-        let missing = claimableRevisionMembers(
-            among: members, heldAsFiles: heldAsFiles
-        )
+        let missing = claimableRevisionMembers(among: members, heldAsFiles: heldAsFiles)
         guard !missing.isEmpty else { return [] }
 
-        var wanted: Set<UUID> = []
-        var withoutAnyHistory: Set<String> = []
         let root = LampWritingWorkspace.root(
             libraryRootURL: libraryRoot, fileManager: fileManager
         )
-        for identifier in Set(missing.compactMap(workspaceIdentifier(ofRevisionAt:))) {
-            let workspace = root.appendingPathComponent(identifier, isDirectory: true)
-            // The claim says a missing revision was superseded by one that is
-            // here. Where none is here, nothing superseded anything: the
-            // history is gone, not compacted, and the server's copies are the
-            // way back. Claiming them would be the one thing worse than
-            // fetching them.
-            guard DevotionalAgentRevisionStore.holdsAnyRevision(in: workspace) else {
-                withoutAnyHistory.insert(identifier)
-                continue
-            }
-            wanted.formUnion(
-                (try? DevotionalAgentRevisionStore.idsWantedForDemotion(in: workspace)) ?? []
-            )
+        var retired: [String: Set<UUID>] = [:]
+        var claimed: Set<String> = []
+        for path in missing {
+            guard let identifier = workspaceIdentifier(ofRevisionAt: path),
+                  let id = revisionID(named: path)
+            else { continue }
+            let ids = retired[identifier] ?? {
+                let workspace = root.appendingPathComponent(identifier, isDirectory: true)
+                // A retirement says the replacement was on disk when
+                // compaction ran, not that it is on disk now. If the history
+                // is gone the replacement went with it, and the server's copy
+                // of the retired original may be the only one left — so a
+                // workspace holding no revision at all claims nothing, list
+                // or no list. A reviewer found this: a revision compacted
+                // into a replacement that had not yet uploaded, then a lost
+                // `.lamp/revisions` with the list surviving beside it, and
+                // the one recoverable copy would have been skipped.
+                //
+                // Not evidence of supersession by itself — that is the list's
+                // job, and claiming on this alone was `0016`'s mistake. A
+                // necessary condition beside it, and a cheap one: whether the
+                // folder has anything in it, nothing decoded.
+                let answer = DevotionalAgentRevisionStore.holdsAnyRevisionFile(in: workspace)
+                    ? DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+                    : []
+                retired[identifier] = answer
+                return answer
+            }()
+            if ids.contains(id) { claimed.insert(path) }
         }
-
-        let claimable = missing.filter {
-            workspaceIdentifier(ofRevisionAt: $0).map { !withoutAnyHistory.contains($0) } ?? false
-        }
-        guard !wanted.isEmpty else { return claimable }
-
-        return claimableRevisionMembers(
-            among: claimable, heldAsFiles: [], stillWantedForDemotion: wanted
-        )
+        return claimed
     }
 
     /// The workspace a published revision belongs to, from its path.
