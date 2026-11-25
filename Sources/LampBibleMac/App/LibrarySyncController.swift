@@ -1126,10 +1126,21 @@ extension LibrarySyncController {
         }
 
         let writings = try await library.personalDevotionals()
+        // The media the manifest already names. Disk discovery may only
+        // answer for one of these: a file at a path nobody names would be
+        // uploaded, and a writing deleted before its first sync leaves its
+        // pictures on disk — publishing those would send the reader
+        // something they deleted.
+        let mediaMembers = Set(
+            manifest.members.lazy
+                .filter { $0.kind?.isMedia == true }
+                .map(\.path)
+        )
         let media = LampSyncLocalFiles.devotionalMedia(
             for: writings,
             remoteModuleID: LampSyncMacPassLibrary.remoteWritingModuleID,
             inLibraryAt: library.rootURL,
+            members: mediaMembers,
             fileManager: fileManager
         )
         candidates += media.candidates
@@ -1140,6 +1151,7 @@ extension LibrarySyncController {
             for: notesWithMedia,
             remoteModuleID: LampSyncMacPassLibrary.remoteNotesModuleID,
             inLibraryAt: library.rootURL,
+            members: mediaMembers,
             fileManager: fileManager
         )
         candidates += notePictures.candidates

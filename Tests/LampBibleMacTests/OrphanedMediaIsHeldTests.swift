@@ -46,7 +46,11 @@ struct OrphanedMediaIsHeldTests {
         }
 
         let gathered = LampSyncLocalFiles.devotionalMedia(
-            for: [], remoteModuleID: "writing", inLibraryAt: root
+            for: [], remoteModuleID: "writing", inLibraryAt: root,
+            members: [
+                "WritingMedia/writing/\(orphan)/one.jpg",
+                "WritingMedia/writing/\(orphan)/two.jpg",
+            ]
         )
 
         #expect(gathered.candidates.map(\.path).sorted() == [
@@ -65,7 +69,8 @@ struct OrphanedMediaIsHeldTests {
         _ = try writeMedia(in: root, scope: .note, owner: "14007001", named: "tomb.png")
 
         let gathered = LampSyncLocalFiles.noteMedia(
-            for: [], remoteModuleID: "personal-notes", inLibraryAt: root
+            for: [], remoteModuleID: "personal-notes", inLibraryAt: root,
+            members: ["NoteMedia/personal-notes/14007001/tomb.png"]
         )
 
         #expect(gathered.candidates.map(\.path) == ["NoteMedia/personal-notes/14007001/tomb.png"])
@@ -92,7 +97,8 @@ struct OrphanedMediaIsHeldTests {
         _ = try writeMedia(in: root, scope: .devotional, owner: "W1", named: "held.jpg")
 
         let gathered = LampSyncLocalFiles.devotionalMedia(
-            for: [writing], remoteModuleID: "writing", inLibraryAt: root
+            for: [writing], remoteModuleID: "writing", inLibraryAt: root,
+            members: ["WritingMedia/writing/W1/held.jpg"]
         )
 
         #expect(gathered.candidates.map(\.path) == ["WritingMedia/writing/W1/held.jpg"])
@@ -108,10 +114,51 @@ struct OrphanedMediaIsHeldTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
         let gathered = LampSyncLocalFiles.devotionalMedia(
-            for: [], remoteModuleID: "writing", inLibraryAt: root
+            for: [], remoteModuleID: "writing", inLibraryAt: root,
+            members: [
+                "WritingMedia/writing/W1/real.jpg", "WritingMedia/writing/W1/link.jpg",
+            ]
         )
 
         #expect(gathered.candidates.map(\.path) == ["WritingMedia/writing/W1/real.jpg"])
+    }
+
+    /// A picture the manifest does not name is **not** claimed, because a
+    /// candidate at an unnamed path is *uploaded*.
+    ///
+    /// Deleting a writing leaves its attachments on disk. If it was deleted
+    /// before its first sync, nothing on the server names them — and
+    /// volunteering them here would publish pictures the reader deleted. A
+    /// reviewer caught this: disk discovery may only answer "that member is
+    /// here".
+    @Test func doesNotVolunteerApictureNobodyNames() throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try writeMedia(in: root, scope: .devotional, owner: "W-never-synced", named: "gone.jpg")
+
+        let gathered = LampSyncLocalFiles.devotionalMedia(
+            for: [], remoteModuleID: "writing", inLibraryAt: root,
+            members: ["WritingMedia/writing/W-other/kept.jpg"]
+        )
+
+        #expect(gathered.candidates.isEmpty)
+    }
+
+    /// A notes *module*'s pictures live under `Media/Notes/module-<id>/` and
+    /// are gathered elsewhere under their own member paths, so the scan must
+    /// not invent a verse-owner path for them. The member list is what keeps
+    /// them out.
+    @Test func doesNotClaimAnotesModulesPicturesAsAverseOwners() throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try writeMedia(in: root, scope: .note, owner: "module-nic", named: "plate.png")
+
+        let gathered = LampSyncLocalFiles.noteMedia(
+            for: [], remoteModuleID: "personal-notes", inLibraryAt: root,
+            members: ["NoteMedia/personal-notes/14007001/tomb.png"]
+        )
+
+        #expect(gathered.candidates.isEmpty)
     }
 
     /// A library with no `Media` folder at all answers nothing, rather than
@@ -121,7 +168,8 @@ struct OrphanedMediaIsHeldTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let gathered = LampSyncLocalFiles.devotionalMedia(
-            for: [], remoteModuleID: "writing", inLibraryAt: root
+            for: [], remoteModuleID: "writing", inLibraryAt: root,
+            members: ["WritingMedia/writing/W1/anything.jpg"]
         )
 
         #expect(gathered.candidates.isEmpty)

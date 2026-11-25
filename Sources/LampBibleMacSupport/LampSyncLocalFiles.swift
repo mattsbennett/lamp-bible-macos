@@ -141,10 +141,12 @@ extension LampSyncLocalFiles {
     ///
     /// One note at a time, as writings are, so a single note referring to a
     /// file the library has lost cannot hide every other note's pictures.
+    /// - Parameter members: as `devotionalMedia`.
     public static func noteMedia(
         for notes: [LampVerseNote],
         remoteModuleID: String,
         inLibraryAt libraryRoot: URL,
+        members: Set<String> = [],
         fileManager: FileManager = .default
     ) -> (candidates: [Candidate], missing: [Unreadable]) {
         var candidates: [Candidate] = []
@@ -176,8 +178,8 @@ extension LampSyncLocalFiles {
         }
         candidates += mediaOnDisk(
             scope: .note, kind: .noteMedia, remoteModuleID: remoteModuleID,
-            inLibraryAt: libraryRoot, alreadyProduced: Set(candidates.map(\.path)),
-            fileManager: fileManager
+            inLibraryAt: libraryRoot, members: members,
+            alreadyProduced: Set(candidates.map(\.path)), fileManager: fileManager
         )
         return (candidates, missing)
     }
@@ -200,21 +202,27 @@ extension LampSyncLocalFiles {
         kind: LampSyncFileKind,
         remoteModuleID: String,
         inLibraryAt libraryRoot: URL,
+        members: Set<String>,
         alreadyProduced: Set<String>,
         fileManager: FileManager
     ) -> [Candidate] {
         LampSyncDevotionalMedia.filesOnDisk(
-            scope: scope, moduleID: remoteModuleID,
+            scope: scope, moduleID: remoteModuleID, satisfying: members,
             in: libraryRoot, fileManager: fileManager
         )
         .filter { !alreadyProduced.contains($0.remotePath) }
         .map { Candidate(path: $0.remotePath, kind: kind, url: $0.localURL) }
     }
 
+    /// - Parameter members: the media paths the manifest already names.
+    ///   Disk discovery may only say "that member is here"; a file at a path
+    ///   nobody names would be *uploaded*, and a writing deleted before its
+    ///   first sync leaves its pictures on disk.
     public static func devotionalMedia(
         for devotionals: [LampDevotional],
         remoteModuleID: String,
         inLibraryAt libraryRoot: URL,
+        members: Set<String> = [],
         fileManager: FileManager = .default
     ) -> (candidates: [Candidate], missing: [Unreadable]) {
         var candidates: [Candidate] = []
@@ -244,8 +252,8 @@ extension LampSyncLocalFiles {
         }
         candidates += mediaOnDisk(
             scope: .devotional, kind: .devotionalMedia, remoteModuleID: remoteModuleID,
-            inLibraryAt: libraryRoot, alreadyProduced: Set(candidates.map(\.path)),
-            fileManager: fileManager
+            inLibraryAt: libraryRoot, members: members,
+            alreadyProduced: Set(candidates.map(\.path)), fileManager: fileManager
         )
         return (candidates, missing)
     }
