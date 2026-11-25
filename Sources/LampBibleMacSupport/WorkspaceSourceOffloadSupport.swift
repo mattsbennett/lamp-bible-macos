@@ -439,7 +439,8 @@ public struct VerifiedSource: Equatable, Sendable {
     /// Whether the file still resolves inside the context directory it was
     /// read in.
     var isStillInside: Bool {
-        file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/")
+        LampWorkspaceSync.reachesWithoutALink(relativePath, under: URL(fileURLWithPath: resolvedContext))
+            && file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/")
     }
 
     /// Opens the source once and reads its identity and digest from that
@@ -452,7 +453,8 @@ public struct VerifiedSource: Equatable, Sendable {
     static func verify(relativePath: String, inContext context: URL) -> VerifiedSource? {
         let file = context.appendingPathComponent(relativePath)
         let resolvedContext = context.resolvingSymlinksInPath().path
-        guard file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/"),
+        guard LampWorkspaceSync.reachesWithoutALink(relativePath, under: context),
+              file.resolvingSymlinksInPath().path.hasPrefix(resolvedContext + "/"),
               let read = try? LampVerifiedFileRead.read(file)
         else { return nil }
         return VerifiedSource(
@@ -607,5 +609,24 @@ extension WorkspaceSourceOffload {
             notHere: LampWorkspaceSync.sourcesNotHere(in: workspace, fileManager: fileManager),
             leaving: Set(LampWorkspaceSync.leavingSourceNames(in: workspace, fileManager: fileManager))
         )
+    }
+}
+
+/// Which folder is at a path: device and inode, read without following a
+/// link. A folder keeps both however its contents change; a different folder
+/// put at the same path, or a link put there, does not.
+///
+/// For a confirmation that outlives a moment: a Remove dialog left open while
+/// the folder it names is moved away and another put in its place must not
+/// remove the replacement everywhere.
+public struct FolderIdentity: Equatable, Sendable {
+    let device: Int64
+    let inode: UInt64
+
+    public init?(of url: URL) {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        device = Int64(info.st_dev)
+        inode = UInt64(info.st_ino)
     }
 }

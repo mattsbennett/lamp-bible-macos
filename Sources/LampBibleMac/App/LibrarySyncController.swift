@@ -416,6 +416,12 @@ final class LibrarySyncController: ObservableObject {
         return finished
     }
 
+    /// Whether a pass is running, from its start to the end of its offloads —
+    /// what a caller waiting for a pass to finish has to wait on. `isSyncing`
+    /// clears before the offloads, and a sync asked for then is queued rather
+    /// than run, so waiting on it alone returns before the pass it queued.
+    var isPassRunning: Bool { isSyncing || passGate }
+
     /// Whether the offloads after a pass are being carried out. While they
     /// are, no pass starts and the lock on where sync points is not released.
     @Published private(set) var isOffloading = false
@@ -478,13 +484,10 @@ final class LibrarySyncController: ObservableObject {
                             relativePath: path, in: workspace
                         )
                         refused.append(path)
-                    } else {
-                        // A failed unlink forgets the request with the act;
-                        // put it back, so the next sync tries again.
-                        try? await WorkspaceContextFileStore.queueOffload(
-                            relativePath: path, in: workspace
-                        )
                     }
+                    // Anything else is left as it is: untouched, or put back by
+                    // the batch itself before it let go. Re-queueing here,
+                    // afterwards, would undo a Keep Here pressed meanwhile.
                     Self.log.info("A requested offload was left: \(reason.rawValue, privacy: .public)")
                 }
             } catch {

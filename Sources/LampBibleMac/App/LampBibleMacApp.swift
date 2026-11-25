@@ -183,7 +183,7 @@ struct LampBibleMacApp: App {
                         // run for this, so what it brings in is sure to be
                         // what the phone saved.
                         let started = Date()
-                        while syncController.isSyncing, Date().timeIntervalSince(started) < 60 {
+                        while syncController.isPassRunning, Date().timeIntervalSince(started) < 60 {
                             try? await Task.sleep(for: .milliseconds(250))
                         }
                         await syncController.sync(library: libraryModel.library)

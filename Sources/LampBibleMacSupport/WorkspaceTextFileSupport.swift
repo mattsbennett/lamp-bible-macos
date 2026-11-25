@@ -608,15 +608,21 @@ public enum WorkspaceContextFileStore {
             guard isTheSource else { throw OffloadError.replacedSinceConfirmed(relativePath) }
         }
 
-        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
-        ledger.recordDeletion(of: WorkspaceFileLedger.contextKey(relativePath))
-        try ledger.save(in: workspaceURL)
-
+        // The server's removal is queued first, and only then is the act
+        // cleared. The other way round, a crash or a failed save between the
+        // two leaves the source gone from the list with nothing telling the
+        // server, and the lock on where sync points free to lift while the
+        // only copy is still there. This way round the worst is a removal
+        // queued and an act still showing, which the next look settles.
         var removed = LampSyncRemovedModules.load(
             fromLibraryAt: libraryRootURL, fileManager: fileManager
         )
         removed.record(member, at: WorkspaceFileLedger.milliseconds(Date()))
         try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
+
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.recordDeletion(of: WorkspaceFileLedger.contextKey(relativePath))
+        try ledger.save(in: workspaceURL)
 
         // The copy that came back, checked above to be this source, goes
         // too. Through the verified unlink, so it cannot remove a tree and
@@ -825,6 +831,11 @@ public enum WorkspaceContextFileStore {
                     verified.relativePath, inContextOf: workspaceURL, fileManager: fileManager
                 ) {
                     ledger.forgetAct(key, restoring: baseline)
+                    // A request the reader made survives a failed unlink,
+                    // put back here, before anything else can run, rather
+                    // than by the caller afterwards — when Keep Here may
+                    // since have been pressed and would be undone.
+                    if onlyWhileRequested { ledger.noteLeaving(key) }
                     try? ledger.save(in: workspaceURL)
                     skipped[verified.relativePath] =
                         error is UnlinkRefusal ? .changedSinceUpload : .couldNotRemove

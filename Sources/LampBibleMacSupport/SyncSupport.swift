@@ -176,8 +176,16 @@ public enum LampWorkspaceSync {
         // (`decisions/0010`). Resolving and comparing prefixes is not the
         // same thing: a folder linked to another folder *inside* the context
         // directory resolves inside it too, and the gather still skips it.
-        // The context folder itself included: a context directory that is a
-        // link leads every path under it somewhere the gather never goes.
+        return reachesWithoutALink(relativePath, under: context)
+    }
+
+    /// Whether `relativePath` is reached from `context` through folders, none
+    /// of them a link — the context folder itself included. The gather
+    /// follows no links (`decisions/0010`), so neither may anything that
+    /// decides a source is here or deletes one: resolving and comparing
+    /// prefixes lets a folder linked to another folder *inside* the context
+    /// directory through, and the gather still skips it.
+    static func reachesWithoutALink(_ relativePath: String, under context: URL) -> Bool {
         guard let root = try? context.resourceValues(forKeys: [.isSymbolicLinkKey]),
               root.isSymbolicLink != true
         else { return false }
@@ -309,6 +317,8 @@ public enum LampWorkspaceSync {
         }
         var members: [String] = []
         for workspace in all {
+            // Unreadable anywhere is unreadable: see `loadIfReadable`.
+            guard WorkspaceFileLedger.loadIfReadable(in: workspace) != nil else { return nil }
             for path in sourcesNotHere(in: workspace, fileManager: fileManager).keys {
                 if let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
@@ -1699,6 +1709,23 @@ struct WorkspaceFileLedger: Codable, Equatable {
         guard let data = try? Data(contentsOf: url(in: workspace)),
               let ledger = try? JSONDecoder().decode(WorkspaceFileLedger.self, from: data)
         else { return WorkspaceFileLedger() }
+        return ledger
+    }
+
+    /// The ledger, or nil where one is there and could not be read.
+    ///
+    /// `load` answers a fresh ledger for both "no ledger yet" and "a ledger
+    /// that would not read", which is right for a pass — there is nothing to
+    /// carry forward either way. It is wrong for the lock on where sync
+    /// points: a ledger that would not read may be holding the last offload,
+    /// and reading it as empty would lift the lock while the only copy sat on
+    /// the server.
+    static func loadIfReadable(in workspace: URL) -> WorkspaceFileLedger? {
+        let file = url(in: workspace)
+        guard FileManager.default.fileExists(atPath: file.path) else { return WorkspaceFileLedger() }
+        guard let data = try? Data(contentsOf: file),
+              let ledger = try? JSONDecoder().decode(WorkspaceFileLedger.self, from: data)
+        else { return nil }
         return ledger
     }
 

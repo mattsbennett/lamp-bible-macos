@@ -1267,6 +1267,11 @@ struct DevotionalAgentWorkspaceView: View {
     /// The offloaded source a Remove is waiting to be confirmed for. Its
     /// bytes are not on this Mac, so the click would destroy the only copy.
     @State private var sourceToRemove: DevotionalAgentContextFile?
+    /// The folder a confirmation is for, as it was when the dialog opened —
+    /// device and inode, which a folder keeps however its contents change. A
+    /// different folder put at the path while the dialog was open is not the
+    /// one the reader agreed to remove everywhere.
+    @State private var folderToRemoveIdentity: FolderIdentity?
     @State private var isDropTargeted = false
     @State private var skillEditorRequest: DevotionalAgentSkillEditorRequest?
     @State private var skillPendingDeletion: DevotionalAgentSkill?
@@ -1726,8 +1731,10 @@ struct DevotionalAgentWorkspaceView: View {
                 ) {
                     Button("Remove Everywhere", role: .destructive) {
                         if let file = sourceToRemove {
+                            let confirmed = folderToRemoveIdentity
                             sourceToRemove = nil
-                            Task { await removeContextFile(file) }
+                            folderToRemoveIdentity = nil
+                            Task { await removeContextFile(file, confirmedFolder: confirmed) }
                         }
                     }
                     Button("Cancel", role: .cancel) { sourceToRemove = nil }
@@ -2120,6 +2127,7 @@ struct DevotionalAgentWorkspaceView: View {
                 // for an offloaded one the click destroys the only copy there
                 // is, with nothing left on this Mac to go back to.
                 if file.removesWhatIsNotHere {
+                    folderToRemoveIdentity = file.isDirectory ? FolderIdentity(of: file.url) : nil
                     sourceToRemove = file
                 } else {
                     Task { await removeContextFile(file) }
@@ -2840,10 +2848,20 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func removeContextFile(_ file: DevotionalAgentContextFile) async {
+    private func removeContextFile(
+        _ file: DevotionalAgentContextFile, confirmedFolder: FolderIdentity? = nil
+    ) async {
         guard let workspaceURL else { return }
         errorMessage = nil
         contextNote = nil
+        // Still the folder the reader confirmed, or nothing is removed.
+        if let confirmedFolder, FolderIdentity(of: file.url) != confirmedFolder {
+            errorMessage = """
+                “\(file.name)” has changed since you chose to remove it, so \
+                nothing was removed. Check it and try again.
+                """
+            return
+        }
         do {
             try await DevotionalAgentWorkspaceStore.removeContextFile(
                 file,

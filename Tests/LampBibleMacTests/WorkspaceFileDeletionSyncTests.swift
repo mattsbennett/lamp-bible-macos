@@ -1180,6 +1180,66 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
     }
 
+    /// A folder keeps its identity while its contents change, and a folder
+    /// put in its place does not share it — which is what lets a Remove
+    /// confirmed on one refuse the other.
+    @Test func afolderIsTheSameFolderUntilAnotherTakesItsPlace() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("folder-identity-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let confirmed = try #require(FolderIdentity(of: folder))
+
+        try Data("x".utf8).write(to: folder.appendingPathComponent("new.pdf"))
+        #expect(FolderIdentity(of: folder) == confirmed, "its contents changing does not make it another")
+
+        try FileManager.default.moveItem(at: folder, to: root.appendingPathComponent("moved"))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(FolderIdentity(of: folder) != confirmed, "a folder put in its place is another")
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.createSymbolicLink(
+            at: folder, withDestinationURL: root.appendingPathComponent("moved")
+        )
+        #expect(FolderIdentity(of: folder) == nil, "and a link to the original is not the folder")
+    }
+
+    /// A ledger that is there and will not read keeps the lock: it may hold
+    /// the last offload, and reading it as empty would lift the lock while
+    /// the only copy sat on the server.
+    @Test func anUnreadableLedgerKeepsTheLock() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try await ledger.save(in: workspaceURL)
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.count == 1)
+
+        try Data("not a ledger".utf8).write(
+            to: workspaceURL.appendingPathComponent(".lamp/sync-files.json")
+        )
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == nil)
+    }
+
+    /// Removing a source that is not here queues the server's removal before
+    /// it clears the act, so a crash between the two leaves something that
+    /// still says so, rather than a source gone from the list with nothing
+    /// telling the server.
+    @Test func removalIsQueuedBeforeTheActIsCleared() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let start = try #require(source.range(of: "public static func removeOffloadedSource("))
+        let end = try #require(source.range(of: "\n    /// ", range: start.upperBound..<source.endIndex))
+        let body = source[start.upperBound..<end.lowerBound]
+        let queued = try #require(body.range(of: "removed.save("))
+        let cleared = try #require(body.range(of: "ledger.recordDeletion("))
+        #expect(queued.lowerBound < cleared.lowerBound)
+    }
+
     /// Remove refuses when the row the reader confirmed is no longer the row
     /// there is: a file turned up and the gather answered the offload, so
     /// what is at the path is not the source the dialog named.
