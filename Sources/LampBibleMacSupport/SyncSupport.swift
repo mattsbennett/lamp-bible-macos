@@ -100,39 +100,6 @@ public enum LampWorkspaceSync {
         return claimed
     }
 
-    /// The revision id a published name ends with, from
-    /// `<millis>-<uuid>.json` as the store writes it.
-    ///
-    /// Nil where the name does not end in one, which is any file this claim
-    /// does not recognise — and an unrecognised name is never treated as a
-    /// wanted id, so it stays claimable.
-    static func revisionID(named path: String) -> UUID? {
-        guard let name = path.split(separator: "/").last,
-              name.hasSuffix(".json")
-        else { return nil }
-        let stem = name.dropLast(".json".count)
-
-        // `<uuid>.json`, with no stamp in front. The store writes
-        // `<millis>-<uuid>.json`, but a bare id is a shape the import and the
-        // compactor both accept and `SyncSupportTests` publishes, so it is a
-        // real name a library can hold. Requiring the stamp meant such a
-        // member could never be matched to a retirement and was fetched and
-        // deleted on every pass for ever — the very loop this is here to
-        // stop. A reviewer found it; the first version of this even had a
-        // test asserting the wrong answer.
-        if let bare = UUID(uuidString: String(stem)) { return bare }
-
-        guard let dash = stem.lastIndex(of: "-") else { return nil }
-        // A UUID has four of its own dashes, so the id starts at the fifth
-        // from the end rather than at the last one.
-        var start = dash
-        for _ in 0..<4 {
-            guard let next = stem[stem.startIndex..<start].lastIndex(of: "-") else { return nil }
-            start = next
-        }
-        return UUID(uuidString: String(stem[stem.index(after: start)...]))
-    }
-
     /// Whether `path` is a published revision file of a *writing* workspace:
     /// `Workspaces/Writing/<workspace>/Revisions/<name>.json`.
     ///
@@ -184,34 +151,29 @@ public enum LampWorkspaceSync {
         let root = LampWritingWorkspace.root(
             libraryRootURL: libraryRoot, fileManager: fileManager
         )
-        var retired: [String: Set<UUID>] = [:]
+        var claimable: [String: Set<String>] = [:]
         var claimed: Set<String> = []
         for path in missing {
             guard let identifier = workspaceIdentifier(ofRevisionAt: path),
-                  let id = revisionID(named: path)
+                  let name = path.split(separator: "/").last
             else { continue }
-            let ids = retired[identifier] ?? {
+            let names = claimable[identifier] ?? {
                 let workspace = root.appendingPathComponent(identifier, isDirectory: true)
-                // A retirement says the replacement was on disk when
-                // compaction ran, not that it is on disk now. If the history
-                // is gone the replacement went with it, and the server's copy
-                // of the retired original may be the only one left — so a
-                // workspace holding no revision at all claims nothing, list
-                // or no list. A reviewer found this: a revision compacted
-                // into a replacement that had not yet uploaded, then a lost
-                // `.lamp/revisions` with the list surviving beside it, and
-                // the one recoverable copy would have been skipped.
-                //
-                // Not evidence of supersession by itself — that is the list's
-                // job, and claiming on this alone was `0016`'s mistake. A
-                // necessary condition beside it, and a cheap one: whether the
-                // folder has anything in it, nothing decoded.
-                let answer = DevotionalAgentRevisionStore
-                    .claimableRetiredRevisionIDs(in: workspace)
-                retired[identifier] = answer
+                let answer = DevotionalAgentRevisionStore.claimableRetiredNames(in: workspace)
+                claimable[identifier] = answer
                 return answer
             }()
-            if ids.contains(id) { claimed.insert(path) }
+            // The published name, folded, against the names compaction wrote
+            // down — never an id parsed back out of the name. A revision file
+            // is whatever the store called it: it writes
+            // `<millis>-<uuid>.json` and accepts `<uuid>.json`, which sync's
+            // own tests publish, and `storedRevisions` asks only for the
+            // extension. So the only key with the store's own tolerance is
+            // the name itself, and a matcher that parsed the convention broke
+            // on the convention's second shape (`decisions/0017`).
+            if names.contains(DevotionalAgentRevisionStore.foldedName(String(name))) {
+                claimed.insert(path)
+            }
         }
         return claimed
     }

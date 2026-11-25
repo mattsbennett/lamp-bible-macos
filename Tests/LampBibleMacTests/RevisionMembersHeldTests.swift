@@ -66,26 +66,64 @@ struct RevisionMembersHeldTests {
         )
     }
 
-    /// The id is read off the end of the name, past the four dashes a UUID
-    /// has of its own and the millisecond stamp in front of it.
-    @Test func readsTheIDOffTheEndOfAname() {
-        let id = UUID()
-        #expect(
-            LampWorkspaceSync.revisionID(
-                named: "\(workspace)/Revisions/1700000001000-\(id.uuidString).json"
-            ) == id
+    /// There is no name parsing left to test: a claim matches the name
+    /// compaction wrote down, folded. These are the two names the store
+    /// itself writes and accepts, and both must be claimable once retired —
+    /// the parser that used to derive an id from a name could not see the
+    /// second, and fetched it for ever.
+    @Test(arguments: [
+        "1700000001000-7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json",
+        "7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json",
+    ])
+    func claimsEitherNameTheStoreWrites(name: String) async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        // Some readable history, so the trust guard is satisfied.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
         )
-        #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/Revisions/17-A.json") == nil)
-        #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/draft.md") == nil)
-        // A bare id, with no stamp: not what the store writes, but a shape
-        // the import and the compactor both accept and sync publishes, so a
-        // library really can hold one. Read as the id it is — requiring the
-        // stamp left such a member unmatchable and fetched for ever.
-        #expect(
-            LampWorkspaceSync.revisionID(
-                named: "\(workspace)/Revisions/\(id.uuidString).json"
-            ) == id
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+
+        let member = "Workspaces/Writing/W1/Revisions/\(name)"
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: [member], heldAsFiles: [], inLibraryAt: root
         )
+
+        #expect(claimed == [member])
+    }
+
+    /// A listing that differs only in case names the same file, and the pass
+    /// refuses two members that differ only in case, so folding cannot be
+    /// choosing between two of them.
+    @Test func matchesAnameWhateverItsCase() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let name = "1700000001000-7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json"
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+
+        // The id's hex in the other case, with the extension left alone:
+        // `.JSON` would be a different kind of file altogether, which
+        // `storedRevisions` never reads and compaction therefore never
+        // deletes, so it is rightly not claimable.
+        let shouted = "Workspaces/Writing/W1/Revisions/"
+            + name.replacingOccurrences(of: ".json", with: "").lowercased() + ".json"
+        #expect(shouted.contains("7a1c9e42"), "the stem really did change case")
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: [shouted], heldAsFiles: [], inLibraryAt: root
+        )
+
+        #expect(claimed == [shouted])
     }
 
     @Test func namesTheWorkspaceAmemberBelongsTo() {
@@ -121,12 +159,13 @@ struct RevisionMembersHeldTests {
             in: workspace, createdAt: start.addingTimeInterval(60)
         )
 
-        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        let retired = DevotionalAgentRevisionStore.retiredRevisions(in: workspace)
         try #require(!retired.isEmpty, "compaction merged the two and retired the originals")
 
-        let members = retired.map {
-            "Workspaces/Writing/W1/Revisions/1700000001000-\($0.uuidString).json"
-        }
+        // The names compaction recorded, which are the names the export
+        // published — not a name built from the id, which is the inference
+        // this design exists to avoid.
+        let members = retired.map { "Workspaces/Writing/W1/Revisions/\($0.publishedName)" }
         let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
             members: members, heldAsFiles: [], inLibraryAt: root
         )
@@ -198,7 +237,7 @@ struct RevisionMembersHeldTests {
             kind: .userEdit, before: "A B", after: "A B C",
             in: workspace, createdAt: start.addingTimeInterval(60)
         )
-        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        let retired = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
         try #require(!retired.isEmpty)
         let members = retired.map {
             "Workspaces/Writing/W1/Revisions/1700000001000-\($0.uuidString).json"
@@ -208,9 +247,9 @@ struct RevisionMembersHeldTests {
         try FileManager.default.removeItem(
             at: workspace.appendingPathComponent(".lamp/revisions")
         )
-        try #require(!DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace).isEmpty)
+        try #require(!Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id)).isEmpty)
         try #require(DevotionalAgentRevisionStore
-            .claimableRetiredRevisionIDs(in: workspace).isEmpty)
+            .claimableRetiredNames(in: workspace).isEmpty)
 
         let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
             members: members, heldAsFiles: [], inLibraryAt: root
@@ -246,7 +285,7 @@ struct RevisionMembersHeldTests {
         }
         try #require(!merges.isEmpty, "the two agent edits merged, untagged")
         let covered = Set(merges.flatMap { $0.replacedRevisionIDs ?? [] })
-        let retired = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        let retired = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
 
         #expect(
             retired.intersection(covered).isEmpty,
@@ -285,13 +324,19 @@ struct RevisionMembersHeldTests {
         // merge turned up and made it wanted again.
         let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
         let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
-        try Data((existing + covered.uuidString + "\n").utf8).write(to: list)
-        try #require(DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        try Data((existing + "\(covered.uuidString) 1600000000000-\(covered.uuidString).json\n").utf8)
+            .write(to: list)
+        try #require(Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
             .contains(covered))
 
-        let claimable = DevotionalAgentRevisionStore.claimableRetiredRevisionIDs(in: workspace)
+        let claimable = DevotionalAgentRevisionStore.claimableRetiredNames(in: workspace)
 
-        #expect(!claimable.contains(covered), "the demotion wants it back, retired or not")
+        #expect(
+            !claimable.contains(DevotionalAgentRevisionStore.foldedName(
+                "1600000000000-\(covered.uuidString).json"
+            )),
+            "the demotion wants it back, retired or not"
+        )
     }
 
     /// A replacement that is there but unreadable is no replacement. Its
@@ -308,14 +353,14 @@ struct RevisionMembersHeldTests {
             to: revisions.appendingPathComponent("1700000002000-\(UUID().uuidString).json")
         )
         let retired = UUID()
-        try Data("\(retired.uuidString)\n".utf8).write(
+        try Data("\(retired.uuidString) 1600000000000-\(retired.uuidString).json\n".utf8).write(
             to: workspace.appendingPathComponent(".lamp/retired-revisions.json")
         )
-        try #require(DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        try #require(Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
             .contains(retired))
 
         #expect(
-            DevotionalAgentRevisionStore.claimableRetiredRevisionIDs(in: workspace).isEmpty,
+            DevotionalAgentRevisionStore.claimableRetiredNames(in: workspace).isEmpty,
             "a file that will not decode is not evidence the history survived"
         )
     }
@@ -334,7 +379,7 @@ struct RevisionMembersHeldTests {
         // newline after it. Writing straight onto that fragment would glue
         // the next good id to it and lose the retirement.
         let old = UUID()
-        try Data("\(old.uuidString)\n9F3A17".utf8).write(to: list)
+        try Data("\(old.uuidString) old.json\n9F3A17".utf8).write(to: list)
 
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         _ = try DevotionalAgentRevisionStore.record(
@@ -345,7 +390,7 @@ struct RevisionMembersHeldTests {
             in: workspace, createdAt: start.addingTimeInterval(60)
         )
 
-        let ids = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        let ids = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
         #expect(ids.contains(old), "what was already retired is still retired")
         #expect(ids.count > 1, "and the new retirements were added")
         let text = try String(contentsOf: list, encoding: .utf8)
@@ -372,12 +417,12 @@ struct RevisionMembersHeldTests {
 
         let before = UUID()
         let after = UUID()
-        var bytes = Data("\(before.uuidString)\n".utf8)
+        var bytes = Data("\(before.uuidString) a.json\n".utf8)
         bytes.append(contentsOf: [0xFF, 0xFE, UInt8(ascii: "\n")])
-        bytes.append(Data("\(after.uuidString)\n".utf8))
+        bytes.append(Data("\(after.uuidString) b.json\n".utf8))
         try bytes.write(to: metadata.appendingPathComponent("retired-revisions.json"))
 
-        let ids = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+        let ids = Set(DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id))
 
         #expect(ids == [before, after])
     }

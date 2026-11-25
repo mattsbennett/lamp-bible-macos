@@ -743,7 +743,12 @@ public enum DevotionalAgentRevisionStore {
         // unrelated documents syncing over a bookkeeping file. A retirement
         // that does not get written costs one download and is written next
         // time; a blocked import costs the pass.
-        try? retire(retiring.map(\.revision.id), in: workspace)
+        try? retire(
+            retiring.map {
+                RetiredRevision(id: $0.revision.id, publishedName: $0.url.lastPathComponent)
+            },
+            in: workspace
+        )
 
         var removed = Set<URL>()
         for entry in goingAway {
@@ -763,70 +768,100 @@ public enum DevotionalAgentRevisionStore {
         for entry in stored.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent })
         where !removed.contains(entry.url) && !seen.insert(entry.revision.id).inserted {
             forgetDecodedHistory(in: workspace)
-            try? retire([entry.revision.id], in: workspace)
+            try? retire(
+                [RetiredRevision(id: entry.revision.id, publishedName: entry.url.lastPathComponent)],
+                in: workspace
+            )
             try FileManager.default.removeItem(at: entry.url)
         }
     }
 
-    /// The revisions this workspace has removed on purpose, so a pass can say
-    /// it holds their history without a file to show for it.
+    /// A revision this workspace removed on purpose: the name it was
+    /// published under, and the id it had.
     ///
-    /// `0017`. The distinction this exists for: a sync record says *installed
-    /// here once*, and what a claim needs is *removed here deliberately, with
-    /// its replacement on disk*. Only the code that did the removing can say
-    /// the second, so `compact` writes it down as it goes.
+    /// Both, written from one source so they cannot disagree. The **name** is
+    /// what a claim matches, because a manifest member has no other identity
+    /// and the store itself calls a revision file anything ending `.json` —
+    /// a matcher that parsed a convention out of the name broke on the
+    /// convention's own second shape (`<uuid>.json`, no stamp) and would
+    /// break on a third. The **id** is what a retirement is reconsidered by:
+    /// a legacy untagged merge arriving later names the ids it covers, and
+    /// the original it wants back has no file here, so only this line can say
+    /// which published name that id had.
     ///
-    /// An unreadable or missing list answers empty, which claims nothing —
-    /// the members come down once, compaction removes and retires them, and
-    /// they are claimed from the next pass. That is one extra pass of
-    /// downloads and no lost history, the same shape of recovery a forgotten
-    /// sync record has.
-    public static func retiredRevisionIDs(in workspace: URL) -> Set<UUID> {
+    /// `lamp-bible-core/Documentation/decisions/0017`. The distinction the
+    /// list exists for: a sync record says *installed here once*, and what a
+    /// claim needs is *removed here deliberately*. Only the code that did the
+    /// removing can say the second, so `compact` writes it as it goes.
+    ///
+    /// **Advisory, always.** A failure to write or read it costs one more
+    /// download of what it would have claimed, and never a compaction, never
+    /// history. Every hardening of it has to keep that true.
+    public struct RetiredRevision: Equatable, Sendable {
+        public let id: UUID
+        public let publishedName: String
+    }
+
+    /// Two published names are the same name if they fold to the same thing.
+    ///
+    /// The same expression the pass folds paths with: NFC, then lower case.
+    /// Identical rather than merely similar — two spellings of one rule is
+    /// how the deck validators came apart. Safe because `decisions/0013`
+    /// makes the pass refuse two server members differing only in case, so a
+    /// folded match is never choosing between two of them; and true, because
+    /// a case-shifted listing of an immutable file this Mac uploaded names
+    /// the same bytes.
+    static func foldedName(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    public static func retiredRevisions(in workspace: URL) -> [RetiredRevision] {
         let url = metadataDirectory(in: workspace)
             .appendingPathComponent(retiredRevisionsFilename)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        // Split on newline *bytes* and decode each line on its own. Decoding
+        // Split on newline *bytes* and read each line on its own. Decoding
         // the whole file as UTF-8 first meant one bad byte anywhere answered
-        // "nothing is retired" — after which compaction would append good
-        // entries behind the damage and neither old nor new ones would ever
-        // be seen again. A line is cheap to lose; the file is not.
-        var ids: Set<UUID> = []
+        // "nothing is retired", after which compaction appended good entries
+        // behind the damage and neither old nor new was ever seen again.
+        var retired: [RetiredRevision] = []
         for line in data.split(separator: UInt8(ascii: "\n")) {
-            guard let text = String(data: Data(line), encoding: .utf8),
-                  let id = UUID(uuidString: text.trimmingCharacters(in: .whitespaces))
-            else { continue }
-            ids.insert(id)
+            guard let text = String(data: Data(line), encoding: .utf8) else { continue }
+            let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, let id = UUID(uuidString: String(parts[0])) else { continue }
+            let name = String(parts[1]).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { continue }
+            retired.append(RetiredRevision(id: id, publishedName: name))
         }
-        return ids
+        return retired
     }
 
-    /// **Appended, never rewritten.** One id a line, because this is on the
-    /// autosave path: an autosave that compacts used to decode, sort and
-    /// rewrite the whole list under the store's lock, which a reviewer
-    /// measured at 44 ms against 3 ms once fifteen thousand ids had
-    /// accumulated — latency that grew for ever with the file. An append of
-    /// thirty-seven bytes does not care how long the file is.
+    /// **Appended, never rewritten.** One entry a line, because this is on
+    /// the autosave path: a decode-sort-rewrite of the whole list under the
+    /// store's lock was measured at 44 ms against 3 ms once fifteen thousand
+    /// entries had accumulated — latency growing for ever with the file. An
+    /// append does not care how long the file is.
     ///
-    /// A torn append leaves one unparseable line, which the reader skips:
-    /// that id is unretired, so its member is fetched once and retired
-    /// again. The same self-healing a missing list has.
-    private static func retire(_ ids: some Sequence<UUID>, in workspace: URL) throws {
-        let fresh = Set(ids)
+    /// A torn line is skipped by the reader, so that revision is fetched
+    /// once and retired again.
+    private static func retire(
+        _ revisions: some Sequence<RetiredRevision>, in workspace: URL
+    ) throws {
+        let fresh = Array(revisions)
         guard !fresh.isEmpty else { return }
         let directory = metadataDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(retiredRevisionsFilename)
-        let body = fresh.map(\.uuidString).sorted().joined(separator: "\n") + "\n"
+        let body = fresh
+            .map { "\($0.id.uuidString) \($0.publishedName)" }
+            .sorted()
+            .joined(separator: "\n") + "\n"
         // For *updating*, not writing: the check below reads the last byte,
         // and a write-only descriptor answers that with EBADF.
         if let handle = try? FileHandle(forUpdating: url) {
             defer { try? handle.close() }
-            // Starting on a line of its own. An append interrupted mid-id
-            // leaves no trailing newline, and writing straight onto that
-            // would glue a good id to the fragment — losing the retirement
-            // that compaction had just successfully retried, which a
-            // reviewer found. A blank line costs nothing: the reader skips
-            // anything that is not a uuid.
+            // Starting on a line of its own: an append interrupted mid-line
+            // leaves no trailing newline, and writing onto that would glue a
+            // good entry to the fragment.
             let end = try handle.seekToEnd()
             if end > 0 {
                 try handle.seek(toOffset: end - 1)
@@ -838,38 +873,40 @@ public enum DevotionalAgentRevisionStore {
         } else if !FileManager.default.fileExists(atPath: url.path) {
             try Data(body.utf8).write(to: url, options: .atomic)
         } else {
-            // There is a log and it cannot be opened — read-only, most
-            // likely. Writing a fresh one here would throw away every
-            // retirement before this batch, and those ids would then
-            // alternate between claimed and downloaded for ever. Better to
-            // lose this batch, which costs one download each and retires
-            // itself next time.
+            // A log that exists and will not open — read-only, most likely.
+            // A fresh atomic write here would throw away every retirement
+            // before this batch.
             throw CocoaError(.fileWriteNoPermission)
         }
     }
 
-    /// The retired ids a pass may actually claim for this workspace.
+    /// The published names a pass may actually claim for this workspace,
+    /// folded.
     ///
-    /// `lamp-bible-core/Documentation/decisions/0017`. Three things have to
-    /// hold, and two of them came from review:
+    /// `decisions/0017`. Three things have to hold:
     ///
-    /// - **Some history is still readable here.** A retirement says the
+    /// - It is on the retired list at all, which is the evidence `0016`
+    ///   lacked.
+    /// - **Some history here still decodes.** A retirement says the
     ///   replacement was on disk when compaction ran, not that it is now. A
     ///   filename was not enough to check that — the one remaining file can
     ///   be corrupt, and then the server's copies of the retired originals
-    ///   are the only ones left — so this asks for a revision that decodes.
+    ///   are the only ones left. An approximation, knowingly: positive
+    ///   evidence would be that *this* revision's replacement is present,
+    ///   which with intermediate merges means walking a chain of retirements
+    ///   to a live file. Rejected for cost, and recorded as rejected so the
+    ///   next reviewer who notices does not reopen it.
     /// - **Nothing a surviving demotable merge covers.** An id retired long
     ///   ago can be wanted again: a legacy untagged merge arriving later can
     ///   displace the tagged replacement that justified the retirement, and
     ///   then `removingReplaced` needs that original back. The live state
-    ///   overrides the older retirement.
-    /// - It is on the list at all, which is the evidence `0016` lacked.
+    ///   overrides the older entry, and this is the one place the id in each
+    ///   line is load-bearing.
     ///
     /// One decode per workspace, and only for a workspace that has a member
-    /// with no file — not the library's whole history on every pass, which
-    /// is what the shape before this did.
-    public static func claimableRetiredRevisionIDs(in workspace: URL) -> Set<UUID> {
-        let retired = retiredRevisionIDs(in: workspace)
+    /// with no file.
+    public static func claimableRetiredNames(in workspace: URL) -> Set<String> {
+        let retired = retiredRevisions(in: workspace)
         guard !retired.isEmpty else { return [] }
         guard let stored = try? storedRevisions(in: workspace), !stored.isEmpty else { return [] }
 
@@ -879,7 +916,11 @@ public enum DevotionalAgentRevisionStore {
             && entry.revision.replacedRevisionIDs?.isEmpty == false {
             wantedBack.formUnion(entry.revision.coveredRevisionIDs)
         }
-        return retired.subtracting(wantedBack)
+        return Set(
+            retired.lazy
+                .filter { !wantedBack.contains($0.id) }
+                .map { foldedName($0.publishedName) }
+        )
     }
 
     public static func lastSyncedDraft(in workspace: URL) throws -> String? {
