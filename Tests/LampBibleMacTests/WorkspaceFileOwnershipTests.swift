@@ -85,7 +85,13 @@ struct WorkspaceFileOwnershipTests {
             file: "Sources/LampBibleMacSupport/SyncSupport.swift",
             declaration: "enum LampWorkspaceSync",
             publicOnly: true,
-            outsideTheOwner: [:]
+            outsideTheOwner: [
+                "revisionMembersHeldWithoutAFile": """
+                    compares two sets of paths it is handed and opens nothing. \
+                    The gather has already read the workspaces by the time it \
+                    is asked (`decisions/0016`).
+                    """,
+            ]
         ),
     ]
 

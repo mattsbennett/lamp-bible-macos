@@ -1232,6 +1232,21 @@ extension LibrarySyncController {
             )
         }.value
         result.gathered.local = described.files
+        // A revision this Mac compacted away leaves no file at its path, and
+        // a member with no local copy is downloaded — then written back by
+        // the merge and deleted again by the compaction that follows it, on
+        // every pass, for ever. The history is held; it is in the revision
+        // that replaced it. (`lamp-bible-core/Documentation/decisions/0016`.)
+        //
+        // After the locals, not beside the other claim above, because this
+        // one asks what the gather actually produced for every workspace,
+        // which is not known until the workspaces have been described.
+        result.gathered.heldWithoutAFile.formUnion(
+            LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+                members: manifest.members.map(\.path),
+                heldAsFiles: Set(described.files.map(\.path))
+            )
+        )
         // Said to the pass rather than only to the person: a path left out of
         // the locals reads as one this Mac does not hold, so the plan used to
         // fetch the server's copy and install it over the file it could not

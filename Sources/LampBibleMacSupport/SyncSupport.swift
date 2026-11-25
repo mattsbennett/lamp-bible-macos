@@ -14,6 +14,63 @@ public typealias LampSyncArchive = LampModuleKit.LampSyncArchive
 public enum LampWorkspaceSync {
     public static let portableDirectoryName = LampPortableBackupLayout.workspacesDirectory
 
+    /// The folder a workspace's revision history is published under, beside
+    /// the workspace's documents.
+    static let revisionsDirectoryName = "Revisions"
+
+    /// Which of the server's revision members this Mac holds the history of
+    /// although no file sits at the path.
+    ///
+    /// `Documentation/decisions/0016`. A revision file is written once and
+    /// never edited, and the only thing that removes one is compaction, which
+    /// writes every replacement before deleting anything it replaces. So for
+    /// this kind — and only this kind — "no file here" means "superseded by a
+    /// file that is here", and the history is held. Saying nothing instead
+    /// reads as *this Mac does not hold it*, and the plan then downloads the
+    /// member, `mergeTree` writes it back, and the compaction on the next
+    /// line deletes it again: every pass, for ever.
+    ///
+    /// The successor cannot be asked instead. A merge unions the *covered*
+    /// ids of its two sides, never their own ids, so an intermediate merge is
+    /// named by nothing that outlives it, and `mergedID` is a truncated
+    /// SHA-256 that cannot be inverted. Measured on a real library, matching
+    /// replaced ids claimed 10 of 43 such members; this claims all 43.
+    ///
+    /// Deliberately not narrowed to paths this Mac can prove it wrote: core
+    /// keeps a claim only where its own records name an install at that path
+    /// and drops every other (`LampSyncBundlePass`), so a member another Mac
+    /// wrote still comes down the first time, is recorded, and is claimable
+    /// only once this Mac has compacted it away.
+    ///
+    /// The one case this gets wrong is a workspace folder restored from a
+    /// backup older than some of its revisions: recorded, absent, and claimed
+    /// as held, so those do not come back from the server. It is the same
+    /// wrong case `mergedIntoTheLibrary` already accepts, and the alternative
+    /// is fetching them for ever.
+    public static func revisionMembersHeldWithoutAFile(
+        members: some Sequence<String>,
+        heldAsFiles: Set<String>
+    ) -> Set<String> {
+        var claimed: Set<String> = []
+        for path in members where !heldAsFiles.contains(path) && namesARevision(path) {
+            claimed.insert(path)
+        }
+        return claimed
+    }
+
+    /// Whether `path` is a published revision file:
+    /// `Workspaces/<kind>/<workspace>/Revisions/<name>.json`.
+    static func namesARevision(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 5,
+              parts[0] == portableDirectoryName,
+              parts[3] == revisionsDirectoryName,
+              parts[4].hasSuffix(".json"),
+              !parts[1].isEmpty, !parts[2].isEmpty, parts[4].count > ".json".count
+        else { return false }
+        return true
+    }
+
     /// The writing workspaces' folder under `Workspaces/`. A portable backup
     /// and the archive sync keep `Devotionals`, which every backup already
     /// made holds; the per-file sync layout calls it `Writing` since bundle
@@ -391,6 +448,14 @@ public enum LampWorkspaceSync {
             // The union merge above brings back any original that another Mac
             // still holds, even after it was compacted away here. Compacting the
             // merged set recognises those against the revisions that replaced them.
+            //
+            // The server is such a holder too, and the one that never lets go:
+            // nothing compacts it and no tombstone covers a revision, so every
+            // revision ever uploaded is still listed there. That is why the
+            // gather claims the ones it has compacted away — otherwise each of
+            // them arrives here, is written, and is deleted again on the line
+            // below, on every pass, for ever
+            // (`lamp-bible-core/Documentation/decisions/0016`).
             try DevotionalAgentRevisionStore.compact(in: workspace)
 
             try importConversations(
