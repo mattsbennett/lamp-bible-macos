@@ -47,28 +47,71 @@ public enum LampWorkspaceSync {
     /// as held, so those do not come back from the server. It is the same
     /// wrong case `mergedIntoTheLibrary` already accepts, and the alternative
     /// is fetching them for ever.
+    /// - Parameter stillWantedForDemotion: revision ids some untagged merge
+    ///   here still needs a file for, from
+    ///   `DevotionalAgentRevisionStore.idsWantedForDemotion`. These are left
+    ///   unclaimed, so they can still come down: a demotion needs every id a
+    ///   merge replaced, and a claim would keep one away for good.
     public static func revisionMembersHeldWithoutAFile(
         members: some Sequence<String>,
-        heldAsFiles: Set<String>
+        heldAsFiles: Set<String>,
+        stillWantedForDemotion: Set<UUID> = []
     ) -> Set<String> {
+        let wanted = Set(stillWantedForDemotion.map { "-\($0.uuidString).json".lowercased() })
         var claimed: Set<String> = []
         for path in members where !heldAsFiles.contains(path) && namesARevision(path) {
+            let name = path.lowercased()
+            guard !wanted.contains(where: { name.hasSuffix($0) }) else { continue }
             claimed.insert(path)
         }
         return claimed
     }
 
-    /// Whether `path` is a published revision file:
-    /// `Workspaces/<kind>/<workspace>/Revisions/<name>.json`.
+    /// Whether `path` is a published revision file of a *writing* workspace:
+    /// `Workspaces/Writing/<workspace>/Revisions/<name>.json`.
+    ///
+    /// The writing folder is required, and not merely a folder called
+    /// `Revisions` three deep. A custom skill is published by copying its
+    /// whole directory with no extension filter at all, so
+    /// `Workspaces/Skills/<skill>/Revisions/index.json` is a perfectly
+    /// ordinary file of a skill's own — and claiming that as held would stop
+    /// sync restoring it. Only `Writing` carries the write-once,
+    /// compaction-only history this claim reasons about.
     static func namesARevision(_ path: String) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard parts.count == 5,
               parts[0] == portableDirectoryName,
+              parts[1] == WritingFolder.perFile.rawValue,
               parts[3] == revisionsDirectoryName,
               parts[4].hasSuffix(".json"),
-              !parts[1].isEmpty, !parts[2].isEmpty, parts[4].count > ".json".count
+              !parts[2].isEmpty, parts[4].count > ".json".count
         else { return false }
         return true
+    }
+
+    /// The revision ids any untagged merge in any writing workspace still
+    /// needs a file for, across the library.
+    ///
+    /// Flat rather than per workspace: a revision id is a UUID, so one
+    /// workspace's answer cannot be mistaken for another's, and the claim
+    /// only ever asks whether an id is wanted at all.
+    ///
+    /// A workspace that cannot be read contributes nothing. That is the safe
+    /// direction for this set and the unsafe one for the claim, so a failure
+    /// here means a member is claimed that might have been wanted — the same
+    /// exposure as before `decisions/0016`, and no worse.
+    @WritingWorkspaceFiles
+    public static func revisionIDsWantedForDemotion(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default
+    ) -> Set<UUID> {
+        var wanted: Set<UUID> = []
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            wanted.formUnion(
+                (try? DevotionalAgentRevisionStore.idsWantedForDemotion(in: workspace)) ?? []
+            )
+        }
+        return wanted
     }
 
     /// The writing workspaces' folder under `Workspaces/`. A portable backup

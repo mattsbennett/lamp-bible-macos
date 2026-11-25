@@ -333,6 +333,22 @@ final class LibrarySyncController: ObservableObject {
     /// than printed: a pass that never finishes left no trace otherwise.
     private static let log = Logger(subsystem: "com.neus.Lamp-Bible.macOS", category: "sync")
 
+    /// The folders a set of member paths falls under, for a log line that
+    /// says where a fault is without naming the reader's own files.
+    ///
+    /// Two components, so `Workspaces/Writing` is distinguished from
+    /// `Workspaces/Presentations` — the folder is the diagnosis, and a
+    /// workspace's own id is already a name nobody chose.
+    static func foldersNamed(by paths: some Sequence<String>) -> String {
+        var folders: Set<String> = []
+        for path in paths {
+            let parts = path.split(separator: "/")
+            guard !parts.isEmpty else { continue }
+            folders.insert(parts.prefix(2).joined(separator: "/"))
+        }
+        return folders.sorted().joined(separator: ", ")
+    }
+
     /// The digests this session has taken, for the library it is open on.
     ///
     /// One cache per library root, made the first time a pass asks and kept
@@ -1241,10 +1257,18 @@ extension LibrarySyncController {
         // After the locals, not beside the other claim above, because this
         // one asks what the gather actually produced for every workspace,
         // which is not known until the workspaces have been described.
+        //
+        // Except the ids an untagged merge here still needs a file for: a
+        // demotion wants every id the merge replaced, so claiming one would
+        // leave a turn's changes under no turn's name for good.
+        let wantedForDemotion = await LampWorkspaceSync.revisionIDsWantedForDemotion(
+            inLibraryAt: library.rootURL, fileManager: fileManager
+        )
         result.gathered.heldWithoutAFile.formUnion(
             LampWorkspaceSync.revisionMembersHeldWithoutAFile(
                 members: manifest.members.map(\.path),
-                heldAsFiles: Set(described.files.map(\.path))
+                heldAsFiles: Set(described.files.map(\.path)),
+                stillWantedForDemotion: wantedForDemotion
             )
         )
         // Said to the pass rather than only to the person: a path left out of
@@ -1503,19 +1527,38 @@ extension LibrarySyncController {
         // gives for this fault — reached nobody. Two days of the unified log
         // held not one of them while a library was fetching 43 revision
         // members again on every pass.
+        //
+        // The count and the folders are public and the paths are not: a
+        // member's path carries names the reader chose — a context file is
+        // titled whatever the book is called — and the unified log is what a
+        // sysdiagnose collects and a person sends on. The count is what says
+        // whether this is happening and whether it stopped, which is all the
+        // two-pass check needs.
         if !outcome.fetchedAgain.isEmpty {
+            let count = outcome.fetchedAgain.count
+            let folders = Self.foldersNamed(by: outcome.fetchedAgain)
             let paths = outcome.fetchedAgain.sorted().joined(separator: ", ")
             Self.log.warning(
-                "Fetched again, so something here holds these without saying so: \(paths, privacy: .public)"
+                """
+                Fetched again, so something here holds these without saying so: \
+                \(count, privacy: .public) under \(folders, privacy: .public) \
+                — \(paths, privacy: .private)
+                """
             )
         }
         // The same fault from the other end, and the end somebody notices:
         // a thing deleted on another device that this one will not delete,
         // because as far as the plan can tell it has nothing to delete.
         if !outcome.deletionsNotCarriedOut.isEmpty {
+            let count = outcome.deletionsNotCarriedOut.count
+            let folders = Self.foldersNamed(by: outcome.deletionsNotCarriedOut)
             let paths = outcome.deletionsNotCarriedOut.sorted().joined(separator: ", ")
             Self.log.warning(
-                "Deleted elsewhere but not here, so something here holds these without saying so: \(paths, privacy: .public)"
+                """
+                Deleted elsewhere but not here, so something here holds these \
+                without saying so: \(count, privacy: .public) under \
+                \(folders, privacy: .public) — \(paths, privacy: .private)
+                """
             )
         }
     }

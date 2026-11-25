@@ -403,6 +403,35 @@ public enum DevotionalAgentRevisionStore {
     /// because recording compacts.
     private static let mutationLock = NSRecursiveLock()
 
+    /// The ids this workspace still wants a file for, although nothing here
+    /// holds one at that name.
+    ///
+    /// `lamp-bible-core/Documentation/decisions/0016` claims a revision member
+    /// with no local file as held, because compaction only ever removes one it
+    /// has replaced. There is one exception, and it is the demotion in
+    /// `removingReplaced`: an untagged merge is dropped in favour of the
+    /// records that know which turn made the changes, and that needs **every**
+    /// id it replaced to be held by something which is not itself up for
+    /// demotion. A replaced id nobody here holds stops the demotion, so if its
+    /// file is also claimed as held it never arrives and the untagged merge
+    /// keeps a turn's changes under no turn's name, for good.
+    ///
+    /// So these are not claimed. It costs a download each until one of them
+    /// settles the demotion, after which the merge no longer names them and
+    /// they are claimed like anything else — on a real library, 9 members of
+    /// 43 rather than none.
+    public static func idsWantedForDemotion(in workspace: URL) throws -> Set<UUID> {
+        var wanted: Set<UUID> = []
+        for stored in try storedRevisions(in: workspace) {
+            guard stored.revision.turnID == nil,
+                  let replaced = stored.revision.replacedRevisionIDs,
+                  !replaced.isEmpty
+            else { continue }
+            wanted.formUnion(replaced)
+        }
+        return wanted
+    }
+
     /// The history to show for one document, newest first.
     public static func revisions(
         in workspace: URL,
