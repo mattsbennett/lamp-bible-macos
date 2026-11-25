@@ -841,10 +841,39 @@ public enum DevotionalAgentRevisionStore {
         return type == .typeRegular
     }
 
+    /// Parsed lists, against the file each was parsed from.
+    ///
+    /// The list only grows, and a pass asks for it once per workspace that
+    /// has a member with no file — which, once this is working, is every
+    /// pass for every workspace that ever compacted anything. Re-reading and
+    /// re-parsing a file that only gets longer, on every pass, under the
+    /// owner the editor's writes queue behind, is the shape of cost this
+    /// record has twice been told off for. Keyed on size and modification
+    /// time, and the list is append-only so either moves whenever it does.
+    private static var parsedRetirements: [String: (stamp: String, revisions: [RetiredRevision])] = [:]
+    private static var parsedRetirementsOrder: [String] = []
+
     public static func retiredRevisions(in workspace: URL) -> [RetiredRevision] {
         let url = metadataDirectory(in: workspace)
             .appendingPathComponent(retiredRevisionsFilename)
-        guard isAplainFile(url), let data = try? Data(contentsOf: url) else { return [] }
+        guard isAplainFile(url) else { return [] }
+
+        mutationLock.lock()
+        let key = url.standardizedFileURL.path
+        let stamp: String? = (try? FileManager.default.attributesOfItem(atPath: url.path))
+            .flatMap { info in
+                guard let size = info[.size] as? Int,
+                      let modified = info[.modificationDate] as? Date
+                else { return nil }
+                return "\(size)-\(modified.timeIntervalSince1970)"
+            }
+        if let stamp, let remembered = parsedRetirements[key], remembered.stamp == stamp {
+            mutationLock.unlock()
+            return remembered.revisions
+        }
+        mutationLock.unlock()
+
+        guard let data = try? Data(contentsOf: url) else { return [] }
         // Split on newline *bytes* and read each line on its own. Decoding
         // the whole file as UTF-8 first meant one bad byte anywhere answered
         // "nothing is retired", after which compaction appended good entries
@@ -865,6 +894,17 @@ public enum DevotionalAgentRevisionStore {
                   !name.isEmpty
             else { continue }
             retired.append(RetiredRevision(id: id, publishedName: name))
+        }
+
+        if let stamp {
+            mutationLock.lock()
+            if parsedRetirements[key] == nil { parsedRetirementsOrder.append(key) }
+            parsedRetirements[key] = (stamp, retired)
+            while parsedRetirementsOrder.count > 8, let oldest = parsedRetirementsOrder.first {
+                parsedRetirementsOrder.removeFirst()
+                parsedRetirements[oldest] = nil
+            }
+            mutationLock.unlock()
         }
         return retired
     }
@@ -904,11 +944,17 @@ public enum DevotionalAgentRevisionStore {
             .joined(separator: "\n") + "\n"
         // For *updating*, not writing: the check below reads the last byte,
         // and a write-only descriptor answers that with EBADF.
-        let exists = FileManager.default.fileExists(atPath: url.path)
-        if exists, !isAplainFile(url) {
-            // Something other than a plain file is sitting at the path — a
-            // link, most likely. Appending would write into whatever it
-            // names. Advisory means losing this batch, never touching that.
+        // Whether *anything* is at the path, a link included. Asked with
+        // `attributesOfItem`, which does not follow one: `fileExists` does,
+        // so a **dangling** link read as nothing there — and then the
+        // create-if-missing branch below wrote through it and brought its
+        // target into being. A reviewer found that; the first version of this
+        // check only ran when the link resolved.
+        let present = (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
+        if present, !isAplainFile(url) {
+            // Something other than a plain file is at the path. Appending
+            // would write into whatever it names, and creating would make
+            // it. Advisory means losing this batch, never touching that.
             throw CocoaError(.fileWriteInvalidFileName)
         }
         if let handle = try? FileHandle(forUpdating: url) {
@@ -924,7 +970,7 @@ public enum DevotionalAgentRevisionStore {
                 if last != Data("\n".utf8) { try handle.write(contentsOf: Data("\n".utf8)) }
             }
             try handle.write(contentsOf: Data(body.utf8))
-        } else if !exists {
+        } else if !present {
             try Data(body.utf8).write(to: url, options: .atomic)
         } else {
             // A log that exists and will not open — read-only, most likely.

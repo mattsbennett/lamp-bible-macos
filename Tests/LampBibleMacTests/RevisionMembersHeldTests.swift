@@ -567,16 +567,32 @@ struct RevisionMembersHeldTests {
 /// test per guess.
 ///
 /// `lamp-bible-core/Documentation/decisions/0017`. A retirement says *this
-/// Mac holds that history in merged form*, and that is exactly true when the
+/// Mac holds that history in merged form*, and that is exactly true when a
 /// retired file coming back would change nothing the store keeps. Four
-/// versions of a predicate about demotions each shipped with a test that
-/// encoded the version — which is how the same thing was wrong four rounds
-/// running. This is the check the list is held to from now on: if it ever
-/// fails, the fault is in `compact` or `removingReplaced`, not beside them.
+/// versions of a predicate about demotions were each wrong in a new way,
+/// every one shipping a test that encoded the version it came with — which
+/// is how the same thing was wrong four rounds running. This is the check
+/// the list is held to instead: if it fails, the fault is in `compact` or
+/// `removingReplaced`, not in anything beside them.
+///
+/// **The property holds given a precondition**: that no untagged merge
+/// covers a change that knows its turn. `canMerge` refuses to cross turns
+/// and refuses to mix kinds, so this build never writes that shape — only an
+/// older one could. Outside the precondition the kept set genuinely depends
+/// on which files are present, and so on arrival order; a reviewer found the
+/// case and `0017` accepts it. What is still true there, and asserted here,
+/// is what the code's own comment promises: the answer does not depend on
+/// the order the folder happened to list, and running it twice changes
+/// nothing.
 struct RetirementKeepsWhatItClaimsTests {
     /// A small deterministic generator, seeded per case: runs of edits by
-    /// the person and by an agent, some merged already, some with a turn and
-    /// some without, and an occasional duplicate of one that is kept.
+    /// the person and by an agent, merged runs, turns on some and not
+    /// others, **coverage that overlaps between merges**, and an id that is
+    /// never present at all.
+    ///
+    /// The overlap matters. A first version drew fresh ids for every merge's
+    /// coverage, so no two merges ever shared a change and the one shape
+    /// that breaks the unconditional property could not be generated.
     private func revisions(seed: UInt64) -> [DevotionalAgentRevision] {
         var state = seed | 1
         func next(_ bound: Int) -> Int {
@@ -590,10 +606,15 @@ struct RetirementKeepsWhatItClaimsTests {
         var text = "lamp"
         var at = start
         let turns = [UUID(), UUID()]
-        // In runs, so that revisions really are mergeable: a merge needs the
-        // same kind, the same turn, a contiguous before/after and a gap
-        // inside the policy's. Edits with those drawn independently almost
-        // never merge, and then the property is vacuous.
+
+        // A pool the merges draw their coverage from, so they overlap, plus
+        // one id nothing ever holds.
+        let pool = (0..<4).map { _ in UUID() }
+        let neverPresent = UUID()
+
+        // In runs, so revisions really are mergeable: a merge needs the same
+        // kind, the same turn, a contiguous before/after and a gap inside
+        // the policy's.
         for _ in 0..<(2 + next(3)) {
             let agent = next(2) == 0
             let turn = agent && next(3) != 0 ? turns[next(turns.count)] : nil
@@ -601,27 +622,55 @@ struct RetirementKeepsWhatItClaimsTests {
                 let before = text
                 text += " \(made.count)"
                 at = at.addingTimeInterval(Double(30 + next(600)))
-                let covered = (0..<next(3)).map { _ in UUID() }
+                var covered: [UUID] = []
+                for _ in 0..<next(3) { covered.append(pool[next(pool.count)]) }
+                if next(4) == 0 { covered.append(neverPresent) }
                 made.append(
                     DevotionalAgentRevision(
                         createdAt: at,
                         kind: agent ? .agentEdit : .userEdit,
                         beforeMarkdown: before,
                         afterMarkdown: text,
-                        replacedRevisionIDs: covered.isEmpty ? nil : covered,
+                        replacedRevisionIDs: covered.isEmpty
+                            ? nil
+                            : Array(Set(covered)).sorted { $0.uuidString < $1.uuidString },
                         turnID: turn
                     )
                 )
             }
-            // A gap wide enough that the next run is its own.
             at = at.addingTimeInterval(Double(8 * 3_600))
         }
-        // A second name for one that is already there.
+
+        // Singles standing for pooled changes, some of which know a turn —
+        // which is what can put an untagged merge over a tagged change.
+        for id in pool where next(2) == 0 {
+            at = at.addingTimeInterval(60)
+            made.append(
+                DevotionalAgentRevision(
+                    id: id, createdAt: at, kind: .agentEdit,
+                    beforeMarkdown: "p", afterMarkdown: "p q",
+                    turnID: next(2) == 0 ? turns[next(turns.count)] : nil
+                )
+            )
+        }
         if let first = made.first, next(2) == 0 { made.append(first) }
         return made
     }
 
-    @Test(arguments: Array(1...40) as [UInt64])
+    /// Whether any untagged merge covers a change that knows its turn —
+    /// the shape only an older build can write.
+    private func anUntaggedMergeCoversAtaggedChange(
+        _ revisions: [DevotionalAgentRevision]
+    ) -> Bool {
+        let tagged = Set(revisions.lazy.filter { $0.turnID != nil }.map(\.id))
+        for revision in revisions
+        where revision.turnID == nil && revision.replacedRevisionIDs?.isEmpty == false {
+            if !Set(revision.replacedRevisionIDs ?? []).isDisjoint(with: tagged) { return true }
+        }
+        return false
+    }
+
+    @Test(arguments: Array(1...60) as [UInt64])
     func aretiredRevisionComingBackChangesNothingKept(seed: UInt64) throws {
         let all = revisions(seed: seed)
         let now = Date(timeIntervalSince1970: 1_900_000_000)
@@ -630,7 +679,32 @@ struct RetirementKeepsWhatItClaimsTests {
         let dropped = all.filter { !keptIDs.contains($0.id) }
         guard !dropped.isEmpty else { return }
 
-        // Every subset of what was dropped, up to a bound, put back.
+        guard !anUntaggedMergeCoversAtaggedChange(all) else {
+            // Outside the precondition. What is kept really does depend on
+            // what is present, so only the two promises the code makes for
+            // itself are asserted: order does not decide, and twice is the
+            // same as once.
+            //
+            // Compared with each other, not with `kept`: `compact` reduces
+            // first and *then* merges, so a merge it forms can subsume
+            // something it kept, and a further reduction drops that. Benign
+            // — the next compaction settles it — and nothing to do with the
+            // list, but it means `kept` is not the baseline for either
+            // promise.
+            let forwards = DevotionalAgentRevisionCompactor.removingReplaced(kept)
+            let backwards = DevotionalAgentRevisionCompactor.removingReplaced(kept.reversed())
+            let twice = DevotionalAgentRevisionCompactor.removingReplaced(forwards)
+            #expect(
+                Set(forwards.map(\.id)) == Set(backwards.map(\.id)),
+                "seed \(seed): the order the folder listed decided what is kept"
+            )
+            #expect(
+                Set(twice.map(\.id)) == Set(forwards.map(\.id)),
+                "seed \(seed): reducing twice is not the same as once"
+            )
+            return
+        }
+
         for take in 1...min(dropped.count, 3) {
             for start in 0...(dropped.count - take) {
                 let returning = Array(dropped[start..<(start + take)])
