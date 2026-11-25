@@ -253,6 +253,14 @@ enum OpenWritingEditors {
         if editors[writingID]?.isEmpty == true { editors[writingID] = nil }
     }
 
+    /// The writings an editor is open on.
+    ///
+    /// The unattended source sweep holds these back: an open editor is a
+    /// writing being worked on now, whatever its saved date says. The agent
+    /// pane is inside the editor, so a chat or a Terminal turn mid-flight is
+    /// covered by the same check.
+    static var writingIDs: Set<String> { Set(editors.keys) }
+
     /// The key window if it shows the writing, else the frontmost that does.
     static func window(showing writingID: String) -> NSWindow? {
         let shown = (editors[writingID]?.values).map { $0.compactMap(\.shownWindow) } ?? []

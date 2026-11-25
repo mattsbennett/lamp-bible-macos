@@ -1,0 +1,398 @@
+import Foundation
+import LampModuleKit
+import Testing
+
+@testable import LampBibleMacSupport
+
+/// The rule for putting a writing's sources back on the server once the
+/// writing has been left alone.
+///
+/// Stated without a file system on purpose. The sweep that will call this runs
+/// unattended and deletes the only local copy of a file, so the rule deciding
+/// *which* files is the part worth pinning sentence by sentence; reading the
+/// dates off disk and carrying the answer out are tested separately.
+struct WorkspaceSourceOffloadTests {
+    private typealias Workspace = WorkspaceSourceOffload.Workspace
+    private typealias Candidate = WorkspaceSourceOffload.Candidate
+
+    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private static func idle(
+        _ writingID: String,
+        days: Double,
+        sources: [String],
+        onTheServer: Set<String>? = nil
+    ) -> Workspace {
+        Workspace(
+            writingID: writingID,
+            lastActivity: now.addingTimeInterval(-days * 24 * 60 * 60),
+            sources: sources,
+            onTheServer: onTheServer ?? Set(sources)
+        )
+    }
+
+    @Test func nothingIsOffloadedWhenTheSettingIsNever() {
+        let workspaces = [Self.idle("a", days: 365, sources: ["big.pdf", "notes/other.pdf"])]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .never, heldBy: [], now: Self.now
+            ).isEmpty,
+            """
+            Never has to mean never. It is the default, so a reader who has not \
+            chosen must not find their sources gone.
+            """
+        )
+    }
+
+    @Test func anOpenWritingIsNeverOffloaded() {
+        let workspaces = [Self.idle("a", days: 4_000, sources: ["big.pdf"])]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .oneMonth, heldBy: ["a"], now: Self.now
+            ).isEmpty,
+            """
+            An open editor is a writing being worked on now, whatever its saved \
+            date says, and its agent pane is inside it — so a chat or a Terminal \
+            turn mid-flight is held by the same check.
+            """
+        )
+    }
+
+    @Test func aWritingWhoseActivityIsUnknownIsKept() {
+        let workspaces = [
+            Workspace(
+                writingID: "a", lastActivity: nil,
+                sources: ["big.pdf"], onTheServer: ["big.pdf"]
+            )
+        ]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .oneMonth, heldBy: [], now: Self.now
+            ).isEmpty,
+            """
+            The answer to not knowing is to keep. Keeping a source too long \
+            costs disk; taking one too early costs a fetch the reader did not ask \
+            for, and may cost it on a connection they do not have.
+            """
+        )
+    }
+
+    @Test func aSourceTheServerHasNotTakenIsLeftWhileItsNeighboursGo() {
+        let workspaces = [
+            Self.idle(
+                "a", days: 200,
+                sources: ["taken.pdf", "pending.pdf"],
+                onTheServer: ["taken.pdf"]
+            )
+        ]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .oneMonth, heldBy: [], now: Self.now
+            ) == [Candidate(writingID: "a", relativePath: "taken.pdf")],
+            """
+            Offloading deletes the only local copy, so a source the server has \
+            not confirmed would simply be gone. One pending file must not hold \
+            back the rest of the workspace either.
+            """
+        )
+    }
+
+    @Test func inactivityIsStrictlyLongerThanTheSetting() {
+        let exactly = Workspace(
+            writingID: "a",
+            lastActivity: Self.now.addingTimeInterval(-30 * 24 * 60 * 60),
+            sources: ["big.pdf"], onTheServer: ["big.pdf"]
+        )
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: [exactly], after: .oneMonth, heldBy: [], now: Self.now
+            ).isEmpty,
+            "A writing left alone for exactly a month has not yet passed “after one month”."
+        )
+
+        let aSecondMore = Workspace(
+            writingID: "a",
+            lastActivity: Self.now.addingTimeInterval(-30 * 24 * 60 * 60 - 1),
+            sources: ["big.pdf"], onTheServer: ["big.pdf"]
+        )
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: [aSecondMore], after: .oneMonth, heldBy: [], now: Self.now
+            ) == [Candidate(writingID: "a", relativePath: "big.pdf")]
+        )
+    }
+
+    @Test func candidatesComeBackInOneOrder() {
+        let workspaces = [
+            Self.idle("b", days: 200, sources: ["second.pdf", "first.pdf"]),
+            Self.idle("a", days: 200, sources: ["only.pdf"]),
+        ]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .oneMonth, heldBy: [], now: Self.now
+            ) == [
+                Candidate(writingID: "a", relativePath: "only.pdf"),
+                Candidate(writingID: "b", relativePath: "first.pdf"),
+                Candidate(writingID: "b", relativePath: "second.pdf"),
+            ],
+            """
+            One order, so a batch that fails half way through fails the same way \
+            twice — and so a reader watching the space come back sees the same \
+            work each time rather than a shuffle.
+            """
+        )
+    }
+
+    @Test func aWorkspaceWithNoSourcesContributesNothing() {
+        let workspaces = [
+            Self.idle("a", days: 400, sources: []),
+            Self.idle("b", days: 400, sources: ["big.pdf"]),
+        ]
+        #expect(
+            WorkspaceSourceOffload.offloadable(
+                from: workspaces, after: .oneMonth, heldBy: [], now: Self.now
+            ) == [Candidate(writingID: "b", relativePath: "big.pdf")],
+            "A workspace whose sources have all gone already is simply done, not an error."
+        )
+    }
+
+    /// The setting is this Mac's own, and has to survive a build that has
+    /// never heard of what was saved.
+    @Test func anUnknownChoiceReadsAsNever() {
+        let defaults = UserDefaults(suiteName: "WorkspaceSourceOffloadTests.unknown")!
+        defaults.removePersistentDomain(forName: "WorkspaceSourceOffloadTests.unknown")
+        #expect(WorkspaceSourceOffload.After.chosen(in: defaults) == .never)
+
+        defaults.set("everyFortnight", forKey: WorkspaceSourceOffload.After.settingKey)
+        #expect(
+            WorkspaceSourceOffload.After.chosen(in: defaults) == .never,
+            """
+            A newer build's choice read by an older one must fall back to the \
+            setting that does nothing, not to the first case in the list.
+            """
+        )
+
+        defaults.set("sixMonths", forKey: WorkspaceSourceOffload.After.settingKey)
+        #expect(WorkspaceSourceOffload.After.chosen(in: defaults) == .sixMonths)
+        defaults.removePersistentDomain(forName: "WorkspaceSourceOffloadTests.unknown")
+    }
+
+    /// Changing the stored spelling orphans every Mac's saved choice, and
+    /// adding this key to the synced settings would push one Mac's disk
+    /// policy onto another.
+    @Test func theSettingIsThisMacsOwn() {
+        #expect(WorkspaceSourceOffload.After.settingKey == "writing.sources.offloadAfter")
+        #expect(
+            !LampPortableSettingsCodec.syncedKeys.contains(
+                WorkspaceSourceOffload.After.settingKey
+            ),
+            """
+            A desktop with room to spare should not inherit a laptop's policy. \
+            The reader's chat retention is per-Mac for the same reason.
+            """
+        )
+    }
+}
+
+/// Reading the policy's inputs off a real workspace.
+///
+/// The clock is the part worth proving against files rather than in the
+/// abstract: the obvious answer — the newest modification date in the
+/// workspace tree — is wrong in a way that only shows up on disk, because the
+/// act of offloading writes into the very tree it reads.
+struct WorkspaceSourceOffloadGatheringTests {
+    private static let writingID = "personal-devotionals:A1B2C3"
+
+    private struct Fixture {
+        let library: URL
+        let workspace: URL
+        let context: URL
+    }
+
+    private static func makeWorkspace() throws -> Fixture {
+        let library = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("offload-gather-\(UUID().uuidString)", isDirectory: true)
+        let folder = LampWritingWorkspaceLayout.directoryName(for: writingID)
+        let workspace = library
+            .appendingPathComponent("AgentWorkspaces", isDirectory: true)
+            .appendingPathComponent("Writing", isDirectory: true)
+            .appendingPathComponent(folder, isDirectory: true)
+        let context = workspace.appendingPathComponent("context", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: context, withIntermediateDirectories: true
+        )
+        return Fixture(library: library, workspace: workspace, context: context)
+    }
+
+    private static func write(
+        _ text: String, to url: URL, modified: Date
+    ) throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modified], ofItemAtPath: url.path
+        )
+    }
+
+    @Test func theWritingsOwnDateAndItsDocumentsAndItsChatAllCount() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+
+        let saved = Date(timeIntervalSince1970: 1_700_000_000)
+        let outlineDate = saved.addingTimeInterval(3_600)
+
+        try Self.write(
+            "# Outline", to: fixture.workspace.appendingPathComponent("outline.md"),
+            modified: outlineDate
+        )
+
+        let fromDocuments = await WorkspaceSourceOffload.lastActivity(
+            ofWorkspaceAt: fixture.workspace, writingSaved: saved
+        )
+        #expect(
+            fromDocuments == outlineDate,
+            """
+            An outline edit does not move the writing's saved date, so the \
+            documents have to be read too, or a writing worked on all week \
+            through its notes would read as idle.
+            """
+        )
+
+        let spokenAt = outlineDate.addingTimeInterval(3_600)
+        let turn = UUID()
+        let said = "What did Irenaeus say about this?"
+        let transcript = AgentChatTranscript(
+            conversationID: UUID(), sessionID: "s", sessionInstallID: "i",
+            messages: [
+                AgentChatTranscript.Message(role: .user, text: said, date: spokenAt)
+            ],
+            events: [
+                AgentChatTranscript.Event(
+                    turn: turn, date: spokenAt,
+                    kind: AgentChatTranscript.Event.said, role: .user, text: said
+                )
+            ]
+        )
+        try AgentChatTranscriptStore.save(
+            transcript, providerID: "claude", in: fixture.workspace
+        )
+
+        let withChat = await WorkspaceSourceOffload.lastActivity(
+            ofWorkspaceAt: fixture.workspace, writingSaved: saved
+        )
+        #expect(
+            withChat == spokenAt,
+            """
+            Research that never touched the draft is still work on this \
+            writing, and a message is dated by the reader's act.
+            """
+        )
+    }
+
+    /// The trap the clock is built to avoid.
+    @Test func writingTheLedgerDoesNotLookLikeActivity() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+
+        let saved = Date(timeIntervalSince1970: 1_700_000_000)
+        try Self.write(
+            "# Outline", to: fixture.workspace.appendingPathComponent("outline.md"),
+            modified: saved
+        )
+        let before = await WorkspaceSourceOffload.lastActivity(
+            ofWorkspaceAt: fixture.workspace, writingSaved: saved
+        )
+
+        // What an offload does: note it in the ledger, which lands inside the
+        // workspace under `.lamp/`.
+        var ledger = await WorkspaceFileLedger.load(in: fixture.workspace)
+        await ledger.recordOffload(of: WorkspaceFileLedger.contextKey("big.pdf"))
+        try await ledger.save(in: fixture.workspace)
+
+        let after = await WorkspaceSourceOffload.lastActivity(
+            ofWorkspaceAt: fixture.workspace, writingSaved: saved
+        )
+        #expect(
+            after == before,
+            """
+            If the clock were the newest modification date in the workspace \
+            tree, the offload would refresh the very date that triggered it and \
+            the sweep could never run twice. The ledger, the transcripts' own \
+            file dates, a sync pass and an opening of the pane all write in \
+            here; none of them may read as the reader working.
+            """
+        )
+    }
+
+    @Test func aSourceOnDiskIsFoundAndAnOffloadedOneIsNot() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+
+        try Self.write(
+            "%PDF", to: fixture.context.appendingPathComponent("here.pdf"),
+            modified: Date()
+        )
+        let nested = fixture.context.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Self.write(
+            "%PDF", to: nested.appendingPathComponent("deeper.pdf"), modified: Date()
+        )
+
+        try Self.write(
+            "%PDF", to: fixture.context.appendingPathComponent("a-first.pdf"),
+            modified: Date()
+        )
+
+        let found = await WorkspaceSourceOffload.contextRelativePaths(in: fixture.workspace)
+        #expect(
+            found == ["a-first.pdf", "here.pdf", "notes/deeper.pdf"],
+            """
+            Paths are relative to the context directory, which is what a member \
+            path and a ledger key are built from, and nested sources count.
+            """
+        )
+
+        try FileManager.default.removeItem(
+            at: fixture.context.appendingPathComponent("here.pdf")
+        )
+        let afterOffload = await WorkspaceSourceOffload.contextRelativePaths(
+            in: fixture.workspace
+        )
+        #expect(
+            afterOffload == ["a-first.pdf", "notes/deeper.pdf"],
+            "An offloaded source has no file, so it is simply not a candidate again."
+        )
+    }
+
+    @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try Self.write(
+            "%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date()
+        )
+
+        let known = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [Self.writingID: Date()],
+            source: "webdav:example"
+        )
+        #expect(known.count == 1)
+        #expect(known.first?.sources == ["big.pdf"])
+        #expect(
+            known.first?.onTheServer.isEmpty == true,
+            "No record, so nothing is known to be on the server, so nothing may go."
+        )
+
+        let orphaned = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: ["personal-devotionals:SOMETHING-ELSE": Date()],
+            source: "webdav:example"
+        )
+        #expect(
+            orphaned.isEmpty,
+            """
+            A workspace outlives its writing — deleting a writing leaves the \
+            folder — and sweeping an orphan is housekeeping of a different kind.
+            """
+        )
+    }
+}

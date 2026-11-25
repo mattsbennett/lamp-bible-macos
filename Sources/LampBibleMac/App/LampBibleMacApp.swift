@@ -415,6 +415,8 @@ private struct ReaderSettingsView: View {
     private var readerChatRetention = ReaderChatWorkspaceStore.Retention.standard.rawValue
     @State private var agentModuleAccessStatus: String?
     @AppStorage("sync.automatic") private var automaticSync = true
+    @AppStorage(WorkspaceSourceOffload.After.settingKey)
+    private var offloadSourcesAfter = WorkspaceSourceOffload.After.standard.rawValue
     @State private var webDAVEndpoint = ""
     @State private var webDAVUsername = ""
     @State private var webDAVPassword = ""
@@ -1143,6 +1145,24 @@ private struct ReaderSettingsView: View {
                             }
                         }
                         Toggle("Sync automatically when Lamp Bible opens", isOn: $automaticSync)
+                        Picker("Put sources back on the server", selection: $offloadSourcesAfter) {
+                            ForEach(WorkspaceSourceOffload.After.allCases, id: \.rawValue) {
+                                Text($0.title).tag($0.rawValue)
+                            }
+                        }
+                        Text(
+                            """
+                            A writing's sources — the PDFs and files you gather \
+                            beside it — are most of what a library holds. Once a \
+                            writing has been left alone this long, Lamp deletes \
+                            this Mac's copies after a sync and keeps the \
+                            server's. The Context list still shows them, and \
+                            Download brings one back. Nothing is removed from the \
+                            server, and a writing open in a window is left alone.
+                            """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .tint(Color.lampAccentMuted)
                             .disabled(syncController.provider == .off)
                         Text("Includes companion writing files, agent context, custom workspace skills, and revision history. Provider credentials and generated agent configuration stay on this Mac.")

@@ -242,6 +242,162 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// The unattended sweep's batch: the records are read once, every note is
+    /// written before any file goes, and the two checks the pane does not make
+    /// are made here.
+    @Test func offloadsAbatchAgainstTheCurrentServerAndTheUploadedBytes() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        for name in ["one.pdf", "two.pdf", "stale.pdf", "elsewhere.pdf"] {
+            try write(name, to: context.appendingPathComponent(name), at: 0)
+        }
+        func path(_ name: String) throws -> String {
+            try LampWritingWorkspaceLayout.contextPath(
+                folder: workspaceURL.lastPathComponent, relativePath: name
+            )
+        }
+        func digest(_ name: String) throws -> String {
+            try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent(name)
+            )
+        }
+
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        let other = LampSyncFileRecords.webDAVSource(URL(string: "https://old.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        var confirmations: [String: String] = [:]
+        for name in ["one.pdf", "two.pdf"] {
+            records.recordUpload(
+                try path(name), in: source, digest: try digest(name), revision: "\"r1\""
+            )
+            confirmations[try path(name)] = "\"r1\""
+        }
+        // Uploaded, then changed on disk since: the digest recorded is not the
+        // digest of what is here now.
+        records.recordUpload(
+            try path("stale.pdf"), in: source, digest: "something-else", revision: "\"r1\""
+        )
+        confirmations[try path("stale.pdf")] = "\"r1\""
+        records.confirmRecorded(confirmations, in: source)
+        // Confirmed, but against a server this Mac no longer syncs with.
+        records.recordUpload(
+            try path("elsewhere.pdf"), in: other,
+            digest: try digest("elsewhere.pdf"), revision: "\"r1\""
+        )
+        records.confirmRecorded([try path("elsewhere.pdf"): "\"r1\""], in: other)
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["one.pdf", "two.pdf", "stale.pdf", "elsewhere.pdf"],
+            in: workspaceURL, libraryRootURL: macs.a, source: source
+        )
+
+        #expect(result.offloaded == ["one.pdf", "two.pdf"])
+        #expect(
+            result.skipped["stale.pdf"] == .changedSinceUpload,
+            """
+            A confirmed revision says an upload completed, not that nothing has \
+            happened since. The sweep runs with nobody watching, so it checks \
+            the bytes it is about to delete are the bytes that went up.
+            """
+        )
+        #expect(
+            result.skipped["elsewhere.pdf"] == .notOnTheServer,
+            """
+            `mayOffload` accepts a confirmation from any server this Mac has \
+            ever synced with; after a change of server that would delete the \
+            only copy of a file the new one never took.
+            """
+        )
+        #expect(
+            await contextFiles(macs.a).sorted() == ["elsewhere.pdf", "stale.pdf"],
+            "and the two it would not take are still here"
+        )
+        let withheld = await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a)
+        #expect(withheld.contains(try path("one.pdf")))
+        #expect(withheld.contains(try path("two.pdf")))
+        #expect(
+            !withheld.contains(try path("stale.pdf")),
+            "nothing is noted for a source that stayed, or the pass would withhold a file this Mac holds"
+        )
+    }
+
+    /// A file that will not go leaves no note behind.
+    ///
+    /// A note saying "offloaded" on a file that is still here is a lie in the
+    /// one direction that shows: the pass would withhold a member this Mac
+    /// holds, and the pane would offer Download for a file on disk.
+    @Test func asourceThatWillNotGoIsNotMarkedOffloaded() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let folder = context.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("stuck", to: folder.appendingPathComponent("stuck.pdf"), at: 0)
+
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "locked/stuck.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: folder.appendingPathComponent("stuck.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        // Unlinking needs write permission on the containing folder, not the file.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: folder.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: folder.path
+            )
+        }
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["locked/stuck.pdf"], in: workspaceURL, libraryRootURL: macs.a, source: source
+        )
+
+        #expect(result.offloaded.isEmpty)
+        #expect(result.skipped["locked/stuck.pdf"] == .couldNotRemove)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: folder.appendingPathComponent("stuck.pdf").path
+            ),
+            "the file is still here"
+        )
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path),
+            "so it must not be withheld from the pass"
+        )
+    }
+
+    /// Asked for nothing, it reads nothing and writes nothing.
+    @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("kept", to: context.appendingPathComponent("kept.pdf"), at: 0)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            [], in: workspaceURL, libraryRootURL: macs.a, source: "webdav:example"
+        )
+        #expect(result.offloaded.isEmpty)
+        #expect(result.skipped.isEmpty)
+        #expect(await contextFiles(macs.a) == ["kept.pdf"])
+        #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).isEmpty)
+    }
+
     /// A tombstone naming one source does not remove a folder put at that
     /// path since.
     ///

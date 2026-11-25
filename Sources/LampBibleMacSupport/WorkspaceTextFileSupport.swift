@@ -477,8 +477,6 @@ public enum WorkspaceContextFileStore {
         return keys
     }
 
-    /// Removes one context file that sync found deleted elsewhere, pruning its
-    /// shared object once nothing links to it.
     /// Whether this Mac may offload a source: the server has to hold it,
     /// at the revision this Mac last agreed on.
     ///
@@ -561,6 +559,123 @@ public enum WorkspaceContextFileStore {
         var ledger = WorkspaceFileLedger.load(in: workspaceURL)
         ledger.clearOffload(of: WorkspaceFileLedger.contextKey(relativePath))
         try ledger.save(in: workspaceURL)
+    }
+
+    /// Why one source was left where it was.
+    public enum Skipped: String, Sendable {
+        /// No confirmed revision for this source — the server has not taken it.
+        case notOnTheServer
+        /// The bytes here are not the bytes that were uploaded. The next pass
+        /// takes the new ones up, and the sweep after that may offload it.
+        case changedSinceUpload
+        /// Not a regular file under this workspace's context directory.
+        case notAsource
+        /// The file would not go. Nothing is recorded, so it is offered again.
+        case couldNotRemove
+    }
+
+    /// Puts a batch of sources back on the server in one go.
+    ///
+    /// For the unattended sweep. The pane's single-file `offloadSource` keeps
+    /// its own path; this one loads the records once for the whole batch and
+    /// saves the ledger once, and it is stricter in two ways the sweep needs:
+    ///
+    /// - it checks the **current** source only. `mayOffload` accepts a
+    ///   confirmed revision from any source this Mac has ever synced with, so
+    ///   after a change of server it would offload a file the new one never
+    ///   took.
+    /// - it checks the bytes on disk are the bytes that went up. A confirmed
+    ///   revision says an upload completed, not that nothing has happened
+    ///   since. Sources are read-only hard links and nothing here writes one
+    ///   in place, so this should never fire — but the sweep runs with nobody
+    ///   watching, and the check costs one hash of a file that is about to be
+    ///   deleted anyway.
+    ///
+    /// Each offload is noted before any file goes, keeping `decisions/0020`'s
+    /// order for the batch as a whole: a crash part way leaves sources marked
+    /// offloaded that are still here, which costs nothing, rather than files
+    /// gone and unrecorded, which the gather would read as never-seen.
+    @discardableResult
+    @WritingWorkspaceFiles
+    public static func offloadSources(
+        _ relativePaths: [String],
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        source: String,
+        fileManager: FileManager = .default
+    ) throws -> (offloaded: [String], skipped: [String: Skipped]) {
+        guard !relativePaths.isEmpty else { return ([], [:]) }
+        let contextDirectory = try validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+        let folder = workspaceURL.lastPathComponent
+        let records = LampSyncFileRecords.load(
+            fromLibraryAt: libraryRootURL, fileManager: fileManager
+        )
+        let root = contextDirectory.resolvingSymlinksInPath().path + "/"
+
+        var ready: [(relativePath: String, file: URL)] = []
+        var skipped: [String: Skipped] = [:]
+        for relativePath in relativePaths {
+            guard let path = try? LampWritingWorkspaceLayout.contextPath(
+                folder: folder, relativePath: relativePath
+            ) else { skipped[relativePath] = .notAsource; continue }
+            guard records.record(path, in: source)?.installedRevision != nil else {
+                skipped[relativePath] = .notOnTheServer
+                continue
+            }
+            let file = contextDirectory.appendingPathComponent(relativePath)
+            guard let values = try? file.resourceValues(forKeys: [
+                .isRegularFileKey, .isSymbolicLinkKey,
+            ]), values.isRegularFile == true, values.isSymbolicLink != true,
+                  file.resolvingSymlinksInPath().path.hasPrefix(root)
+            else { skipped[relativePath] = .notAsource; continue }
+            guard let digest = try? LampSyncContentRevision.digest(forFileAt: file) else {
+                skipped[relativePath] = .notAsource
+                continue
+            }
+            guard !records.changedSinceUpload(path, in: source, digest: digest) else {
+                skipped[relativePath] = .changedSinceUpload
+                continue
+            }
+            ready.append((relativePath, file))
+        }
+        guard !ready.isEmpty else { return ([], skipped) }
+
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        for candidate in ready {
+            ledger.recordOffload(of: WorkspaceFileLedger.contextKey(candidate.relativePath))
+        }
+        try ledger.save(in: workspaceURL)
+
+        var offloaded: [String] = []
+        var stubborn: [String] = []
+        for candidate in ready {
+            do {
+                try removeSyncedContextFile(
+                    at: candidate.file, libraryRootURL: libraryRootURL,
+                    fileManager: fileManager
+                )
+                offloaded.append(candidate.relativePath)
+            } catch {
+                // Reported rather than thrown: one stubborn file must not cost
+                // the rest of the batch.
+                stubborn.append(candidate.relativePath)
+                skipped[candidate.relativePath] = .couldNotRemove
+            }
+        }
+
+        // A note left on a file that is still here would be a lie in the one
+        // direction that shows: the gather would withhold a member this Mac
+        // holds, and the pane would offer Download for a file already on disk.
+        if !stubborn.isEmpty {
+            var corrected = WorkspaceFileLedger.load(in: workspaceURL)
+            for relativePath in stubborn {
+                corrected.clearOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+            }
+            try? corrected.save(in: workspaceURL)
+        }
+        return (offloaded, skipped)
     }
 
     public enum OffloadError: LocalizedError, Equatable {

@@ -180,6 +180,7 @@
 		A1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */; };
 		A1000000000000000000003D /* SwiftyChat in Frameworks */ = {isa = PBXBuildFile; productRef = G1000000000000000000000A /* SwiftyChat */; };
 		A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* WorkspaceTextFileSupport.swift */; };
+		A1000000000000000000F818 /* WorkspaceSourceOffloadSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000F819 /* WorkspaceSourceOffloadSupport.swift */; };
 		A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003A /* WorkspaceSkillSupport.swift */; };
 		A10000000000000000000040 /* BookReadingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003B /* BookReadingSupport.swift */; };
 		A10000000000000000000041 /* ReaderChatSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000003C /* ReaderChatSupport.swift */; };
@@ -341,6 +342,7 @@
 		B1000000000000000000004D /* UnifiedDiffSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/UnifiedDiffSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000004C /* ManuscriptNotesRefreshSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ManuscriptNotesRefreshSupport.swift; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000039 /* WorkspaceTextFileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift; sourceTree = SOURCE_ROOT; };
+		B1000000000000000000F819 /* WorkspaceSourceOffloadSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceSourceOffloadSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003A /* WorkspaceSkillSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/WorkspaceSkillSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003B /* BookReadingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/BookReadingSupport.swift; sourceTree = SOURCE_ROOT; };
 		B1000000000000000000003C /* ReaderChatSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LampBibleMacSupport/ReaderChatSupport.swift; sourceTree = SOURCE_ROOT; };
@@ -548,6 +550,7 @@
 				B1000000000000000000F807 /* AgentRemoteHost.swift */,
 				B1000000000000000000003C /* ReaderChatSupport.swift */,
 				B10000000000000000000039 /* WorkspaceTextFileSupport.swift */,
+				B1000000000000000000F819 /* WorkspaceSourceOffloadSupport.swift */,
 				B1000000000000000000003A /* WorkspaceSkillSupport.swift */,
 				B10000000000000000000250 /* BundledSkillSupport.swift */,
 				B10000000000000000000900 /* LampAnimationRenderer.swift */,
@@ -862,6 +865,7 @@
 				A1000000000000000000F806 /* AgentRemoteHost.swift in Sources */,
 				A10000000000000000000041 /* ReaderChatSupport.swift in Sources */,
 				A1000000000000000000003E /* WorkspaceTextFileSupport.swift in Sources */,
+				A1000000000000000000F818 /* WorkspaceSourceOffloadSupport.swift in Sources */,
 				A1000000000000000000003F /* WorkspaceSkillSupport.swift in Sources */,
 				A10000000000000000000250 /* BundledSkillSupport.swift in Sources */,
 				A10000000000000000000900 /* LampAnimationRenderer.swift in Sources */,

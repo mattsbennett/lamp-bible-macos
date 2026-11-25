@@ -224,7 +224,100 @@ final class LibrarySyncController: ObservableObject {
         // measure from, once the server has had time to settle.
         lastSeenBundleRevision = nil
         lastPassFinishedAt = Date()
+        if finished { await offloadInactiveSources(library: library) }
         return finished
+    }
+
+    /// When this Mac last looked for sources to put back on the server.
+    private var lastOffloadSweepAt = Date.distantPast
+    /// The work is small — one query, a stat or two per workspace, one records
+    /// load — but a pass can run every few seconds and there is no reason to
+    /// ask that often about a clock measured in months.
+    private static let offloadSweepInterval: TimeInterval = 60 * 60
+
+    /// The source this library syncs with, named as the records name it, or
+    /// nil where sync is off or not configured.
+    private var currentSource: String? {
+        switch provider {
+        case .webDAV:
+            guard let url = URL(string: endpoint) else { return nil }
+            return LampSyncFileRecords.webDAVSource(url)
+        case .folder:
+            guard let folder = try? resolveFolderURL() else { return nil }
+            return LampSyncFileRecords.folderSource(folder)
+        case .off:
+            return nil
+        }
+    }
+
+    /// Puts the sources of writings left alone for long enough back on the
+    /// server, keeping the server's copy (`decisions/0020`, `0021`).
+    ///
+    /// **After a finished pass, not at launch.** Offloading deletes the only
+    /// local copy, so it may only touch a file the server is known to hold —
+    /// and a confirmed revision is what a pass's bundle update has just
+    /// produced. A launch sweep would run against whatever the records said
+    /// when the app last quit, and the launch pass would then make the same
+    /// work available a second later anyway. With sync off there is no pass,
+    /// so no sweep, which is right: there is nowhere for the sources to go.
+    @discardableResult
+    func offloadInactiveSources(library: LampLibrary) async -> Int {
+        let after = WorkspaceSourceOffload.After.chosen()
+        guard after.days != nil else { return 0 }
+        let now = Date()
+        guard now.timeIntervalSince(lastOffloadSweepAt) > Self.offloadSweepInterval,
+              let source = currentSource
+        else { return 0 }
+        lastOffloadSweepAt = now
+
+        let libraryRoot = library.rootURL
+        let writings: [String: Date]
+        do {
+            writings = try await library.personalDevotionalModificationDates()
+        } catch {
+            Self.log.error("Offload sweep could not read the writings: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+        // Read on this actor, where the editors register themselves.
+        let held = OpenWritingEditors.writingIDs
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: libraryRoot, writings: writings, source: source
+        )
+        let candidates = WorkspaceSourceOffload.offloadable(
+            from: workspaces, after: after, heldBy: held, now: now
+        )
+        guard !candidates.isEmpty else { return 0 }
+
+        var byWriting: [String: [String]] = [:]
+        for candidate in candidates {
+            byWriting[candidate.writingID, default: []].append(candidate.relativePath)
+        }
+        var offloaded = 0
+        for (writingID, relativePaths) in byWriting.sorted(by: { $0.key < $1.key }) {
+            let workspaceURL = LampWritingWorkspace.url(
+                libraryRootURL: libraryRoot, writingID: writingID
+            )
+            do {
+                let result = try await WorkspaceContextFileStore.offloadSources(
+                    relativePaths, in: workspaceURL,
+                    libraryRootURL: libraryRoot, source: source
+                )
+                offloaded += result.offloaded.count
+                for reason in Set(result.skipped.values) {
+                    let count = result.skipped.values.filter { $0 == reason }.count
+                    Self.log.info("Offload sweep left \(count, privacy: .public) source(s): \(reason.rawValue, privacy: .public)")
+                }
+            } catch {
+                Self.log.error("Offload sweep failed for a workspace: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if offloaded > 0 {
+            Self.log.info("Offload sweep put \(offloaded, privacy: .public) source(s) back on the server")
+            statusMessage = offloaded == 1
+                ? "1 source put back on the server."
+                : "\(offloaded) sources put back on the server."
+        }
+        return offloaded
     }
 
     /// Everything this Mac has to publish, as one thing that can be compared
