@@ -474,6 +474,12 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     let url: URL
     let isDirectory: Bool
     let byteCount: Int?
+    /// Where this source is. A row can exist for one that is **not** here:
+    /// offloaded to free space, with the server still holding it
+    /// (`lamp-bible-core/Documentation/decisions/0018`). Before offloading
+    /// existed the list was whatever was on disk, and a source that was not
+    /// here had no row at all.
+    var isOffloaded = false
 
     var id: String { url.path }
     var name: String { url.lastPathComponent }
@@ -611,6 +617,33 @@ enum DevotionalAgentWorkspaceStore {
                 byteCount: values?.fileSize
             )
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// The sources this writing has, on disk **and** offloaded.
+    ///
+    /// The offloaded ones are rows for files that are not here, which is the
+    /// whole point: a reader has to be able to see what a writing holds
+    /// before deciding to bring one back. Named by the ledger, which is what
+    /// records an offload — absence would not distinguish one this Mac let
+    /// go from one it never had.
+    @WritingWorkspaceFiles
+    fileprivate static func allContextFiles(
+        in workspace: URL, libraryRootURL: URL
+    ) throws -> [DevotionalAgentContextFile] {
+        let present = try contextFiles(in: workspace)
+        let here = Set(present.map(\.name))
+        let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
+            .filter { !here.contains($0) }
+            .map { name in
+                DevotionalAgentContextFile(
+                    url: contextDirectory(in: workspace).appendingPathComponent(name),
+                    isDirectory: false,
+                    byteCount: nil,
+                    isOffloaded: true
+                )
+            }
+        return (present + offloaded)
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Returns the entries that could not be copied, named relative to the item
@@ -755,8 +788,12 @@ enum DevotionalAgentWorkspaceStore {
     @WritingWorkspaceFiles
     private static func updateInstructions(in workspace: URL) throws {
         let files = (try? contextFiles(in: workspace)) ?? []
+        let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
+            .filter { name in !files.contains { $0.name == name } }
         let instructions = instructions(
-            contextFiles: files.map(\.name), reviewMarks: WritingReviewMarks.isEnabledNow
+            contextFiles: files.map(\.name),
+            offloadedSources: offloaded,
+            reviewMarks: WritingReviewMarks.isEnabledNow
         )
         try instructions.write(
             to: workspace.appendingPathComponent("AGENTS.md"),
@@ -781,10 +818,31 @@ enum DevotionalAgentWorkspaceStore {
     /// Written as the workspace is prepared, so it can outlast the setting:
     /// whether marks are on now is said by each message's note, which is
     /// there, even with nothing marked, only while they are.
-    static func instructions(contextFiles: [String], reviewMarks: Bool) -> String {
-        let inventory = contextFiles.isEmpty
+    /// - Parameter offloadedSources: sources the writing has that are **not**
+    ///   on this Mac, kept on the server to free space. Named, because an
+    ///   inventory of what is on disk alone would have the agent conclude
+    ///   they were never added — and then work without a source the writer
+    ///   deliberately kept (`lamp-bible-core/Documentation/decisions/0018`).
+    ///   An agent may ask for one back; it may not delete one.
+    static func instructions(
+        contextFiles: [String],
+        offloadedSources: [String] = [],
+        reviewMarks: Bool
+    ) -> String {
+        let here = contextFiles.map { "- `context/\($0)`" }
+        let away = offloadedSources.map {
+            "- `context/\($0)` — **not downloaded**: on the server to save space here."
+        }
+        let inventory = (here + away).isEmpty
             ? "- No user context files have been added yet."
-            : contextFiles.map { "- `context/\($0)`" }.joined(separator: "\n")
+            : (here + away).joined(separator: "\n")
+            + (offloadedSources.isEmpty ? "" : """
+
+
+                A source marked *not downloaded* is one the writer kept but \
+                moved off this Mac. Ask them to download it if you need it; \
+                do not treat it as missing, and do not delete a source.
+                """)
         let marks = reviewMarks
             ? "\n- While review marks are on, Lamp marks what each of your turns changes in `draft.md` until the writer has read it and cleared it, and each message, like `.lamp/editor.md`, says which passages are still marked, or that none are. A message that says nothing of marks means the writer has turned them off. Leave what the writer has cleared as it is unless the message asks you to change it, since anything you change there is marked to be read again. Only the writer clears marks, in Lamp: you cannot, so do not try to or say that you have. If asked to, tell them to press the ✓ beside a marked paragraph, or select the passage and mark it as reviewed."
             : ""
@@ -1908,27 +1966,60 @@ struct DevotionalAgentWorkspaceView: View {
             .font(.subheadline.weight(.semibold))
     }
 
+    /// One source. A row exists whether or not the file is here: an
+    /// offloaded one is on the server, and the point of showing it is that
+    /// the reader can bring it back.
+    ///
+    /// Two actions, kept apart on purpose. **Offload** frees space and is
+    /// reversible; **Remove** destroys the source on every device. They are
+    /// not peers, so they do not share a control: one Delete with two options
+    /// would make them look like a choice of wording.
     private func contextFileRow(_ file: DevotionalAgentContextFile) -> some View {
         HStack {
-            Image(systemName: file.isDirectory ? "folder" : "doc")
+            Image(systemName: file.isOffloaded
+                ? "icloud.and.arrow.down"
+                : (file.isDirectory ? "folder" : "doc"))
                 .foregroundStyle(.secondary)
             Text(file.name).lineLimit(1)
+                .foregroundStyle(file.isOffloaded ? .secondary : .primary)
             Spacer()
-            if let byteCount = file.byteCount, !file.isDirectory {
+            if file.isOffloaded {
+                Text("On the server")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if let byteCount = file.byteCount, !file.isDirectory {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            Button("Reveal", systemImage: "magnifyingglass") {
-                NSWorkspace.shared.activateFileViewerSelecting([file.url])
+            if file.isOffloaded {
+                Button("Download", systemImage: "arrow.down.circle") {
+                    Task { await fetchContextFile(file) }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Bring this source back to this Mac")
+            } else {
+                Button("Reveal", systemImage: "magnifyingglass") {
+                    NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                if !file.isDirectory {
+                    Button("Offload", systemImage: "icloud.and.arrow.up") {
+                        Task { await offloadContextFile(file) }
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Free the space here and keep this source on the server")
+                }
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
             Button("Remove", systemImage: "xmark.circle", role: .destructive) {
                 Task { await removeContextFile(file) }
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
+            .help("Remove this source from every device")
         }
         .font(.callout)
     }
@@ -2294,7 +2385,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// change — an assignment alone redraws the pane — and the history, which is
     /// the one expensive read, is reloaded only when the folder says so.
     private func refreshWorkspaceMetadata(in workspace: URL) async {
-        if let files = try? await DevotionalAgentWorkspaceStore.contextFiles(in: workspace),
+        if let files = try? await DevotionalAgentWorkspaceStore.allContextFiles(
+               in: workspace, libraryRootURL: libraryRootURL
+           ),
            files != contextFiles {
             contextFiles = files
         }
@@ -2562,6 +2655,44 @@ struct DevotionalAgentWorkspaceView: View {
             }
         } catch {
             errorMessage = "Couldn’t add that context: \(error.localizedDescription)"
+        }
+    }
+
+    /// Frees the space this source takes here, keeping the server's copy.
+    ///
+    /// Refused where the records do not show a completed upload, because then
+    /// this is the only copy. The refusal is shown rather than the button
+    /// hidden: "it has not finished syncing" is a thing worth knowing.
+    private func offloadContextFile(_ file: DevotionalAgentContextFile) async {
+        guard let workspaceURL else { return }
+        errorMessage = nil
+        contextNote = nil
+        do {
+            try await WorkspaceContextFileStore.offloadSource(
+                relativePath: file.name,
+                in: workspaceURL,
+                libraryRootURL: libraryRootURL
+            )
+            contextNote = "“\(file.name)” is on the server. Download it whenever you need it."
+            schedulePoll()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Asks for an offloaded source back. The next sync pass fetches it.
+    private func fetchContextFile(_ file: DevotionalAgentContextFile) async {
+        guard let workspaceURL else { return }
+        errorMessage = nil
+        contextNote = nil
+        do {
+            try await WorkspaceContextFileStore.fetchSource(
+                relativePath: file.name, in: workspaceURL
+            )
+            contextNote = "“\(file.name)” will come back on the next sync."
+            schedulePoll()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

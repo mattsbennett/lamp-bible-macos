@@ -151,6 +151,32 @@ struct WritingChatTurnsTests {
             == WritingChatTurns.reviewNote(ranges: review.highlightedRanges(in: new), in: new))
     }
 
+    /// An offloaded source is named in the inventory, and said to be on the
+    /// server rather than left out.
+    ///
+    /// Left out, an agent reads an inventory of what is on disk and concludes
+    /// the source was never added — then works without something the writer
+    /// deliberately kept. It is also told it may ask for one and may not
+    /// delete one (`decisions/0018`).
+    @Test func theInstructionsNameAsourceThatIsOnlyOnTheServer() {
+        let both = DevotionalAgentWorkspaceStore.instructions(
+            contextFiles: ["notes.md"],
+            offloadedSources: ["history.pdf"],
+            reviewMarks: false
+        )
+
+        #expect(both.contains("`context/notes.md`"))
+        #expect(both.contains("`context/history.pdf`"), "the offloaded one is named")
+        #expect(both.contains("not downloaded"), "and marked as not being here")
+        #expect(both.contains("do not treat it as missing"))
+        #expect(both.contains("do not delete a source"))
+
+        let none = DevotionalAgentWorkspaceStore.instructions(
+            contextFiles: ["notes.md"], reviewMarks: false
+        )
+        #expect(!none.contains("not downloaded"), "and nothing is said when there are none")
+    }
+
     /// The agent is told what marks are and that only the writer clears
     /// them, and only while marks are on.
     @Test func theInstructionsSayWhoClearsMarksOnlyWhileTheyAreOn() {

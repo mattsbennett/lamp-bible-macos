@@ -150,6 +150,22 @@ public enum LampWorkspaceSync {
         return times
     }
 
+    /// The names of the sources one workspace has offloaded, relative to its
+    /// `context` folder.
+    ///
+    /// For the pane, which lists what a writing holds whether or not the
+    /// bytes are here.
+    @WritingWorkspaceFiles
+    public static func offloadedSourceNames(in workspace: URL) -> [String] {
+        let ledger = WorkspaceFileLedger.load(in: workspace)
+        let prefix = WorkspaceFileLedger.contextKey("")
+        return ledger.offloaded
+            .filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
+
     /// Every source this library has offloaded, as published member paths.
     ///
     /// Read from each workspace's own ledger rather than inferred from what

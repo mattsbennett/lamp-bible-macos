@@ -479,6 +479,104 @@ public enum WorkspaceContextFileStore {
 
     /// Removes one context file that sync found deleted elsewhere, pruning its
     /// shared object once nothing links to it.
+    /// Whether this Mac may offload a source: the server has to hold it,
+    /// at the revision this Mac last agreed on.
+    ///
+    /// **The safety rule for the whole feature.** Offloading deletes the only
+    /// local copy, so a file the server never took would be gone. A record
+    /// with a confirmed revision is this Mac's own note that the upload
+    /// completed and was read back.
+    @WritingWorkspaceFiles
+    public static func mayOffload(
+        relativePath: String,
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard let path = try? LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: relativePath
+        ) else { return false }
+        let records = LampSyncFileRecords.load(fromLibraryAt: libraryRootURL)
+        for source in records.sources.keys {
+            if records.record(path, in: source)?.installedRevision != nil { return true }
+        }
+        return false
+    }
+
+    /// Drops a source's local copy, keeping the server's.
+    ///
+    /// The space back is the whole of it: a reader's sources are most of what
+    /// a library holds, and on the measured one the six largest PDFs
+    /// compressed **1.07×** — a PDF is already deflated, so archiving by
+    /// compression reclaims about 7% where this reclaims all of it
+    /// (`lamp-bible-core/Documentation/decisions/0018`).
+    ///
+    /// Refused unless `mayOffload` agrees. Recorded in the ledger, because
+    /// the gather must be able to tell a source this Mac let go from one it
+    /// has never seen — inferring that from absence is the mistake `0016`,
+    /// `0017` and `0018` were each written about.
+    @WritingWorkspaceFiles
+    public static func offloadSource(
+        relativePath: String,
+        in workspaceURL: URL,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        guard mayOffload(
+            relativePath: relativePath, in: workspaceURL,
+            libraryRootURL: libraryRootURL, fileManager: fileManager
+        ) else { throw OffloadError.notOnTheServer(relativePath) }
+
+        let contextDirectory = try validatedContextDirectory(
+            in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+        let file = contextDirectory.appendingPathComponent(relativePath)
+        guard let values = try? file.resourceValues(forKeys: [
+            .isRegularFileKey, .isSymbolicLinkKey,
+        ]), values.isRegularFile == true, values.isSymbolicLink != true,
+              file.resolvingSymlinksInPath().path
+                .hasPrefix(contextDirectory.resolvingSymlinksInPath().path + "/")
+        else { throw OffloadError.notAsource(relativePath) }
+
+        // Noted *before* the file goes. A crash in between leaves a source
+        // marked offloaded that is still here, which costs nothing — the
+        // gather only consults the note for a member it has no file for.
+        // The other way round leaves a file gone and unrecorded, which the
+        // gather would read as never-seen and fetch again.
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.recordOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+        try ledger.save(in: workspaceURL)
+
+        try removeSyncedContextFile(
+            at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
+    }
+
+    /// Asks for an offloaded source back. The next pass fetches it.
+    @WritingWorkspaceFiles
+    public static func fetchSource(
+        relativePath: String,
+        in workspaceURL: URL
+    ) throws {
+        var ledger = WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.clearOffload(of: WorkspaceFileLedger.contextKey(relativePath))
+        try ledger.save(in: workspaceURL)
+    }
+
+    public enum OffloadError: LocalizedError, Equatable {
+        case notOnTheServer(String)
+        case notAsource(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .notOnTheServer(let name):
+                "“\(name)” has not finished syncing yet, so keeping it here is the only copy."
+            case .notAsource(let name):
+                "“\(name)” is not a file this writing holds as a source."
+            }
+        }
+    }
+
     /// Carries out a source deletion another device made: removes the file,
     /// prunes its shared object, and clears any note that this Mac had
     /// offloaded it.

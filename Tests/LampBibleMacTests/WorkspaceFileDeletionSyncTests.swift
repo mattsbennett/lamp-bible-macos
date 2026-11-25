@@ -180,6 +180,68 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await contextFiles(macs.b) == ["map.txt"])
     }
 
+    // MARK: - Offloading
+
+    /// A source is not offloaded unless the server has it.
+    ///
+    /// Offloading deletes the only local copy, so this is the rule the whole
+    /// feature rests on: without a record of a completed upload, "free up
+    /// space" would be "lose the source".
+    @Test func refusesToOffloadAsourceTheServerHasNotTaken() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let context = workspace(macs.a).appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+
+        await #expect(throws: WorkspaceContextFileStore.OffloadError.self) {
+            try await WorkspaceContextFileStore.offloadSource(
+                relativePath: "history.pdf", in: workspace(macs.a), libraryRootURL: macs.a
+            )
+        }
+        #expect(
+            await contextFiles(macs.a) == ["history.pdf"],
+            "and the file is still here"
+        )
+    }
+
+    /// Offloaded with the server's copy recorded: the file goes, the note
+    /// stays, and asking for it back clears the note so a pass fetches it.
+    @Test func offloadsAsourceTheServerHolds() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("Daniell", to: context.appendingPathComponent("history.pdf"), at: 0)
+
+        // As a completed upload leaves it.
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+
+        #expect(await contextFiles(macs.a).isEmpty, "the space is back")
+        #expect(
+            await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path),
+            "and the pass withholds it rather than fetching it"
+        )
+
+        try await WorkspaceContextFileStore.fetchSource(
+            relativePath: "history.pdf", in: workspaceURL
+        )
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path),
+            "asked for, it is no longer withheld, so the next pass brings it"
+        )
+    }
+
     /// A tombstone naming one source does not remove a folder put at that
     /// path since.
     ///
