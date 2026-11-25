@@ -78,11 +78,15 @@ public enum WorkspaceSourceOffload {
         /// The sources on disk now, by their path under the context folder.
         /// Ones already offloaded are not here; there is no file to take.
         public let sources: [String]
-        /// Those of `sources` the server is known to hold, at a revision this
-        /// Mac confirmed against the source it is syncing with now.
+        /// Those of `sources` the **last pass's own listing** showed on the
+        /// server, at the revision this Mac has recorded for them.
         ///
         /// The subset matters: offloading deletes the only local copy, so one
-        /// the server never took would simply be gone (`0020`).
+        /// the server never took would simply be gone (`0020`). And a record
+        /// alone does not say the server still has it — `installedRevision`
+        /// is a memory of one upload that nothing refreshes, so a source
+        /// deleted from the folder by hand would keep its confirmation for
+        /// ever (`0021`).
         public let onTheServer: Set<String>
 
         public init(
@@ -164,11 +168,17 @@ extension WorkspaceSourceOffload {
     /// `writings` carries each writing's own saved date. It is asked for
     /// rather than read here because the library is the caller's, and because
     /// a date that travels in the personal file reads the same on both Macs.
+    ///
+    /// `seen` is what the pass that just finished saw when it listed those
+    /// folders. A source confirmed during *that* pass is not in it — the
+    /// listing is taken at the gather, before the uploads — so it waits one
+    /// more pass, which is the safe direction.
     @WritingWorkspaceFiles
     public static func workspaces(
         inLibraryAt libraryRootURL: URL,
         writings: [String: Date],
         source: String,
+        seen: [String: String],
         fileManager: FileManager = .default
     ) -> [Workspace] {
         guard let folders = try? LampWorkspaceSync.workspaces(
@@ -189,9 +199,11 @@ extension WorkspaceSourceOffload {
                 guard let path = try? LampWritingWorkspaceLayout.contextPath(
                     folder: name, relativePath: relativePath
                 ) else { continue }
-                if records.record(path, in: source)?.installedRevision != nil {
-                    onTheServer.insert(relativePath)
-                }
+                guard let installed = records.record(path, in: source)?.installedRevision,
+                      let listed = seen[path],
+                      LampSyncConditionalWrite.namesSameRevision(listed, installed)
+                else { continue }
+                onTheServer.insert(relativePath)
             }
             found.append(
                 Workspace(

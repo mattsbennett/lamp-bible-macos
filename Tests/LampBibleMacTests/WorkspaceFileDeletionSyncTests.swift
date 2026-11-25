@@ -219,7 +219,13 @@ struct WorkspaceFileDeletionSyncTests {
         )
         let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
         var records = LampSyncFileRecords()
-        records.recordUpload(path, in: source, digest: "d", revision: "\"r1\"")
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
         records.confirmRecorded([path: "\"r1\""], in: source)
         try records.save(toLibraryAt: macs.a)
 
@@ -291,7 +297,7 @@ struct WorkspaceFileDeletionSyncTests {
 
         let result = try await WorkspaceContextFileStore.offloadSources(
             ["one.pdf", "two.pdf", "stale.pdf", "elsewhere.pdf"],
-            in: workspaceURL, libraryRootURL: macs.a, source: source
+            in: workspaceURL, libraryRootURL: macs.a, source: source, seen: nil
         )
 
         #expect(result.offloaded == ["one.pdf", "two.pdf"])
@@ -364,7 +370,8 @@ struct WorkspaceFileDeletionSyncTests {
         }
 
         let result = try await WorkspaceContextFileStore.offloadSources(
-            ["locked/stuck.pdf"], in: workspaceURL, libraryRootURL: macs.a, source: source
+            ["locked/stuck.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil
         )
 
         #expect(result.offloaded.isEmpty)
@@ -381,6 +388,96 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
+    /// A source put back at an offloaded path is this Mac's again.
+    ///
+    /// Withholding on the note alone left it withheld for ever and never
+    /// uploaded: nothing on the attaching side knew a note was there to
+    /// clear. The note says what this Mac let go of; a file at that path says
+    /// it has one again, however it got there.
+    @Test func asourceAttachedWhereOneWasOffloadedIsNoLongerWithheld() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        try write("first", to: context.appendingPathComponent("history.pdf"), at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: context.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        try await WorkspaceContextFileStore.offloadSource(
+            relativePath: "history.pdf", in: workspaceURL, libraryRootURL: macs.a
+        )
+        #expect(await LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path))
+
+        // The reader attaches something new under the same name.
+        try write("second", to: context.appendingPathComponent("history.pdf"), at: 1)
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(path),
+            """
+            Otherwise the pane shows it as local while the pass withholds it, \
+            and the replacement never reaches the server or the phone.
+            """
+        )
+    }
+
+    /// A nested source is offloaded and fetched by its path, not its name.
+    @Test func anestedSourceIsWithheldUnderItsOwnPath() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let notes = context.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try write("nested", to: notes.appendingPathComponent("history.pdf"), at: 0)
+
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "notes/history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source,
+            digest: try LampSyncContentRevision.digest(
+                forFileAt: notes.appendingPathComponent("history.pdf")
+            ),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["notes/history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            source: source, seen: nil
+        )
+        #expect(result.offloaded == ["notes/history.pdf"])
+        #expect(
+            await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL)
+                == ["notes/history.pdf"],
+            """
+            The ledger holds the path under the context directory. A row that \
+            actioned this by its last component would clear a note on a \
+            top-level “history.pdf” that does not exist, and leave this one \
+            withheld.
+            """
+        )
+
+        try await WorkspaceContextFileStore.fetchSource(
+            relativePath: "notes/history.pdf", in: workspaceURL
+        )
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+    }
+
     /// Asked for nothing, it reads nothing and writes nothing.
     @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
         let macs = try Macs(devotional: devotional)
@@ -390,7 +487,8 @@ struct WorkspaceFileDeletionSyncTests {
         try write("kept", to: context.appendingPathComponent("kept.pdf"), at: 0)
 
         let result = try await WorkspaceContextFileStore.offloadSources(
-            [], in: workspaceURL, libraryRootURL: macs.a, source: "webdav:example"
+            [], in: workspaceURL, libraryRootURL: macs.a,
+            source: "webdav:example", seen: nil
         )
         #expect(result.offloaded.isEmpty)
         #expect(result.skipped.isEmpty)

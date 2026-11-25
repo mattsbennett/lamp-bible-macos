@@ -224,9 +224,19 @@ final class LibrarySyncController: ObservableObject {
         // measure from, once the server has had time to settle.
         lastSeenBundleRevision = nil
         lastPassFinishedAt = Date()
-        if finished { await offloadInactiveSources(library: library) }
+        if finished {
+            await offloadInactiveSources(library: library)
+        } else {
+            lastSeenUnlisted = [:]
+        }
         return finished
     }
+
+    /// What the last gather's listing of the unlisted-kind folders said, by
+    /// member path and revision. Empty until a pass has taken one, and
+    /// emptied when a pass does not finish: a sweep must act on a look the
+    /// server actually answered, not on the one before last.
+    private var lastSeenUnlisted: [String: String] = [:]
 
     /// When this Mac last looked for sources to put back on the server.
     private var lastOffloadSweepAt = Date.distantPast
@@ -280,8 +290,10 @@ final class LibrarySyncController: ObservableObject {
         }
         // Read on this actor, where the editors register themselves.
         let held = OpenWritingEditors.writingIDs
+        let seen = lastSeenUnlisted
+        guard !seen.isEmpty else { return 0 }
         let workspaces = await WorkspaceSourceOffload.workspaces(
-            inLibraryAt: libraryRoot, writings: writings, source: source
+            inLibraryAt: libraryRoot, writings: writings, source: source, seen: seen
         )
         let candidates = WorkspaceSourceOffload.offloadable(
             from: workspaces, after: after, heldBy: held, now: now
@@ -300,7 +312,7 @@ final class LibrarySyncController: ObservableObject {
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
-                    libraryRootURL: libraryRoot, source: source
+                    libraryRootURL: libraryRoot, source: source, seen: seen
                 )
                 offloaded += result.offloaded.count
                 for reason in Set(result.skipped.values) {
@@ -1583,14 +1595,19 @@ extension LibrarySyncController {
         // that will not install a source has no business pulling its bytes
         // into the sync folder to find out its revision.
         let withheld = result.gathered.withheld
-        result.gathered.extraListing.merge(
-            await LampSyncLocalFiles.revisionsOfUnlistedMembers(
-                manifest.members
-                    .filter { !($0.kind?.isListed ?? true) && !withheld.contains($0.path) }
-                    .map(\.path),
-                from: store
-            )
-        ) { _, listed in listed }
+        let unlisted = await LampSyncLocalFiles.revisionsOfUnlistedMembers(
+            manifest.members
+                .filter { !($0.kind?.isListed ?? true) && !withheld.contains($0.path) }
+                .map(\.path),
+            from: store
+        )
+        // Kept for the source-offload sweep, which runs after this pass and
+        // has no other way to know the server still holds a source. This is
+        // the only look any pass takes at those folders; a record's
+        // `installedRevision` is a memory of one upload and is never
+        // refreshed (`decisions/0021`).
+        lastSeenUnlisted = unlisted
+        result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
     }
 

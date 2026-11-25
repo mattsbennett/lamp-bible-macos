@@ -480,6 +480,13 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     /// existed the list was whatever was on disk, and a source that was not
     /// here had no row at all.
     var isOffloaded = false
+    /// Where this source sits under the context directory, which is what a
+    /// ledger key and a member path are built from — and **not** the file's
+    /// name. The sweep offloads nested sources, so a row may stand for
+    /// `notes/history.pdf`; actioning that by its last component would clear
+    /// the note on a `history.pdf` that does not exist and leave the real one
+    /// withheld.
+    var relativePath: String
 
     var id: String { url.path }
     var name: String { url.lastPathComponent }
@@ -614,7 +621,11 @@ enum DevotionalAgentWorkspaceStore {
             return DevotionalAgentContextFile(
                 url: url,
                 isDirectory: values?.isDirectory == true,
-                byteCount: values?.fileSize
+                byteCount: values?.fileSize,
+                // A shallow listing, so an entry here is at the top of the
+                // context directory and its path is its name. A nested source
+                // reaches the list only by having been offloaded.
+                relativePath: url.lastPathComponent
             )
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -631,15 +642,25 @@ enum DevotionalAgentWorkspaceStore {
         in workspace: URL, libraryRootURL: URL
     ) throws -> [DevotionalAgentContextFile] {
         let present = try contextFiles(in: workspace)
-        let here = Set(present.map(\.name))
+        // Compared as relative paths, which is what the ledger holds. Against
+        // names, a nested `notes/history.pdf` never matched anything here and
+        // a top-level file of the same name hid it.
+        //
+        // In NFC, as the ledger's keys are: macOS hands back a name with a
+        // combining mark decomposed, and a source whose name carries one
+        // would otherwise match nothing here and be drawn twice — once as
+        // itself and once as "On the server".
+        let here = Set(present.map { $0.relativePath.precomposedStringWithCanonicalMapping })
         let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
-            .filter { !here.contains($0) }
-            .map { name in
+            .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
+            .map { relativePath in
                 DevotionalAgentContextFile(
-                    url: contextDirectory(in: workspace).appendingPathComponent(name),
+                    url: contextDirectory(in: workspace)
+                        .appendingPathComponent(relativePath),
                     isDirectory: false,
                     byteCount: nil,
-                    isOffloaded: true
+                    isOffloaded: true,
+                    relativePath: relativePath
                 )
             }
         return (present + offloaded)
@@ -2669,7 +2690,7 @@ struct DevotionalAgentWorkspaceView: View {
         contextNote = nil
         do {
             try await WorkspaceContextFileStore.offloadSource(
-                relativePath: file.name,
+                relativePath: file.relativePath,
                 in: workspaceURL,
                 libraryRootURL: libraryRootURL
             )
@@ -2687,7 +2708,7 @@ struct DevotionalAgentWorkspaceView: View {
         contextNote = nil
         do {
             try await WorkspaceContextFileStore.fetchSource(
-                relativePath: file.name, in: workspaceURL
+                relativePath: file.relativePath, in: workspaceURL
             )
             contextNote = "“\(file.name)” will come back on the next sync."
             schedulePoll()

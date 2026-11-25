@@ -233,6 +233,34 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
+    /// A workspace holding one recorded source, gathered against a given
+    /// listing. `seen` is the revision the pass's listing showed for that
+    /// source, or nil for a listing that did not show it at all.
+    private static func gathered(
+        recorded: String, seen: String?
+    ) async throws -> WorkspaceSourceOffload.Workspace {
+        let fixture = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
+
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
+        )
+        let source = "webdav:example"
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: "d", revision: recorded)
+        records.confirmRecorded([path: recorded], in: source)
+        try records.save(toLibraryAt: fixture.library)
+
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [writingID: Date()],
+            source: source,
+            seen: seen.map { [path: $0] } ?? [:]
+        )
+        return workspaces[0]
+    }
+
     @Test func theWritingsOwnDateAndItsDocumentsAndItsChatAllCount() async throws {
         let fixture = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: fixture.library) }
@@ -363,6 +391,49 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
+    /// A record is a memory of one upload; the listing is what the server
+    /// says now.
+    ///
+    /// Nothing ever refreshes `installedRevision`. A source deleted from the
+    /// sync folder by hand is not noticed by a pass — `LampSyncFilePlan`
+    /// answers `.none` for an unchanged local copy with no listing, and the
+    /// absence report covers listed kinds only — so the confirmation stands
+    /// for ever while the server has nothing. Offloading on it would delete
+    /// the last copy in existence.
+    @Test func asourceTheServerNoLongerListsIsNotOffloaded() async throws {
+        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: nil)
+        #expect(
+            fixture.onTheServer.isEmpty,
+            "The pass listed the folder and this source was not in it."
+        )
+    }
+
+    @Test func asourceTheServerHoldsAtAnotherRevisionIsNotOffloaded() async throws {
+        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: "\"r2\"")
+        #expect(
+            fixture.onTheServer.isEmpty,
+            """
+            Another device wrote over it. The next pass installs that copy, \
+            and it may go after; deleting now would lose what has not arrived.
+            """
+        )
+    }
+
+    @Test func asourceTheListingAgreesWithMayGo() async throws {
+        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: "\"r1\"")
+        #expect(fixture.onTheServer == ["big.pdf"])
+    }
+
+    /// The listing is taken at the gather, before the uploads, so a source
+    /// first confirmed during that same pass is not in it and waits one more.
+    @Test func asourceConfirmedDuringThatPassWaitsForTheNext() async throws {
+        let fixture = try await Self.gathered(recorded: "\"r1\"", seen: nil)
+        #expect(
+            fixture.sources == ["big.pdf"] && fixture.onTheServer.isEmpty,
+            "Still a source, just not yet one this Mac may let go of."
+        )
+    }
+
     @Test func aWorkspaceWhoseWritingIsGoneIsSkipped() async throws {
         let fixture = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: fixture.library) }
@@ -373,7 +444,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let known = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: [Self.writingID: Date()],
-            source: "webdav:example"
+            source: "webdav:example", seen: [:]
         )
         #expect(known.count == 1)
         #expect(known.first?.sources == ["big.pdf"])
@@ -385,7 +456,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         let orphaned = await WorkspaceSourceOffload.workspaces(
             inLibraryAt: fixture.library,
             writings: ["personal-devotionals:SOMETHING-ELSE": Date()],
-            source: "webdav:example"
+            source: "webdav:example", seen: [:]
         )
         #expect(
             orphaned.isEmpty,

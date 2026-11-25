@@ -173,6 +173,15 @@ public enum LampWorkspaceSync {
     /// and fetches the library's sources as it always did — which is the
     /// regression the first version of this caused, and the fourth time
     /// absence turned out not to be a fact (`decisions/0018`).
+    ///
+    /// A note alone is not enough, though: a source is withheld only while
+    /// there is **no file here**. The note says what this Mac let go of, and
+    /// a file back at that path says it has it again — by a fetch that
+    /// landed, or by the reader attaching something new under the same name.
+    /// Withholding on the note alone left a reattached source withheld for
+    /// ever and never uploaded, because nothing on the attaching side knew to
+    /// clear a note. This is strictly narrower than the note alone, so it
+    /// cannot bring `0018`'s regression back.
     @WritingWorkspaceFiles
     public static func offloadedSources(
         inLibraryAt libraryRoot: URL,
@@ -187,7 +196,15 @@ public enum LampWorkspaceSync {
                 WritingFolder.perFile.rawValue,
                 workspace.lastPathComponent,
             ].joined(separator: "/")
-            paths.formUnion(ledger.offloadedMembers(under: prefix))
+            let context = workspace.appendingPathComponent("context", isDirectory: true)
+            for member in ledger.offloadedMembers(under: prefix) {
+                guard let relativePath = LampWritingWorkspaceLayout.contextFile(
+                    ofPath: member
+                )?.relativePath else { continue }
+                let file = context.appendingPathComponent(relativePath)
+                guard !fileManager.fileExists(atPath: file.path) else { continue }
+                paths.insert(member)
+            }
         }
         return paths
     }
@@ -1460,6 +1477,15 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
             presentSince[key] = max(presentSince[key] ?? .min, time)
+        }
+        // A file at an offloaded path means this Mac has one again, however
+        // it got there: a fetch that landed, or the reader attaching
+        // something new under the same name. The gather already refuses to
+        // withhold a path it can see a file at, so this is tidiness rather
+        // than correctness — but a note nothing ever clears is a note that
+        // grows for ever and reads as a lie to anyone opening the ledger.
+        for key in present.keys where Self.isContextKey(key) {
+            offloaded.remove(key)
         }
         self.synced = present
         return deleted
