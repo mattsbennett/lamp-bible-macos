@@ -1,5 +1,5 @@
 import Foundation
-import LampBibleMacSupport
+@testable import LampBibleMacSupport
 import Testing
 
 /// `lamp-bible-core/Documentation/decisions/0016`: a revision this Mac
@@ -135,6 +135,68 @@ struct RevisionMembersHeldTests {
         )
 
         #expect(claimed == [different])
+    }
+
+    /// The log line says where, never what the reader called it.
+    ///
+    /// The first version took the first two components of the whole path,
+    /// which for anything two deep is the folder *and the filename* — so a
+    /// review of a document published as `WritingReview/<id>__<name>.json`
+    /// put that document's name in the public part of the log, which is what
+    /// a sysdiagnose collects and a person sends on.
+    @Test func namesTheFolderAndNotTheReadersOwnFilename() {
+        let review = "WritingReview/W1__My Private Doubts.json"
+        let folders = LampSyncDiagnostics.folders(named: [
+            review,
+            "Workspaces/Writing/W1-abc/Revisions/1-A.json",
+            "Workspaces/Presentations/easter.lampdeck",
+        ])
+
+        #expect(!folders.contains("My Private Doubts"))
+        #expect(!folders.contains(".json"))
+        #expect(folders == "Workspaces/Presentations, Workspaces/Writing, WritingReview")
+    }
+
+    /// A bare name is all name, so it gives up none of itself.
+    @Test func givesUpNothingForAbareFilename() {
+        let folders = LampSyncDiagnostics.folders(named: ["My Private Doubts.lamp"])
+
+        #expect(!folders.contains("My Private Doubts"))
+    }
+
+    /// The id is read off the end of the name, past the four dashes a UUID
+    /// has of its own and the millisecond stamp in front of it.
+    @Test func readsTheIDOffTheEndOfAname() {
+        let id = UUID()
+        #expect(
+            LampWorkspaceSync.revisionID(
+                named: "\(workspace)/Revisions/1700000001000-\(id.uuidString).json"
+            ) == id
+        )
+        // Nothing that is not one, rather than something near enough.
+        #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/Revisions/17-A.json") == nil)
+        #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/draft.md") == nil)
+        #expect(
+            LampWorkspaceSync.revisionID(
+                named: "\(workspace)/Revisions/\(id.uuidString).json"
+            ) == nil,
+            "a name with no stamp in front of the id is not one the store wrote"
+        )
+    }
+
+    /// Which workspace a member belongs to, for reading only the histories
+    /// that can change the answer.
+    @Test func namesTheWorkspaceAmemberBelongsTo() {
+        #expect(
+            LampWorkspaceSync.workspaceIdentifier(
+                ofRevisionAt: "Workspaces/Writing/W1-abc/Revisions/1-A.json"
+            ) == "W1-abc"
+        )
+        #expect(
+            LampWorkspaceSync.workspaceIdentifier(
+                ofRevisionAt: "Workspaces/Skills/my-skill/Revisions/index.json"
+            ) == nil
+        )
     }
 
     /// The reading half, against a real workspace.

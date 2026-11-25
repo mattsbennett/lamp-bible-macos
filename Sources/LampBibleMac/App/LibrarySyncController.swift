@@ -333,21 +333,6 @@ final class LibrarySyncController: ObservableObject {
     /// than printed: a pass that never finishes left no trace otherwise.
     private static let log = Logger(subsystem: "com.neus.Lamp-Bible.macOS", category: "sync")
 
-    /// The folders a set of member paths falls under, for a log line that
-    /// says where a fault is without naming the reader's own files.
-    ///
-    /// Two components, so `Workspaces/Writing` is distinguished from
-    /// `Workspaces/Presentations` — the folder is the diagnosis, and a
-    /// workspace's own id is already a name nobody chose.
-    static func foldersNamed(by paths: some Sequence<String>) -> String {
-        var folders: Set<String> = []
-        for path in paths {
-            let parts = path.split(separator: "/")
-            guard !parts.isEmpty else { continue }
-            folders.insert(parts.prefix(2).joined(separator: "/"))
-        }
-        return folders.sorted().joined(separator: ", ")
-    }
 
     /// The digests this session has taken, for the library it is open on.
     ///
@@ -1261,14 +1246,12 @@ extension LibrarySyncController {
         // Except the ids an untagged merge here still needs a file for: a
         // demotion wants every id the merge replaced, so claiming one would
         // leave a turn's changes under no turn's name for good.
-        let wantedForDemotion = await LampWorkspaceSync.revisionIDsWantedForDemotion(
-            inLibraryAt: library.rootURL, fileManager: fileManager
-        )
         result.gathered.heldWithoutAFile.formUnion(
-            LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
                 members: manifest.members.map(\.path),
                 heldAsFiles: Set(described.files.map(\.path)),
-                stillWantedForDemotion: wantedForDemotion
+                inLibraryAt: library.rootURL,
+                fileManager: fileManager
             )
         )
         // Said to the pass rather than only to the person: a path left out of
@@ -1536,7 +1519,7 @@ extension LibrarySyncController {
         // two-pass check needs.
         if !outcome.fetchedAgain.isEmpty {
             let count = outcome.fetchedAgain.count
-            let folders = Self.foldersNamed(by: outcome.fetchedAgain)
+            let folders = LampSyncDiagnostics.folders(named: outcome.fetchedAgain)
             let paths = outcome.fetchedAgain.sorted().joined(separator: ", ")
             Self.log.warning(
                 """
@@ -1551,7 +1534,7 @@ extension LibrarySyncController {
         // because as far as the plan can tell it has nothing to delete.
         if !outcome.deletionsNotCarriedOut.isEmpty {
             let count = outcome.deletionsNotCarriedOut.count
-            let folders = Self.foldersNamed(by: outcome.deletionsNotCarriedOut)
+            let folders = LampSyncDiagnostics.folders(named: outcome.deletionsNotCarriedOut)
             let paths = outcome.deletionsNotCarriedOut.sorted().joined(separator: ", ")
             Self.log.warning(
                 """

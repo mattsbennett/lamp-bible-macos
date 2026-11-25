@@ -11,6 +11,34 @@ public typealias LampSyncArchive = LampModuleKit.LampSyncArchive
 /// along with each workspace's enabled-skill selection. Generated instructions,
 /// provider configuration, provider skill copies, and the primary draft are
 /// deliberately rebuilt from their canonical sources on each Mac.
+/// What a sync pass may say about itself in a log anybody can read.
+public enum LampSyncDiagnostics {
+    /// The folders a set of member paths falls under, for a line that says
+    /// where a fault is without naming the reader's own files.
+    ///
+    /// Up to two components **of the directory part**, so `Workspaces/Writing`
+    /// is told apart from `Workspaces/Presentations` while a review at
+    /// `WritingReview/<id>__<document>.json` gives up `WritingReview` and not
+    /// the document's own name. Taking the first two components of the whole
+    /// path was the bug a reviewer found: a path two deep is a folder and a
+    /// filename, so the filename *was* the second component.
+    ///
+    /// A member with no directory at all gives up nothing — a bare name is
+    /// all name.
+    public static func folders(named paths: some Sequence<String>) -> String {
+        var folders: Set<String> = []
+        for path in paths {
+            let parts = path.split(separator: "/")
+            guard parts.count > 1 else {
+                folders.insert("(the library's own folder)")
+                continue
+            }
+            folders.insert(parts.dropLast().prefix(2).joined(separator: "/"))
+        }
+        return folders.sorted().joined(separator: ", ")
+    }
+}
+
 public enum LampWorkspaceSync {
     public static let portableDirectoryName = LampPortableBackupLayout.workspacesDirectory
 
@@ -57,14 +85,37 @@ public enum LampWorkspaceSync {
         heldAsFiles: Set<String>,
         stillWantedForDemotion: Set<UUID> = []
     ) -> Set<String> {
-        let wanted = Set(stillWantedForDemotion.map { "-\($0.uuidString).json".lowercased() })
         var claimed: Set<String> = []
         for path in members where !heldAsFiles.contains(path) && namesARevision(path) {
-            let name = path.lowercased()
-            guard !wanted.contains(where: { name.hasSuffix($0) }) else { continue }
+            // The id read off the name once and looked up, rather than every
+            // wanted id tried against the name: a library with thousands of
+            // each made that the whole cost of the claim.
+            if let id = revisionID(named: path), stillWantedForDemotion.contains(id) { continue }
             claimed.insert(path)
         }
         return claimed
+    }
+
+    /// The revision id a published name ends with, from
+    /// `<millis>-<uuid>.json` as the store writes it.
+    ///
+    /// Nil where the name does not end in one, which is any file this claim
+    /// does not recognise — and an unrecognised name is never treated as a
+    /// wanted id, so it stays claimable.
+    static func revisionID(named path: String) -> UUID? {
+        guard let name = path.split(separator: "/").last,
+              name.hasSuffix(".json")
+        else { return nil }
+        let stem = name.dropLast(".json".count)
+        guard let dash = stem.lastIndex(of: "-") else { return nil }
+        // A UUID has four of its own dashes, so the id starts at the fifth
+        // from the end rather than at the last one.
+        var start = dash
+        for _ in 0..<4 {
+            guard let next = stem[stem.startIndex..<start].lastIndex(of: "-") else { return nil }
+            start = next
+        }
+        return UUID(uuidString: String(stem[stem.index(after: start)...]))
     }
 
     /// Whether `path` is a published revision file of a *writing* workspace:
@@ -89,29 +140,55 @@ public enum LampWorkspaceSync {
         return true
     }
 
-    /// The revision ids any untagged merge in any writing workspace still
-    /// needs a file for, across the library.
+    /// The revision members this Mac holds the history of although no file
+    /// sits at the path, reading only the workspaces that can affect the
+    /// answer.
     ///
-    /// Flat rather than per workspace: a revision id is a UUID, so one
-    /// workspace's answer cannot be mistaken for another's, and the claim
-    /// only ever asks whether an id is wanted at all.
+    /// Which workspaces those are is decided before anything is opened. A
+    /// pass over an unchanged library has no missing member at all and so
+    /// reads nothing: deciding first and reading second is the difference
+    /// between that and decoding the library's whole history every pass,
+    /// which on 250 workspaces of fifty revisions is some 430 ms — spent
+    /// holding `WritingWorkspaceFiles`, which is the owner the editor's own
+    /// writes queue behind.
     ///
-    /// A workspace that cannot be read contributes nothing. That is the safe
-    /// direction for this set and the unsafe one for the claim, so a failure
-    /// here means a member is claimed that might have been wanted — the same
-    /// exposure as before `decisions/0016`, and no worse.
+    /// A workspace that cannot be read contributes no wanted ids. That is the
+    /// unsafe direction for the claim — a member is claimed that a demotion
+    /// might have wanted — and it is the same exposure as before
+    /// `decisions/0016`, never worse.
     @WritingWorkspaceFiles
-    public static func revisionIDsWantedForDemotion(
+    public static func revisionMembersHeldWithoutAFile(
+        members: some Sequence<String>,
+        heldAsFiles: Set<String>,
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
-    ) -> Set<UUID> {
+    ) -> Set<String> {
+        let missing = revisionMembersHeldWithoutAFile(
+            members: members, heldAsFiles: heldAsFiles
+        )
+        guard !missing.isEmpty else { return [] }
+
         var wanted: Set<UUID> = []
-        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+        let root = LampWritingWorkspace.root(
+            libraryRootURL: libraryRoot, fileManager: fileManager
+        )
+        for identifier in Set(missing.compactMap(workspaceIdentifier(ofRevisionAt:))) {
+            let workspace = root.appendingPathComponent(identifier, isDirectory: true)
             wanted.formUnion(
                 (try? DevotionalAgentRevisionStore.idsWantedForDemotion(in: workspace)) ?? []
             )
         }
-        return wanted
+        guard !wanted.isEmpty else { return missing }
+
+        return revisionMembersHeldWithoutAFile(
+            members: missing, heldAsFiles: [], stillWantedForDemotion: wanted
+        )
+    }
+
+    /// The workspace a published revision belongs to, from its path.
+    static func workspaceIdentifier(ofRevisionAt path: String) -> String? {
+        guard namesARevision(path) else { return nil }
+        return String(path.split(separator: "/", omittingEmptySubsequences: false)[2])
     }
 
     /// The writing workspaces' folder under `Workspaces/`. A portable backup
