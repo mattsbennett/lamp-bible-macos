@@ -195,9 +195,8 @@ public enum LampWorkspaceSync {
                 // job, and claiming on this alone was `0016`'s mistake. A
                 // necessary condition beside it, and a cheap one: whether the
                 // folder has anything in it, nothing decoded.
-                let answer = DevotionalAgentRevisionStore.holdsAnyRevisionFile(in: workspace)
-                    ? DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
-                    : []
+                let answer = DevotionalAgentRevisionStore
+                    .claimableRetiredRevisionIDs(in: workspace)
                 retired[identifier] = answer
                 return answer
             }()

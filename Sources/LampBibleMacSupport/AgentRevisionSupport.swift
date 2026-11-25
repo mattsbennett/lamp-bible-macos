@@ -726,14 +726,18 @@ public enum DevotionalAgentRevisionStore {
         // different kinds and nothing the person typed carries a turn, so a
         // `.userEdit` merge can never be demoted and nothing needs holding
         // back for it.
-        let demotable = compacted.filter {
-            keptIDs.contains($0.id) && $0.turnID == nil && $0.kind == .agentEdit
-                && $0.replacedRevisionIDs?.isEmpty == false
+        // The union taken once, not per revision being removed:
+        // `coveredRevisionIDs` builds a fresh set on every access, and asking
+        // it once per (removed x survivor) pair cost 64 ms on a backlog of
+        // 1,500 edits under the lock, against 2 ms for the compaction itself.
+        var demotableCoverage: Set<UUID> = []
+        for revision in compacted where keptIDs.contains(revision.id)
+            && revision.turnID == nil && revision.kind == .agentEdit
+            && revision.replacedRevisionIDs?.isEmpty == false {
+            demotableCoverage.formUnion(revision.coveredRevisionIDs)
         }
         let goingAway = stored.filter { !keptIDs.contains($0.revision.id) }
-        let retiring = goingAway.filter { entry in
-            !demotable.contains { $0.coveredRevisionIDs.contains(entry.revision.id) }
-        }
+        let retiring = goingAway.filter { !demotableCoverage.contains($0.revision.id) }
         try retire(retiring.map(\.revision.id), in: workspace)
 
         var removed = Set<URL>()
@@ -809,30 +813,62 @@ public enum DevotionalAgentRevisionStore {
         let directory = metadataDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(retiredRevisionsFilename)
-        let line = Data(
-            (fresh.map(\.uuidString).sorted().joined(separator: "\n") + "\n").utf8
-        )
-        if let handle = try? FileHandle(forWritingTo: url) {
+        let body = fresh.map(\.uuidString).sorted().joined(separator: "\n") + "\n"
+        // For *updating*, not writing: the check below reads the last byte,
+        // and a write-only descriptor answers that with EBADF.
+        if let handle = try? FileHandle(forUpdating: url) {
             defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: line)
+            // Starting on a line of its own. An append interrupted mid-id
+            // leaves no trailing newline, and writing straight onto that
+            // would glue a good id to the fragment — losing the retirement
+            // that compaction had just successfully retried, which a
+            // reviewer found. A blank line costs nothing: the reader skips
+            // anything that is not a uuid.
+            let end = try handle.seekToEnd()
+            if end > 0 {
+                try handle.seek(toOffset: end - 1)
+                let last = try handle.read(upToCount: 1)
+                try handle.seekToEnd()
+                if last != Data("\n".utf8) { try handle.write(contentsOf: Data("\n".utf8)) }
+            }
+            try handle.write(contentsOf: Data(body.utf8))
         } else {
-            try line.write(to: url, options: .atomic)
+            try Data(body.utf8).write(to: url, options: .atomic)
         }
     }
 
-    /// Whether this workspace holds any revision file at all.
+    /// The retired ids a pass may actually claim for this workspace.
     ///
-    /// A directory listing, not a decode: the claim in `0017` needs to know
-    /// that *some* replacement is still here before it trusts a retirement,
-    /// and asking what each file says would put the library's whole history
-    /// on the pass again.
-    public static func holdsAnyRevisionFile(in workspace: URL) -> Bool {
-        let directory = revisionsDirectory(in: workspace)
-        guard let names = try? FileManager.default.contentsOfDirectory(
-            atPath: directory.path
-        ) else { return false }
-        return names.contains { $0.hasSuffix(".json") }
+    /// `lamp-bible-core/Documentation/decisions/0017`. Three things have to
+    /// hold, and two of them came from review:
+    ///
+    /// - **Some history is still readable here.** A retirement says the
+    ///   replacement was on disk when compaction ran, not that it is now. A
+    ///   filename was not enough to check that — the one remaining file can
+    ///   be corrupt, and then the server's copies of the retired originals
+    ///   are the only ones left — so this asks for a revision that decodes.
+    /// - **Nothing a surviving demotable merge covers.** An id retired long
+    ///   ago can be wanted again: a legacy untagged merge arriving later can
+    ///   displace the tagged replacement that justified the retirement, and
+    ///   then `removingReplaced` needs that original back. The live state
+    ///   overrides the older retirement.
+    /// - It is on the list at all, which is the evidence `0016` lacked.
+    ///
+    /// One decode per workspace, and only for a workspace that has a member
+    /// with no file — not the library's whole history on every pass, which
+    /// is what the shape before this did.
+    public static func claimableRetiredRevisionIDs(in workspace: URL) -> Set<UUID> {
+        let retired = retiredRevisionIDs(in: workspace)
+        guard !retired.isEmpty else { return [] }
+        guard let stored = try? storedRevisions(in: workspace), !stored.isEmpty else { return [] }
+
+        var wantedBack: Set<UUID> = []
+        for entry in stored where entry.revision.turnID == nil
+            && entry.revision.kind == .agentEdit
+            && entry.revision.replacedRevisionIDs?.isEmpty == false {
+            wantedBack.formUnion(entry.revision.coveredRevisionIDs)
+        }
+        return retired.subtracting(wantedBack)
     }
 
     public static func lastSyncedDraft(in workspace: URL) throws -> String? {

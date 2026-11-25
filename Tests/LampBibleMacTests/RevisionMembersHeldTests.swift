@@ -205,8 +205,9 @@ struct RevisionMembersHeldTests {
         try FileManager.default.removeItem(
             at: workspace.appendingPathComponent(".lamp/revisions")
         )
-        try #require(!DevotionalAgentRevisionStore.holdsAnyRevisionFile(in: workspace))
         try #require(!DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace).isEmpty)
+        try #require(DevotionalAgentRevisionStore
+            .claimableRetiredRevisionIDs(in: workspace).isEmpty)
 
         let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
             members: members, heldAsFiles: [], inLibraryAt: root
@@ -250,6 +251,72 @@ struct RevisionMembersHeldTests {
         )
     }
 
+    /// A retirement from long ago is overridden by what the history needs
+    /// now.
+    ///
+    /// A legacy untagged merge arriving later can displace the tagged
+    /// replacement that justified a retirement, and then `removingReplaced`
+    /// wants that original back. The list is evidence of a past deletion,
+    /// not a standing verdict.
+    @Test func lettsAliveDemotionOverrideAnOldRetirement() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // An agent's run that merges without a turn: the legacy shape.
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "one", after: "one two",
+            in: workspace, createdAt: start
+        )
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .agentEdit, before: "one two", after: "one two three",
+            in: workspace, createdAt: start.addingTimeInterval(60)
+        )
+        let merges = try DevotionalAgentRevisionStore.revisions(in: workspace).filter {
+            $0.turnID == nil && $0.kind == .agentEdit && $0.replacedRevisionIDs?.isEmpty == false
+        }
+        let covered = try #require(merges.first?.replacedRevisionIDs?.first)
+
+        // As though an earlier pass had retired that original, before this
+        // merge turned up and made it wanted again.
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((existing + covered.uuidString + "\n").utf8).write(to: list)
+        try #require(DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+            .contains(covered))
+
+        let claimable = DevotionalAgentRevisionStore.claimableRetiredRevisionIDs(in: workspace)
+
+        #expect(!claimable.contains(covered), "the demotion wants it back, retired or not")
+    }
+
+    /// A replacement that is there but unreadable is no replacement. Its
+    /// filename satisfied the guard this replaced, and then the retired
+    /// originals — the only recoverable copies — were claimed rather than
+    /// fetched.
+    @Test func claimsNothingWhenTheOnlyHistoryLeftWillNotDecode() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let revisions = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: revisions, withIntermediateDirectories: true)
+        try Data("{ this is not a revision".utf8).write(
+            to: revisions.appendingPathComponent("1700000002000-\(UUID().uuidString).json")
+        )
+        let retired = UUID()
+        try Data("\(retired.uuidString)\n".utf8).write(
+            to: workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        )
+        try #require(DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+            .contains(retired))
+
+        #expect(
+            DevotionalAgentRevisionStore.claimableRetiredRevisionIDs(in: workspace).isEmpty,
+            "a file that will not decode is not evidence the history survived"
+        )
+    }
+
     /// The list is appended to, not rewritten: an autosave that compacts must
     /// not pay for every id retired before it.
     @Test func appendsToTheListRatherThanRewritingIt() throws {
@@ -260,10 +327,11 @@ struct RevisionMembersHeldTests {
         try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
         let list = metadata.appendingPathComponent("retired-revisions.json")
 
-        // An id written by some earlier version of this file, and one line
-        // that is not an id at all — a torn append.
+        // An id retired earlier, then an append interrupted mid-id with no
+        // newline after it. Writing straight onto that fragment would glue
+        // the next good id to it and lose the retirement.
         let old = UUID()
-        try Data("\(old.uuidString)\nnot-a-uuid\n".utf8).write(to: list)
+        try Data("\(old.uuidString)\n9F3A17".utf8).write(to: list)
 
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         _ = try DevotionalAgentRevisionStore.record(
@@ -280,6 +348,10 @@ struct RevisionMembersHeldTests {
         let text = try String(contentsOf: list, encoding: .utf8)
         #expect(text.hasPrefix(old.uuidString), "appended, so the first line is untouched")
         #expect(!text.contains("\"ids\""), "a line per id, not a rewritten document")
+        #expect(
+            !text.contains("9F3A17-"),
+            "the new id began a line of its own rather than joining the fragment"
+        )
     }
 
     /// The list is local state and must never be published: it lives in
