@@ -174,7 +174,41 @@ extension LampSyncLocalFiles {
                 ))
             }
         }
+        candidates += mediaOnDisk(
+            scope: .note, kind: .noteMedia, remoteModuleID: remoteModuleID,
+            inLibraryAt: libraryRoot, alreadyProduced: Set(candidates.map(\.path)),
+            fileManager: fileManager
+        )
         return (candidates, missing)
+    }
+
+    /// The media files this library has on disk for one scope, as candidates.
+    ///
+    /// Unioned into what the owners refer to, because the two answer
+    /// different questions: the owners say what *should* be published, and
+    /// this says what is *here*. A picture whose writing or note the library
+    /// no longer has is still a file at the member's path — and since nothing
+    /// lists media, a media member with no local copy is fetched on every
+    /// pass, unconditionally, and written where it already was. Five were
+    /// doing exactly that (`../ScalabilityPlan.md`, the audible-detector
+    /// faults).
+    ///
+    /// Already-produced paths win, so a file an owner refers to keeps the
+    /// candidate the owner produced and nothing is claimed twice.
+    private static func mediaOnDisk(
+        scope: LampMediaScope,
+        kind: LampSyncFileKind,
+        remoteModuleID: String,
+        inLibraryAt libraryRoot: URL,
+        alreadyProduced: Set<String>,
+        fileManager: FileManager
+    ) -> [Candidate] {
+        LampSyncDevotionalMedia.filesOnDisk(
+            scope: scope, moduleID: remoteModuleID,
+            in: libraryRoot, fileManager: fileManager
+        )
+        .filter { !alreadyProduced.contains($0.remotePath) }
+        .map { Candidate(path: $0.remotePath, kind: kind, url: $0.localURL) }
     }
 
     public static func devotionalMedia(
@@ -208,6 +242,11 @@ extension LampSyncLocalFiles {
                 ))
             }
         }
+        candidates += mediaOnDisk(
+            scope: .devotional, kind: .devotionalMedia, remoteModuleID: remoteModuleID,
+            inLibraryAt: libraryRoot, alreadyProduced: Set(candidates.map(\.path)),
+            fileManager: fileManager
+        )
         return (candidates, missing)
     }
 
