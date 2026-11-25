@@ -173,6 +173,118 @@ struct RevisionMembersHeldTests {
         #expect(claimed == Set(members))
     }
 
+    /// A deleted *tagged merge* whose coverage a surviving untagged merge
+    /// subsumes is not retired.
+    ///
+    /// `removingReplaced` drops any revision whose covered set is a strict
+    /// subset of another's, tags or not — so an untagged legacy merge over
+    /// `A+B+C` deletes a tagged merge over `A+B`. Asking whether the deleted
+    /// revision's own *id* is covered misses this entirely: a merge's covered
+    /// set names originals, never another merge. And the tagged merge is
+    /// exactly what could put a turn's name back, given one more original, so
+    /// it has to stay fetchable.
+    @Test func doesNotRetireAtaggedMergeAnUntaggedOneSubsumes() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let revisions = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: revisions, withIntermediateDirectories: true)
+
+        let a = UUID(), b = UUID(), c = UUID()
+        let tagged = DevotionalAgentRevision(
+            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two",
+            replacedRevisionIDs: [a, b].sorted { $0.uuidString < $1.uuidString },
+            turnID: UUID()
+        )
+        let untagged = DevotionalAgentRevision(
+            kind: .agentEdit, beforeMarkdown: "one", afterMarkdown: "one two three",
+            replacedRevisionIDs: [a, b, c].sorted { $0.uuidString < $1.uuidString }
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for revision in [tagged, untagged] {
+            try encoder.encode(revision).write(
+                to: revisions.appendingPathComponent("1700000001000-\(revision.id.uuidString).json")
+            )
+        }
+
+        try DevotionalAgentRevisionStore.compact(in: workspace)
+
+        let kept = try DevotionalAgentRevisionStore.revisions(in: workspace).map(\.id)
+        try #require(!kept.contains(tagged.id), "the untagged superset replaced it")
+        let retired = DevotionalAgentRevisionStore.retiredRevisions(in: workspace).map(\.id)
+        #expect(
+            !retired.contains(tagged.id),
+            "it is what a demotion could still use, so it must stay fetchable"
+        )
+    }
+
+    /// Two missing members whose names fold alike are both left alone.
+    ///
+    /// A folded match would otherwise claim both on one retirement, and the
+    /// pass checks `0013`'s case collisions among the planned downloads —
+    /// which a claim has already taken them out of. So the collision would
+    /// go unreported and the other member, which may be a revision a
+    /// demotion needs, would be dropped in silence.
+    @Test func leavesTwoNamesThatFoldAlikeToThePass() async throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B",
+            in: workspace, createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let name = "1700000001000-7A1C9E42-3B55-4D21-9A7E-0C2F5B8D6E11.json"
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((existing + "\(UUID().uuidString) \(name)\n").utf8).write(to: list)
+
+        let one = "Workspaces/Writing/W1/Revisions/\(name)"
+        let other = "Workspaces/Writing/W1/Revisions/"
+            + name.replacingOccurrences(of: ".json", with: "").lowercased() + ".json"
+        try #require(one != other)
+
+        let claimed = await LampWorkspaceSync.revisionMembersHeldWithoutAFile(
+            members: [one, other], heldAsFiles: [], inLibraryAt: root
+        )
+
+        #expect(claimed.isEmpty)
+    }
+
+    /// A published name is recorded as it is, whatever it holds. The store
+    /// reads any `.json` in the folder, so a name can carry a space — or a
+    /// newline, which is the list's own record separator.
+    @Test func roundTripsAnawkwardPublishedName() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let revisions = workspace.appendingPathComponent(".lamp/revisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: revisions, withIntermediateDirectories: true)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try DevotionalAgentRevisionStore.record(
+            kind: .userEdit, before: "A", after: "A B", in: workspace, createdAt: start
+        )
+
+        // Written by hand, as an import of someone else's folder could leave
+        // it: a leading space, and a newline inside the name.
+        let awkward = " run\nthrough.json"
+        let id = UUID()
+        let list = workspace.appendingPathComponent(".lamp/retired-revisions.json")
+        let encoded = awkward.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(
+                CharacterSet(charactersIn: "-._~")
+            )
+        )!
+        let existing = (try? String(contentsOf: list, encoding: .utf8)) ?? ""
+        try Data((existing + "\(id.uuidString) \(encoded)\n").utf8).write(to: list)
+
+        let read = DevotionalAgentRevisionStore.retiredRevisions(in: workspace)
+
+        #expect(read.contains(
+            DevotionalAgentRevisionStore.RetiredRevision(id: id, publishedName: awkward)
+        ))
+    }
+
     /// A revision this Mac never retired is not claimed, however plausible
     /// its name — that is the difference between evidence and a guess, and
     /// it is what keeps a member another Mac wrote coming down the first

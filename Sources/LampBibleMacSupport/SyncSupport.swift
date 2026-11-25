@@ -151,6 +151,19 @@ public enum LampWorkspaceSync {
         let root = LampWritingWorkspace.root(
             libraryRootURL: libraryRoot, fileManager: fileManager
         )
+        // Two missing members whose names fold alike are left to the pass.
+        // A folded match could otherwise claim both on one retirement, and
+        // `0013`'s refusal of case-colliding members is checked among the
+        // *planned downloads* — which a claim has already taken them out of,
+        // so the collision would go unreported and the other member, which
+        // may be a revision a demotion needs, would be silently dropped.
+        var spellings: [String: Int] = [:]
+        for path in missing {
+            guard let name = path.split(separator: "/").last else { continue }
+            let folded = DevotionalAgentRevisionStore.foldedName(String(name))
+            spellings[folded, default: 0] += 1
+        }
+
         var claimable: [String: Set<String>] = [:]
         var claimed: Set<String> = []
         for path in missing {
@@ -171,9 +184,8 @@ public enum LampWorkspaceSync {
             // extension. So the only key with the store's own tolerance is
             // the name itself, and a matcher that parsed the convention broke
             // on the convention's second shape (`decisions/0017`).
-            if names.contains(DevotionalAgentRevisionStore.foldedName(String(name))) {
-                claimed.insert(path)
-            }
+            let folded = DevotionalAgentRevisionStore.foldedName(String(name))
+            if spellings[folded] == 1, names.contains(folded) { claimed.insert(path) }
         }
         return claimed
     }

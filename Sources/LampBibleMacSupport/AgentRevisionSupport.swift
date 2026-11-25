@@ -737,7 +737,15 @@ public enum DevotionalAgentRevisionStore {
             demotableCoverage.formUnion(revision.coveredRevisionIDs)
         }
         let goingAway = stored.filter { !keptIDs.contains($0.revision.id) }
-        let retiring = goingAway.filter { !demotableCoverage.contains($0.revision.id) }
+        // Subsumed coverage, not the revision's own id. A merge's covered set
+        // names the originals, never another merge — so asking whether the
+        // deleted revision's *id* is covered misses a deleted tagged merge
+        // entirely, and that is exactly the thing `removingReplaced` could
+        // use, with one more original, to put a turn's name back. A reviewer
+        // found the gap between this filter and what `0017` says it does.
+        let retiring = goingAway.filter {
+            !$0.revision.coveredRevisionIDs.isSubset(of: demotableCoverage)
+        }
         // Best effort, deliberately. `prepareLibraryForSync` compacts every
         // workspace before importing anything, so a throw here would stop
         // unrelated documents syncing over a bookkeeping file. A retirement
@@ -828,8 +836,13 @@ public enum DevotionalAgentRevisionStore {
             guard let text = String(data: Data(line), encoding: .utf8) else { continue }
             let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
             guard parts.count == 2, let id = UUID(uuidString: String(parts[0])) else { continue }
-            let name = String(parts[1]).trimmingCharacters(in: .whitespaces)
-            guard !name.isEmpty else { continue }
+            // Percent-decoded, and not trimmed. The store reads any `.json`
+            // in the folder, so a published name can hold a space — or a
+            // newline, which is this file's own record separator. Trimming
+            // read ` run.json` back as `run.json` and would have claimed the
+            // wrong member; a newline truncated the name outright.
+            guard let name = String(parts[1]).removingPercentEncoding, !name.isEmpty
+            else { continue }
             retired.append(RetiredRevision(id: id, publishedName: name))
         }
         return retired
@@ -851,8 +864,17 @@ public enum DevotionalAgentRevisionStore {
         let directory = metadataDirectory(in: workspace)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(retiredRevisionsFilename)
+        // The name percent-encoded, so it round-trips whatever it holds: a
+        // space would be read as the end of the field and a newline as the
+        // end of the record.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let body = fresh
-            .map { "\($0.id.uuidString) \($0.publishedName)" }
+            .map { entry in
+                let encoded = entry.publishedName
+                    .addingPercentEncoding(withAllowedCharacters: allowed)
+                    ?? entry.publishedName
+                return "\(entry.id.uuidString) \(encoded)"
+            }
             .sorted()
             .joined(separator: "\n") + "\n"
         // For *updating*, not writing: the check below reads the last byte,
