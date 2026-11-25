@@ -122,6 +122,94 @@ struct MacScaleMeasurementTests {
         }
     }
 
+    /// What revision history costs at rest, and what compressing it would
+    /// save — the two of the three figures the plan's owner decision asks
+    /// for that do not need anyone's real library
+    /// (`lamp-bible-core/Documentation/ScalabilityPlan.md`, owner decisions).
+    ///
+    /// A revision keeps the document whole on both sides of the change, so
+    /// the question is how that compares with the documents themselves, and
+    /// how well it compresses — pretty-printed JSON of Markdown should go a
+    /// long way.
+    @Test(.enabled(if: enabled()))
+    @WritingWorkspaceFiles
+    func measuresWhatRevisionHistoryCostsAtRest() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lamp-mac-revisions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let libraryRoot = root.appendingPathComponent("Library")
+        let documents = count("LAMP_SCALE_WORKSPACE_DOCUMENTS", 5)
+        let revisions = count("LAMP_SCALE_WORKSPACE_REVISIONS", 50)
+
+        for target in sizes("LAMP_SCALE_WORKSPACES", [250]) {
+            for index in 0..<target {
+                try makeWorkspace(
+                    index, in: libraryRoot, documents: documents, revisions: revisions
+                )
+            }
+            // Rewritten with what a real revision carries: the whole document
+            // on both sides of the change, not the opening of it. The shared
+            // fixture keeps 400 characters a side to hold the gather and
+            // digest figures steady, which understates the bytes at rest by
+            // better than tenfold — exactly the thing this measurement is
+            // for.
+            let body = String(repeating: "A paragraph of the writing, as it stands. ", count: 120)
+            for index in 0..<target {
+                let history = LampWritingWorkspace
+                    .url(libraryRootURL: libraryRoot, writingID: "scale-writing-\(index)")
+                    .appendingPathComponent(".lamp/revisions", isDirectory: true)
+                for file in (try? FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil)) ?? [] {
+                    try? FileManager.default.removeItem(at: file)
+                }
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .millisecondsSince1970
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let start = Date().addingTimeInterval(-2 * 86_400)
+                for step in 0..<revisions {
+                    let revision = DevotionalAgentRevision(
+                        createdAt: start.addingTimeInterval(Double(step) * 600),
+                        kind: .userEdit,
+                        documentPath: "draft.md",
+                        beforeMarkdown: body + " v\(step)",
+                        afterMarkdown: body + " v\(step + 1)"
+                    )
+                    let stamp = Int64(revision.createdAt.timeIntervalSince1970 * 1_000)
+                    try encoder.encode(revision).write(
+                        to: history.appendingPathComponent("\(stamp)-\(revision.id.uuidString).json")
+                    )
+                }
+            }
+
+            var historyBytes = 0
+            var documentBytes = 0
+            var compressed = 0
+            guard let walker = FileManager.default.enumerator(
+                at: libraryRoot, includingPropertiesForKeys: [.fileSizeKey]
+            ) else { continue }
+            for case let url as URL in walker {
+                guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                else { continue }
+                if url.path.contains("/.lamp/revisions/") {
+                    historyBytes += size
+                    if let data = try? Data(contentsOf: url),
+                       let zipped = try? (data as NSData).compressed(using: .zlib) {
+                        compressed += zipped.count
+                    }
+                } else if url.pathExtension == "md" {
+                    documentBytes += size
+                }
+            }
+            print("""
+                SCALE workspaces=\(target) revisionsEach=\(revisions) \
+                historyMB=\(String(format: "%.1f", Double(historyBytes) / 1_048_576)) \
+                documentsMB=\(String(format: "%.1f", Double(documentBytes) / 1_048_576)) \
+                historyOverDocuments=\(String(format: "%.1f", Double(historyBytes) / Double(max(documentBytes, 1)))) \
+                gzipRatio=\(String(format: "%.1f", Double(historyBytes) / Double(max(compressed, 1))))
+                """)
+        }
+    }
+
     /// What migrating and compacting every workspace costs, which is what a
     /// pass would pay to run its preparation at the front instead of inside
     /// its import (`lamp-bible-core/Documentation/decisions/0009` rejects
