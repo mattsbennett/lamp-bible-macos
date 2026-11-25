@@ -959,6 +959,48 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await contextFiles(macs.a).isEmpty)
     }
 
+    /// Nothing reopens the source between the check and the unlink.
+    ///
+    /// The ordinary removal hashes the file and then deletes it, which put a
+    /// second read — of a source that may be 90 MB — after the check that
+    /// said deleting was safe; anything arriving in that window went
+    /// unchecked. The batch carries the digest it already took instead.
+    ///
+    /// Read from the source, as `WorkspaceFileOwnershipTests` does: the
+    /// window is between two calls inside one function, with no seam a test
+    /// can reach, and an assertion about the file afterwards passes either
+    /// way.
+    @Test func thebatchDoesNotReopenAsourceAfterCheckingIt() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/LampBibleMacSupport/WorkspaceTextFileSupport.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let start = try #require(source.range(of: "public static func offloadSources("))
+        // To the next declaration at this level: the function holds nested
+        // closures, so the first `}` at four spaces is not its end.
+        let end = try #require(
+            source.range(of: "\n    /// ", range: start.upperBound..<source.endIndex)
+        )
+        // Code only: the function's own comment names the call it avoids.
+        let body = source[start.upperBound..<end.lowerBound]
+            .components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        #expect(
+            body.contains("unlinkVerifiedContextFile"),
+            "the unlink that takes the digest already taken"
+        )
+        #expect(
+            !body.contains("removeSyncedContextFile"),
+            """
+            `removeSyncedContextFile` hashes the file and then unlinks it, so \
+            using it here reopens a source the batch has just finished \
+            checking — and deletes whatever the second read found.
+            """
+        )
+    }
+
     /// Asked for nothing, it reads nothing and writes nothing.
     @Test func anEmptyBatchTouchesNeitherRecordsNorLedger() async throws {
         let macs = try Macs(devotional: devotional)

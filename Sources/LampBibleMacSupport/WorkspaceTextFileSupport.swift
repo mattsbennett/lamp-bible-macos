@@ -667,7 +667,9 @@ public enum WorkspaceContextFileStore {
         )
         let root = contextDirectory.resolvingSymlinksInPath().path + "/"
 
-        var ready: [(relativePath: String, file: URL, identity: LampFileIdentity)] = []
+        var ready: [(
+            relativePath: String, file: URL, identity: LampFileIdentity, digest: String
+        )] = []
         var skipped: [String: Skipped] = [:]
         for relativePath in relativePaths {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
@@ -713,7 +715,7 @@ public enum WorkspaceContextFileStore {
                 skipped[relativePath] = .changedSinceUpload
                 continue
             }
-            ready.append((relativePath, file, identity))
+            ready.append((relativePath, file, identity, digest))
         }
         guard !ready.isEmpty else { return ([], skipped) }
 
@@ -749,9 +751,14 @@ public enum WorkspaceContextFileStore {
                 continue
             }
             do {
-                try removeSyncedContextFile(
-                    at: candidate.file, libraryRootURL: libraryRootURL,
-                    fileManager: fileManager
+                // The digest this batch already took, rather than reading the
+                // file again. `removeSyncedContextFile` hashes before it
+                // unlinks, which put a second read — of a source that may be
+                // 90 MB — between the identity check and the deletion, and
+                // anything arriving in it would have been deleted unchecked.
+                try unlinkVerifiedContextFile(
+                    at: candidate.file, digest: candidate.digest,
+                    libraryRootURL: libraryRootURL, fileManager: fileManager
                 )
                 offloaded.append(candidate.relativePath)
             } catch {
@@ -785,6 +792,25 @@ public enum WorkspaceContextFileStore {
             try? corrected.save(in: workspaceURL)
         }
         return (offloaded, skipped)
+    }
+
+    /// Unlinks a source whose bytes this caller has already hashed, then
+    /// prunes the shared object if nothing else links to it.
+    ///
+    /// The ordinary removal hashes first and unlinks second, which is right
+    /// when the digest is not already known and wrong here: it reopens the
+    /// file after the check that said it was safe to delete.
+    @WritingWorkspaceFiles
+    static func unlinkVerifiedContextFile(
+        at fileURL: URL,
+        digest: String,
+        libraryRootURL: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.removeItem(at: fileURL)
+        try pruneObjects(
+            withDigests: [digest], libraryRootURL: libraryRootURL, fileManager: fileManager
+        )
     }
 
     /// Whether two `stat`s of a path name the same bytes.

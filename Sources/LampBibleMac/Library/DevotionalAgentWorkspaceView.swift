@@ -484,6 +484,10 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     /// pass fetch it, and that also took it off this list — so a download
     /// that failed left no row, no reason and nothing to press again.
     var isAwaited = false
+    /// A folder with sources under it that are **not** here. Removing it
+    /// deletes them from the server too, and the row shows nothing of them —
+    /// a folder that looks empty can be the only copy of an 86 MB PDF.
+    var hidesSourcesOnlyOnTheServer = false
     /// Where this source sits under the context directory, which is what a
     /// ledger key and a member path are built from — and **not** the file's
     /// name. The sweep offloads nested sources, so a row may stand for
@@ -665,13 +669,23 @@ enum DevotionalAgentWorkspaceStore {
                 relativePath: relativePath
             )
         }
+        let notHere = LampWorkspaceSync.offloadedSourceNames(in: workspace)
+            + LampWorkspaceSync.awaitedSourceNames(in: workspace)
+        let onDisk = present.map { file -> DevotionalAgentContextFile in
+            guard file.isDirectory else { return file }
+            var file = file
+            file.hidesSourcesOnlyOnTheServer = notHere.contains {
+                $0.hasPrefix(file.relativePath + "/")
+            }
+            return file
+        }
         let offloaded = LampWorkspaceSync.offloadedSourceNames(in: workspace)
             .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
             .map { row($0, offloaded: true) }
         let awaited = LampWorkspaceSync.awaitedSourceNames(in: workspace)
             .filter { !here.contains($0.precomposedStringWithCanonicalMapping) }
             .map { row($0, offloaded: false) }
-        return (present + offloaded + awaited)
+        return (onDisk + offloaded + awaited)
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -1762,11 +1776,18 @@ struct DevotionalAgentWorkspaceView: View {
                     Button("Cancel", role: .cancel) { sourceToRemove = nil }
                 } message: {
                     Text(
-                        """
-                        This source is on the server, not on this Mac, so \
-                        removing it deletes the only copy. Download it first \
-                        if you want to keep one.
-                        """
+                        sourceToRemove?.hidesSourcesOnlyOnTheServer == true
+                            ? """
+                              This folder holds sources that are on the \
+                              server and not on this Mac, so removing it \
+                              deletes the only copy of them. Download them \
+                              first if you want to keep one.
+                              """
+                            : """
+                              This source is on the server, not on this Mac, \
+                              so removing it deletes the only copy. Download \
+                              it first if you want to keep one.
+                              """
                     )
                 }
             }
@@ -2128,7 +2149,7 @@ struct DevotionalAgentWorkspaceView: View {
                 // disk this is a removal the reader can see the subject of;
                 // for an offloaded one the click destroys the only copy there
                 // is, with nothing left on this Mac to go back to.
-                if file.isOffloaded || file.isAwaited {
+                if file.isOffloaded || file.isAwaited || file.hidesSourcesOnlyOnTheServer {
                     sourceToRemove = file
                 } else {
                     Task { await removeContextFile(file) }
@@ -2793,7 +2814,7 @@ struct DevotionalAgentWorkspaceView: View {
         errorMessage = nil
         contextNote = nil
         do {
-            guard let observed = LampSyncRequest.freshObservation() else {
+            guard let observed = syncController.offloadObservation() else {
                 errorMessage = """
                     Lamp has not synced recently enough to tell whether the \
                     server still holds this source. Sync, then try again.

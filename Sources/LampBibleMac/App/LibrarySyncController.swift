@@ -272,6 +272,20 @@ final class LibrarySyncController: ObservableObject {
         }
     }
 
+    /// What the last pass saw, if it was looking at the server this Mac is
+    /// configured for **now** and looked recently enough to answer for a
+    /// button press.
+    ///
+    /// Turning sync off, or changing folders, makes the last look worthless
+    /// however recent it is: Offload would delete against one server while
+    /// Download fetched from another.
+    func offloadObservation() -> (source: String, revisions: [String: String])? {
+        guard let source = currentSource,
+              let revisions = LampSyncRequest.observation(of: source)
+        else { return nil }
+        return (source, revisions)
+    }
+
     /// Forgets this Mac's offloads of sources the server no longer holds.
     ///
     /// Another device's removal of a source neither Mac is holding reaches
@@ -1660,11 +1674,12 @@ extension LibrarySyncController {
         // content digests, so an old folder's listing could otherwise match a
         // record kept for a different folder and authorise an offload the new
         // one knows nothing about.
-        if let source = currentSource {
-            LampSyncRequest.noteObservation(
-                source: source, revisions: unlisted
-            )
-        }
+        // The source this gather's store was built from, not whatever the
+        // settings say now: a provider changed while the listing was in
+        // flight would otherwise label the old folder's answers with the new
+        // folder's name, and two folders that once held the same bytes have
+        // matching digests.
+        LampSyncRequest.noteObservation(source: source, revisions: unlisted)
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result
     }
