@@ -200,8 +200,8 @@ extension WorkspaceSourceOffload {
                 ofFolder: name, among: writings.keys
             ) else { continue }
             let ledger = WorkspaceFileLedger.load(in: folder)
-            // Not a candidate while it is new here, however it came: see
-            // `WorkspaceFileLedger.isNewHere`.
+            // Not a candidate while it is new here, however it came — attached
+            // here, or installed by a pass: see `WorkspaceFileLedger.isNewHere`.
             let sources = contextRelativePaths(in: folder, fileManager: fileManager)
                 .filter {
                     !ledger.isNewHere(
@@ -355,8 +355,19 @@ public struct ServerObservation: Equatable, Sendable {
 
     /// Whether the listing showed `path` at the revision this Mac recorded
     /// for it on this server.
+    ///
+    /// Never for a record with an upload still pending. `recordUpload` moves
+    /// the uploaded digest and the pending revision together and leaves the
+    /// installed revision where it was until the bundle update confirms — so
+    /// a pass whose update failed leaves a record whose digest names the new
+    /// bytes and whose installed revision names the old ones. A listing that
+    /// still shows the old revision would then vouch for bytes the server
+    /// never confirmed. The digest and the revision have to be a confirmed
+    /// pair.
     func shows(_ path: String, atRevisionOf records: LampSyncFileRecords) -> Bool {
-        guard let installed = records.record(path, in: source)?.installedRevision,
+        guard let record = records.record(path, in: source),
+              record.pendingRevision == nil,
+              let installed = record.installedRevision,
               let listed = revisions[path]
         else { return false }
         return LampSyncConditionalWrite.namesSameRevision(listed, installed)
@@ -484,7 +495,12 @@ extension WorkspaceSourceOffload {
             let path = entry.name.precomposedStringWithCanonicalMapping
             shown.insert(path)
             if entry.isDirectory {
-                let holds = notHere.keys.contains { $0.hasPrefix(path + "/") }
+                // Under it, or **at** it: a folder that has taken an
+                // offloaded file's own path hides that source, and removing
+                // the folder deletes it everywhere too — `removeContextItem`
+                // counts the path itself. The confirmation has to count what
+                // the deletion counts.
+                let holds = notHere.keys.contains { $0 == path || $0.hasPrefix(path + "/") }
                 rows.append(SourceRow(relativePath: path, state: .folder(holdsSourcesNotHere: holds)))
             } else {
                 rows.append(SourceRow(relativePath: path, state: .here, byteCount: entry.byteCount))

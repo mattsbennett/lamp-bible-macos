@@ -219,6 +219,16 @@ final class LibrarySyncController: ObservableObject {
     @discardableResult
     func sync(library: LampLibrary) async -> Bool {
         lastPublishedWork = await localWork(library: library)
+        // Another pass is running. `runSyncPass` would refuse this one and
+        // answer false, which reads exactly like a pass that failed — and the
+        // lines below would then throw away the observation the running pass
+        // has just written. Ask for a pass after it instead. Checked with no
+        // suspension before the call, so it is the same answer the guard
+        // inside will give.
+        guard !isSyncing else {
+            LampSyncRequest.wantAPass()
+            return false
+        }
         let finished = await runSyncPass(library: library)
         // Both forgotten on purpose: the next probe takes a fresh mark to
         // measure from, once the server has had time to settle.
@@ -296,7 +306,7 @@ final class LibrarySyncController: ObservableObject {
         // like a server that has dropped every source.
         guard let members = lastObservation?.members else { return }
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: library.rootURL, members: members
+            inLibraryAt: library.rootURL, members: members, source: lastObservation?.source ?? ""
         )
         if !forgotten.isEmpty {
             Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
@@ -362,8 +372,16 @@ final class LibrarySyncController: ObservableObject {
                     // Asked again before each file goes, not once before the
                     // batch: hashing a workspace's sources takes long enough
                     // for a reader to open the writing in the middle of it.
-                    while: { @Sendable in
-                        await !MainActor.run { OpenWritingEditors.writingIDs.contains(writingID) }
+                    // And whether this is still the server the look was at:
+                    // sync turned off or moved part way through a sweep would
+                    // otherwise go on deleting copies Download can no longer
+                    // reach.
+                    while: { @Sendable [weak self] in
+                        await MainActor.run {
+                            guard let self else { return false }
+                            return !OpenWritingEditors.writingIDs.contains(writingID)
+                                && self.currentSource == observation.source
+                        }
                     }
                 )
                 offloaded += result.offloaded.count
@@ -1186,6 +1204,19 @@ extension LibrarySyncController {
         // joined rather than replacing, so a book read on both since the last
         // pass keeps the later of the two positions and the union of the
         // bookmarks.
+        // Membership as the pass leaves the server, not as it found it. An
+        // update that retried against another device's deletion finishes
+        // with that deletion in, and reconciling against the opening manifest
+        // would leave its source drawn as "On the server". The listing stays
+        // the gather's: revisions are what was seen, not what was written.
+        if let written = outcome.written?.bundle, let opened = pendingObservation {
+            pendingObservation = ServerObservation(
+                source: opened.source,
+                members: Set(written.manifest.members.map(\.path)),
+                revisions: opened.revisions,
+                at: opened.at
+            )
+        }
         if let written = outcome.written?.bundle,
            let incoming = LampSyncBundleLedgers.bookReading(in: written),
            readingState.merge(incoming) {

@@ -287,6 +287,55 @@ struct WorkspaceSourceOffloadTests {
         #expect(ledger.acts[key] == nil, "a file here answers whatever was done to its path")
     }
 
+    /// A folder that has taken an offloaded file's own path holds it.
+    ///
+    /// Removing the folder deletes that source everywhere, because the
+    /// removal counts the path itself; the confirmation has to count it too,
+    /// or a click deletes the only copy of a different source unasked.
+    @Test func afolderAtAnOffloadedPathAsksBeforeItIsRemoved() {
+        let rows = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: "history.pdf", isDirectory: true, byteCount: nil)],
+            notHere: ["history.pdf": .offloaded]
+        )
+        #expect(rows == [SourceRow(relativePath: "history.pdf", state: .folder(holdsSourcesNotHere: true))])
+        #expect(rows.first?.removesWhatIsNotHere == true)
+    }
+
+    /// What a pass installs arrives here, though the gather never sees it.
+    ///
+    /// A pass installs sources between the gather's note and the record of
+    /// what is now present, so the gather's own stamp never runs for them —
+    /// and a source downloaded into a closed, idle writing read as settled,
+    /// and the next sweep could take it straight back.
+    @Test func asourceApassInstalledArrivesNow() {
+        let key = WorkspaceFileLedger.contextKey("downloaded.pdf")
+        var ledger = WorkspaceFileLedger()
+        ledger.synced = [:]
+        ledger.noteWanted(key)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        ledger.recordSynced([key: 1], now: now)
+
+        #expect(ledger.arrivedAt[key] == WorkspaceFileLedger.milliseconds(now))
+        #expect(
+            ledger.isNewHere(key, now: now, grace: WorkspaceSourceOffload.arrivalGrace),
+            "left alone for the grace, like anything else that has just arrived"
+        )
+        #expect(ledger.acts[key] == nil, "and the ask is answered")
+    }
+
+    /// The portable timestamp that settles deletions is not moved by an
+    /// arrival here. Another Mac judges a deletion against it, and a download
+    /// on this Mac is not a fact about when the source came to be.
+    @Test func anArrivalHereLeavesTheSharedTimestampAlone() {
+        let key = WorkspaceFileLedger.contextKey("downloaded.pdf")
+        var ledger = WorkspaceFileLedger()
+        ledger.synced = [:]
+        ledger.presentSince[key] = 5
+        ledger.recordSynced([key: 1], now: Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(ledger.presentSince[key] == 5)
+    }
+
     @Test func theSettingIsThisMacsOwn() {
         #expect(WorkspaceSourceOffload.After.settingKey == "writing.sources.offloadAfter")
         #expect(
@@ -348,7 +397,7 @@ struct WorkspaceSourceOffloadGatheringTests {
         for name in names {
             let key = WorkspaceFileLedger.contextKey(name)
             synced[key] = 0
-            ledger.presentSince[key] = 0
+            ledger.arrivedAt[key] = 0
         }
         ledger.synced = synced
         try await ledger.save(in: workspace)
@@ -548,6 +597,39 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
     }
 
+    /// An upload whose bundle update has not confirmed it vouches for
+    /// nothing.
+    ///
+    /// The uploaded digest and the pending revision move together, and the
+    /// installed revision stays where it was until the update confirms — so
+    /// after a failed update the record's digest names new bytes and its
+    /// installed revision names old ones. A listing showing the old revision
+    /// would otherwise vouch for bytes the server never confirmed.
+    @Test func apendingUploadVouchesForNothing() async throws {
+        let fixture = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: fixture.library) }
+        try Self.write("%PDF", to: fixture.context.appendingPathComponent("big.pdf"), modified: Date())
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: fixture.workspace.lastPathComponent, relativePath: "big.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: "webdav:example", digest: "old", revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: "webdav:example")
+        // The next upload, whose update failed.
+        records.recordUpload(path, in: "webdav:example", digest: "new", revision: "\"r2\"")
+        try records.save(toLibraryAt: fixture.library)
+        try await Self.settle(["big.pdf"], in: fixture.workspace)
+
+        let workspaces = await WorkspaceSourceOffload.workspaces(
+            inLibraryAt: fixture.library,
+            writings: [Self.writingID: Date()],
+            observation: ServerObservation(
+                source: "webdav:example", members: [path], revisions: [path: "\"r1\""]
+            )
+        )
+        #expect(workspaces.first?.onTheServer.isEmpty == true)
+    }
+
     @Test func asourceTheListingAgreesWithMayGo() async throws {
         let fixture = try await Self.gathered(recorded: "\"r1\"", seen: "\"r1\"")
         #expect(fixture.onTheServer == ["big.pdf"])
@@ -584,9 +666,9 @@ struct WorkspaceSourceOffloadGatheringTests {
             WorkspaceFileLedger.contextKey("old.pdf"): 0,
             WorkspaceFileLedger.contextKey("new.pdf"): 0,
         ]
-        ledger.presentSince[WorkspaceFileLedger.contextKey("old.pdf")] = 0
+        ledger.arrivedAt[WorkspaceFileLedger.contextKey("old.pdf")] = 0
         // Attached yesterday.
-        ledger.presentSince[WorkspaceFileLedger.contextKey("new.pdf")] =
+        ledger.arrivedAt[WorkspaceFileLedger.contextKey("new.pdf")] =
             WorkspaceFileLedger.milliseconds(now.addingTimeInterval(-24 * 60 * 60))
         try await ledger.save(in: fixture.workspace)
 

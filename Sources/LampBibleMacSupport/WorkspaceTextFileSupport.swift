@@ -568,16 +568,14 @@ public enum WorkspaceContextFileStore {
         guard let contextDirectory = try? validatedContextDirectory(
             in: workspaceURL, libraryRootURL: libraryRootURL, fileManager: fileManager
         ) else { return }
-        let file = contextDirectory.appendingPathComponent(relativePath)
-        guard LampWorkspaceSync.isHere(
-            relativePath, inContextOf: workspaceURL, fileManager: fileManager
-        ),
-            file.resolvingSymlinksInPath().path
-                .hasPrefix(contextDirectory.resolvingSymlinksInPath().path + "/")
-        else { return }
-        try? removeSyncedContextFile(
-            at: file, libraryRootURL: libraryRootURL, fileManager: fileManager
-        )
+        // Through the same verified unlink as an offload, so this can never
+        // remove a tree: `removeSyncedContextFile` hashes and then removes
+        // recursively, and a folder put at the path during the hash would
+        // have gone with everything in it.
+        guard let verified = VerifiedSource.verify(
+            relativePath: relativePath, inContext: contextDirectory
+        ) else { return }
+        try? unlink(verified, libraryRootURL: libraryRootURL, fileManager: fileManager)
     }
 
     /// Asks for an offloaded source back.
@@ -722,9 +720,17 @@ public enum WorkspaceContextFileStore {
     /// Takes only a `VerifiedSource`. The ordinary removal hashes a path and
     /// then deletes whatever is at it, which put a second read — of a source
     /// that may be 90 MB — after the check that said deleting was safe.
-    /// Here the path is asked, without following a link, whether it still
-    /// holds the bytes that were read, and is unlinked straight after;
-    /// `unlink(2)` will not remove a folder, whatever has been put there.
+    /// Here the path is asked, without following a link, whether it is still
+    /// the file that was read — the whole identity, change time included —
+    /// and is unlinked straight after; `unlink(2)` will not remove a folder,
+    /// whatever has been put there.
+    ///
+    /// The change time is what notices a file rewritten at the same size
+    /// with its date put back (`decisions/0007`), and nothing else does.
+    /// It also moves when a hard-linked twin of the source is unlinked, so
+    /// a workspace holding the same file twice offloads one copy now and
+    /// the other on the next sweep, read afresh. That costs a pass; ignoring
+    /// the change time cost the guard `0007` exists for.
     ///
     /// What is left is the gap between that question and the unlink: no I/O,
     /// microseconds, and only another process of the same user in the
@@ -738,7 +744,7 @@ public enum WorkspaceContextFileStore {
         fileManager: FileManager = .default
     ) throws {
         guard let now = try? LampFileIdentity(regularFileAt: verified.file),
-              now.namesSameBytes(as: verified.read.identity)
+              now == verified.read.identity
         else { throw UnlinkRefusal() }
         let result = verified.file.withUnsafeFileSystemRepresentation { path in
             path.map { Darwin.unlink($0) } ?? -1

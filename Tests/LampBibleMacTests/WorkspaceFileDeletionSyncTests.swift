@@ -768,13 +768,13 @@ struct WorkspaceFileDeletionSyncTests {
 
         // A manifest that still counts it changes nothing.
         await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: [path]
+            inLibraryAt: macs.a, members: [path], source: source
         )
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
 
         // One that does not is the other Mac's removal arriving.
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
-            inLibraryAt: macs.a, members: ["something/else"]
+            inLibraryAt: macs.a, members: ["something/else"], source: source
         )
         #expect(forgotten == [path])
         #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
@@ -782,6 +782,41 @@ struct WorkspaceFileDeletionSyncTests {
             await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL).isEmpty,
             "and it is not left waiting for something that is never coming"
         )
+    }
+
+    /// A source offloaded to one server is not forgotten by a pass against
+    /// another.
+    ///
+    /// It is not a member of the new server's manifest — it never was — and
+    /// forgetting it on the first pass there made it vanish from Context
+    /// while its only copy still sat on the old server.
+    @Test func switchingServersDoesNotForgetWhatTheOldOneHolds() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let old = LampSyncFileRecords.webDAVSource(URL(string: "https://old.example.com/s/")!)
+        let new = LampSyncFileRecords.webDAVSource(URL(string: "https://new.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: old, digest: "d", revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: old)
+        try records.save(toLibraryAt: macs.a)
+        var ledger = await WorkspaceFileLedger.load(in: workspaceURL)
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("history.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
+            inLibraryAt: macs.a, members: [], source: new
+        )
+        #expect(forgotten.isEmpty)
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["history.pdf"])
+
+        let gone = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
+            inLibraryAt: macs.a, members: [], source: old
+        )
+        #expect(gone == [path], "the server that held it is the one whose word counts")
     }
 
     /// Opening the writing part way through a batch stops the rest of it.
@@ -967,14 +1002,18 @@ struct WorkspaceFileDeletionSyncTests {
         )
     }
 
-    /// Two sources that are the same file are both offloaded.
+    /// A workspace holding the same file twice offloads one copy now and the
+    /// other on the next sweep.
     ///
-    /// A source is a hard link into the library's object store, so a
-    /// workspace holding the same file twice holds two links to one inode.
-    /// Unlinking either moves that inode's change time, which made the
-    /// sibling look replaced — and the shared bytes then stayed on disk for
-    /// ever while the pane said they had gone.
-    @Test func twoCopiesOfOneFileBothGo() async throws {
+    /// A source is a hard link into the library's object store, so two copies
+    /// of one file are two links to one inode — and unlinking either moves
+    /// that inode's change time. The unlink requires the whole identity,
+    /// change time included, because that is the only thing that notices a
+    /// file rewritten at the same size with its date put back
+    /// (`decisions/0007`). So the twin reads as changed and waits: it is
+    /// left un-noted, and the next sweep reads it afresh. Ignoring the change
+    /// time made both go at once, and cost that guard.
+    @Test func atwinCopyWaitsForTheNextSweep() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
@@ -1002,15 +1041,71 @@ struct WorkspaceFileDeletionSyncTests {
         }
         try records.save(toLibraryAt: macs.a)
 
-        let result = try await WorkspaceContextFileStore.offloadSources(
+        let first = try await WorkspaceContextFileStore.offloadSources(
             ["one.pdf", "two.pdf"], in: workspaceURL, libraryRootURL: macs.a,
             observation: everythingRecorded(in: source, library: macs.a)
         )
-        #expect(
-            result.offloaded.sorted() == ["one.pdf", "two.pdf"],
-            "the second is not a replacement just because the first was unlinked"
+        #expect(first.offloaded == ["one.pdf"])
+        #expect(first.skipped["two.pdf"] == .changedSinceUpload)
+        let twin = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "two.pdf"
         )
+        #expect(
+            await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(twin),
+            "left un-noted, so nothing is withheld for a file still here"
+        )
+
+        let second = try await WorkspaceContextFileStore.offloadSources(
+            ["two.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a)
+        )
+        #expect(second.offloaded == ["two.pdf"], "read afresh, it goes")
         #expect(await contextFiles(macs.a).isEmpty)
+    }
+
+    /// A source rewritten in place at the same size, with its date put back,
+    /// between being verified and being unlinked, is left alone.
+    ///
+    /// The change time is the only thing that notices it (`decisions/0007`),
+    /// and those bytes were never on the server.
+    @Test func asourceRewrittenWithItsDatePutBackIsNotDeleted() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let file = context.appendingPathComponent("history.pdf")
+        try write("first", to: file, at: 0)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            while: {
+                // Same size, written in place, and the exact times put back.
+                var original = stat()
+                guard stat(file.path, &original) == 0,
+                      let handle = try? FileHandle(forWritingTo: file)
+                else { return true }
+                try? handle.write(contentsOf: Data("other".utf8))
+                try? handle.close()
+                var times = [original.st_atimespec, original.st_mtimespec]
+                _ = utimensat(AT_FDCWD, file.path, &times, 0)
+                return true
+            }
+        )
+        #expect(result.offloaded.isEmpty)
+        #expect(result.skipped["history.pdf"] == .changedSinceUpload)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "other", "the new bytes are still here")
     }
 
     /// Nothing reopens the source between the check and the unlink.

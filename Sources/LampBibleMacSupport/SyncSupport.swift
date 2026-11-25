@@ -218,8 +218,14 @@ public enum LampWorkspaceSync {
     public static func forgetActsNoLongerOnTheServer(
         inLibraryAt libraryRoot: URL,
         members: Set<String>,
+        source: String,
         fileManager: FileManager = .default
     ) -> [String] {
+        // Only what *this* server ever held. A source offloaded to one server
+        // is not a member of another's manifest, and forgetting it on the
+        // first pass against the new one would make it vanish from Context
+        // while its only copy still sits on the old.
+        let records = LampSyncFileRecords.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
         var forgotten: [String] = []
         for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
             var ledger = WorkspaceFileLedger.load(in: workspace)
@@ -229,7 +235,9 @@ public enum LampWorkspaceSync {
             for path in acted.keys.sorted() {
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
-                ), !members.contains(member) else { continue }
+                ), !members.contains(member),
+                    records.record(member, in: source) != nil
+                else { continue }
                 ledger.forgetAct(WorkspaceFileLedger.contextKey(path))
                 forgotten.append(member)
                 changed = true
@@ -1382,6 +1390,18 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// one. Absence is not a fact about intent.
     var acts: [String: SourceAct] = [:]
 
+    /// When each context file was first seen **here**, by this Mac — attached
+    /// here, or installed by a pass. Local only, like `acts`.
+    ///
+    /// Kept apart from `presentSince`, which is portable and settles
+    /// deletions across devices: an arrival here is this Mac's fact, and
+    /// stamping the shared one on every download would move when other Macs
+    /// judge a deletion to have happened. It is what the sweep's grace runs
+    /// from. A pass installs a source *between* the gather's note and the
+    /// record of what is now present, so the gather never sees it arrive —
+    /// both places stamp this.
+    var arrivedAt: [String: Int64] = [:]
+
     enum SourceAct: String, Codable, Equatable, Sendable {
         /// This Mac let the file go; the server keeps it. Withheld while no
         /// file is here.
@@ -1412,6 +1432,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         ) ?? [:]
         acts = try container.decodeIfPresent(
             [String: SourceAct].self, forKey: .acts
+        ) ?? [:]
+        arrivedAt = try container.decodeIfPresent(
+            [String: Int64].self, forKey: .arrivedAt
         ) ?? [:]
     }
 
@@ -1524,13 +1547,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
     /// a six-month-old writing, in preparation for working on it, was
     /// otherwise offloaded two passes later.
     ///
-    /// `synced[key] == nil` covers the window between a file landing in one
-    /// pass and the next gather stamping `presentSince`.
+    /// Read from `arrivedAt`, which both the gather and a pass's import
+    /// stamp; `synced[key] == nil` covers anything neither has recorded yet.
     func isNewHere(_ key: String, now: Date, grace: TimeInterval) -> Bool {
         let key = Self.normalized(key)
         guard let synced, synced[key] != nil else { return true }
-        guard let since = presentSince[key] else { return false }
-        return since >= Self.milliseconds(now.addingTimeInterval(-grace))
+        guard let arrived = arrivedAt[key] else { return false }
+        return arrived >= Self.milliseconds(now.addingTimeInterval(-grace))
     }
 
     static func milliseconds(_ date: Date) -> Int64 {
@@ -1604,6 +1627,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
         }
         for key in present.keys where synced[key] == nil && Self.isContextKey(key) {
             presentSince[key] = max(presentSince[key] ?? .min, time)
+            arrivedAt[key] = time
         }
         // A file here answers whatever was done to its path: an offload whose
         // unlink never happened, a download that has landed, an attachment
@@ -1624,7 +1648,18 @@ struct WorkspaceFileLedger: Codable, Equatable {
         synced?[key] = modified
     }
 
-    mutating func recordSynced(_ present: [String: Int64]) {
+    mutating func recordSynced(_ present: [String: Int64], now: Date = Date()) {
+        // What the pass has just installed arrives here now. It went in
+        // after the gather's note and goes into `synced` here, so nothing
+        // else would ever see it arrive — and without this a source
+        // downloaded into a closed, idle writing reads as settled and the
+        // sweep can take it straight back.
+        let time = Self.milliseconds(now)
+        let before = synced ?? [:]
+        for key in present.keys where before[key] == nil && Self.isContextKey(key) {
+            arrivedAt[key] = time
+            acts[key] = nil
+        }
         synced = present
     }
 
