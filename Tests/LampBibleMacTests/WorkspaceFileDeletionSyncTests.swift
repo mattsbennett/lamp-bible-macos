@@ -1130,36 +1130,104 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
     }
 
-    /// The read-back asks for no more than the local copy and one byte: a
-    /// server copy replaced by something far larger is told apart without
-    /// fetching it.
-    @Test func theReadBackAsksForNoMoreThanTheLocalCopy() async throws {
+    /// Download All leaves out a source a folder stands at: it cannot land,
+    /// and its failure would stop every other source in the workspace.
+    @Test func downloadAllLeavesOutAsourceAfolderHides() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
-        let file = workspaceURL.appendingPathComponent("context/history.pdf")
-        try write("Daniell", to: file, at: 0)
-        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
-        let path = try LampWritingWorkspaceLayout.contextPath(
-            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        let context = workspaceURL.appendingPathComponent("context")
+        try FileManager.default.createDirectory(
+            at: context.appendingPathComponent("hidden.pdf", isDirectory: true), withIntermediateDirectories: true
         )
+        var ledger = WorkspaceFileLedger()
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("hidden.pdf"))
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("other.pdf"))
+        try await ledger.save(in: workspaceURL)
+
+        #expect(await LampWorkspaceSync.askForEverySourceOnTheServer(inLibraryAt: macs.a) == 1)
+        #expect(await LampWorkspaceSync.awaitedSourceNames(in: workspaceURL) == ["other.pdf"])
+    }
+
+    /// A read the server refuses costs nothing from the run's allowance, so
+    /// one that fails every time cannot hold back the sources behind it.
+    @Test func afailedReadCostsNothingFromTheAllowance() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
         var records = LampSyncFileRecords()
-        records.recordUpload(path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file), revision: "\"r1\"")
-        records.confirmRecorded([path: "\"r1\""], in: source)
+        var paths: [String: String] = [:]
+        for name in ["a.pdf", "b.pdf"] {
+            try write("twelve bytes", to: context.appendingPathComponent(name), at: 0)
+            let path = try LampWritingWorkspaceLayout.contextPath(
+                folder: workspaceURL.lastPathComponent, relativePath: name
+            )
+            paths[name] = path
+            records.recordUpload(
+                path, in: source,
+                digest: try LampSyncContentRevision.digest(forFileAt: context.appendingPathComponent(name)),
+                revision: "\"r1\""
+            )
+            records.confirmRecorded([path: "\"r1\""], in: source)
+        }
         try records.save(toLibraryAt: macs.a)
-        let asked = AskedLimits()
-        let large = Data(repeating: 0x41, count: 1_000_000)
-        let server = OffloadServer(source: source, account: "") { _, limit, destination in
-            await asked.note(limit)
-            try large.prefix(Int(limit)).write(to: destination)
+        let refused = paths["a.pdf"]!
+        let server = OffloadServer(source: source, account: "") { path, destination in
+            if path == refused { throw URLError(.timedOut) }
+            try Data("twelve bytes".utf8).write(to: destination)
             return true
         }
         let result = try await WorkspaceContextFileStore.offloadSources(
-            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
-            observation: everythingRecorded(in: source, library: macs.a), server: server
+            ["a.pdf", "b.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a), server: server,
+            readBudget: 12
         )
-        #expect(result.skipped["history.pdf"] == .serverCopyDiffers)
-        #expect(await asked.limits == [Int64("Daniell".utf8.count) + 1])
+        #expect(result.skipped["a.pdf"] == .couldNotReadTheServer)
+        #expect(result.offloaded == ["b.pdf"])
+        #expect(result.read == 12)
+    }
+
+    /// A returning source linked to an object other sources share is not
+    /// marked where they carry something else: the mark would be theirs too.
+    @Test func asharedObjectIsNotMarkedForOneSource() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let a = workspace(macs.a)
+        let file = a.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        _ = Data("0083;6750a1b2;Safari;".utf8).withUnsafeBytes {
+            setxattr(file.path, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+        }
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: a.lastPathComponent, relativePath: "history.pdf"
+        )
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        var records = LampSyncFileRecords()
+        records.recordUpload(
+            path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file),
+            revision: "\"r1\""
+        )
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: a, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a),
+            server: serverAsUploaded(in: source, library: macs.a)
+        )
+        #expect(result.offloaded == ["history.pdf"])
+        // The same bytes attached again here, unmarked, while it was away.
+        let twin = a.appendingPathComponent("context/copy.pdf")
+        try write("Daniell", to: twin, at: 0)
+        try await WorkspaceContextFileStore.consolidate(in: a, libraryRootURL: macs.a)
+        try await WorkspaceContextFileStore.fetchSource(relativePath: "history.pdf", in: a)
+        try write("Daniell", to: workspace(macs.b).appendingPathComponent("context/history.pdf"), at: 0)
+
+        try await macs.sync(from: macs.b, to: macs.a)
+
+        #expect(getxattr(twin.path, "com.apple.quarantine", nil, 0, 0, 0) < 0, "the other source is untouched")
+        #expect(await LampWorkspaceSync.takeReturnNotices(inLibraryAt: macs.a).unmarked == ["history.pdf"])
     }
 
     /// Attaching needs the ledger that says which names offloaded sources
@@ -1757,7 +1825,7 @@ struct WorkspaceFileDeletionSyncTests {
             paths["other.pdf"]!: Data("another copy".utf8),
         ]
         let unreadable = paths["unreadable.pdf"]!
-        let server = OffloadServer(source: source, account: "") { path, _, destination in
+        let server = OffloadServer(source: source, account: "") { path, destination in
             if path == unreadable { throw URLError(.timedOut) }
             guard let data = held[path] else { return false }
             try data.write(to: destination)
@@ -2292,11 +2360,6 @@ struct WorkspaceFileDeletionSyncTests {
 
 /// Says the writing is closed once, then open: the reader arriving while the
 /// batch is working.
-private actor AskedLimits {
-    private(set) var limits: [Int64] = []
-    func note(_ limit: Int64) { limits.append(limit) }
-}
-
 private actor OpenedPartWay {
     private var asked = 0
 
@@ -2337,9 +2400,9 @@ func serverAsUploaded(in source: String, library: URL, account: String = "") -> 
 
 /// A server holding exactly `held`.
 func serverHolding(_ held: [String: Data], source: String, account: String = "") -> OffloadServer {
-    OffloadServer(source: source, account: account) { path, limit, destination in
+    OffloadServer(source: source, account: account) { path, destination in
         guard let data = held[path] else { return false }
-        try data.prefix(Int(limit)).write(to: destination)
+        try data.write(to: destination)
         return true
     }
 }

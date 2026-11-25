@@ -786,6 +786,16 @@ struct WorkspaceSourceOffloadGatheringTests {
         #expect(rows.filter { !$0.removalWaitsForDownload }.isEmpty)
     }
 
+    /// A lock on a sync folder follows it when it is renamed or moved — the
+    /// same folder by device and inode — and never to another folder.
+    @Test func afolderLockFollowsItsFolder() {
+        let lock = OffloadLock(source: "folder:/a", account: "", place: "1:42")
+        #expect(lock.following(to: "folder:/b", at: "1:42") == OffloadLock(source: "folder:/b", account: "", place: "1:42"))
+        #expect(lock.following(to: "folder:/b", at: "1:43") == nil)
+        #expect(lock.following(to: "folder:/b", at: nil) == nil)
+        #expect(OffloadLock(source: "webdav:x", account: "user:a").following(to: "webdav:y", at: nil) == nil)
+    }
+
     @Test func anonymousIsNotAnEmptyUsername() {
         #expect(SyncAccount.identity(username: "", password: "") == "")
         #expect(SyncAccount.identity(username: "", password: "secret") != "")

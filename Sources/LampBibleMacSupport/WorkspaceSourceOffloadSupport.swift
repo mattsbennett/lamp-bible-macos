@@ -387,18 +387,22 @@ public struct ServerObservation: Equatable, Sendable {
 public struct OffloadServer: Sendable {
     public let source: String
     public let account: String
-    /// Reads at most `limit` bytes of `path` into `destination`; false where
-    /// the server has no file. The limit is the local copy's size and one
-    /// more, so a server copy replaced by something far larger costs a byte
-    /// beyond the expected read to tell apart, not the whole of it.
-    public let fetch: @Sendable (_ path: String, _ limit: Int64, _ destination: URL) async throws -> Bool
+    /// Where a folder store's folder is on disk (`device:inode`), so a lock
+    /// taken on it follows the folder when Finder renames or moves it. Nil
+    /// for a server.
+    public let place: String?
+    /// Reads the whole of `path` into `destination`, as Download does; false
+    /// where the server has no file. Whole, not a range: a partial answer
+    /// that matched the local bytes would say nothing about the rest.
+    public let fetch: @Sendable (_ path: String, _ destination: URL) async throws -> Bool
 
     public init(
-        source: String, account: String,
-        fetch: @escaping @Sendable (_ path: String, _ limit: Int64, _ destination: URL) async throws -> Bool
+        source: String, account: String, place: String? = nil,
+        fetch: @escaping @Sendable (_ path: String, _ destination: URL) async throws -> Bool
     ) {
         self.source = source
         self.account = account
+        self.place = place
         self.fetch = fetch
     }
 }
@@ -416,10 +420,22 @@ public struct OffloadLock: Codable, Equatable, Sendable {
     /// Nil for a lock written before the account was kept; the next pass at
     /// its address fills it in.
     public var account: String?
+    /// A sync folder's place on disk (`device:inode`), where the source is a
+    /// folder: the folder keeps it when renamed or moved, and its path — the
+    /// source — does not.
+    public var place: String?
 
-    public init(source: String, account: String?) {
+    public init(source: String, account: String?, place: String? = nil) {
         self.source = source
         self.account = account
+        self.place = place
+    }
+
+    /// The lock moved to `source`, where that is the same folder as the one
+    /// it was taken on, renamed or moved — or nil where it is not.
+    public func following(to source: String, at place: String?) -> OffloadLock? {
+        guard source != self.source, let place, place == self.place else { return nil }
+        return OffloadLock(source: source, account: account, place: place)
     }
 
     /// Whether a pass at `source` as `account` may run while this holds.

@@ -798,15 +798,18 @@ public enum WorkspaceContextFileStore {
                 skipped[verified.relativePath] = .later
                 continue
             }
-            read += size
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: verified.relativePath
             ) else { skipped[verified.relativePath] = .notAsource; continue }
+            // Charged only for a read that completed: one the server refused
+            // every time would otherwise take the whole allowance, run after
+            // run, from everything behind it.
             switch await serverCopy(
-                of: path, from: server, matches: verified.digest, size: size, fileManager: fileManager
+                of: path, from: server, matches: verified.digest, fileManager: fileManager
             ) {
-            case .matches: break
+            case .matches: read += size
             case .differs:
+                read += size
                 skipped[verified.relativePath] = .serverCopyDiffers
                 continue
             case .unreadable:
@@ -886,7 +889,7 @@ public enum WorkspaceContextFileStore {
     /// Reads the server's copy of `path` into a scratch file and compares its
     /// digest. Not on this actor's time: nothing here touches a workspace.
     private nonisolated static func serverCopy(
-        of path: String, from server: OffloadServer, matches digest: String, size: Int64,
+        of path: String, from server: OffloadServer, matches digest: String,
         fileManager: FileManager
     ) async -> ServerCopy {
         let scratch = fileManager.temporaryDirectory
@@ -895,7 +898,7 @@ public enum WorkspaceContextFileStore {
         do {
             try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
             let copy = scratch.appendingPathComponent("copy")
-            guard try await server.fetch(path, size + 1, copy) else { return .differs }
+            guard try await server.fetch(path, copy) else { return .differs }
             return try LampSyncContentRevision.digest(forFileAt: copy) == digest ? .matches : .differs
         } catch {
             return .unreadable

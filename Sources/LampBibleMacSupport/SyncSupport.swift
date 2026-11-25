@@ -366,7 +366,15 @@ public enum LampWorkspaceSync {
             var ledger = WorkspaceFileLedger.load(in: workspace)
             let offloaded = ledger.contextPaths(withAct: .offloaded)
             guard !offloaded.isEmpty else { continue }
+            let context = workspace.appendingPathComponent("context", isDirectory: true)
             for path in offloaded {
+                // Not one a folder stands at: it cannot land there, and its
+                // failure would stop the whole workspace's import, keeping
+                // every other source behind it away too. Its row says to
+                // move the folder.
+                var info = stat()
+                if lstat(context.appendingPathComponent(path).path, &info) == 0,
+                   (info.st_mode & S_IFMT) == S_IFDIR { continue }
                 ledger.noteWanted(WorkspaceFileLedger.contextKey(path))
                 asked += 1
             }
@@ -2006,6 +2014,16 @@ struct WorkspaceFileLedger: Codable, Equatable {
             // one call and put back.
             var info = stat()
             guard lstat(file.path, &info) == 0 else { continue }
+            // One inode can be more than this source: consolidation links
+            // identical files to one stored object, which is the object's
+            // link and this path's — two — and any more are other sources.
+            // Marking a shared inode marks them all, so where they already
+            // carry something else, or nothing, this one goes unmarked and
+            // is said.
+            if info.st_nlink > 2, Self.quarantineMark(of: file) != mark {
+                returnNotices[key] = .unmarked
+                continue
+            }
             let mode = info.st_mode & 0o7777
             let lifted = mode & S_IWUSR == 0
             if lifted { chmod(file.path, mode | S_IWUSR) }
@@ -2015,6 +2033,15 @@ struct WorkspaceFileLedger: Codable, Equatable {
             if lifted { chmod(file.path, mode) }
             if set != 0 { returnNotices[key] = .unmarked }
         }
+    }
+
+    static func quarantineMark(of file: URL) -> String? {
+        let size = getxattr(file.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW)
+        guard size > 0 else { return nil }
+        var value = [UInt8](repeating: 0, count: size)
+        guard getxattr(file.path, "com.apple.quarantine", &value, size, 0, XATTR_NOFOLLOW) == size
+        else { return nil }
+        return String(decoding: value, as: UTF8.self)
     }
 
     mutating func recordSynced(_ present: [String: Int64], now: Date = Date()) {

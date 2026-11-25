@@ -154,8 +154,10 @@ final class LibrarySyncController: ObservableObject {
     }
 
     /// Engages the lock before an offload deletes anything.
-    private func willOffload(to source: String, as account: String) {
-        if offloadLock == nil { offloadLock = OffloadLock(source: source, account: account) }
+    private func willOffload(to server: OffloadServer) {
+        if offloadLock == nil {
+            offloadLock = OffloadLock(source: server.source, account: server.account, place: server.place)
+        }
     }
 
     func refreshSourcesOnlyOnTheServer(library: LampLibrary) async {
@@ -502,12 +504,10 @@ final class LibrarySyncController: ObservableObject {
                 let store = UncheckedStore(store: connection.store)
                 let server = OffloadServer(
                     source: connection.source, account: connection.account,
-                    fetch: { path, limit, destination in
-                        guard let file = try await store.store.readPrefix(
-                            path: path, count: Int(clamping: limit)
-                        ) else { return false }
-                        try file.data.write(to: destination)
-                        return true
+                    place: connection.place,
+                    fetch: { path, destination in
+                        // The whole body, streamed to disk: what Download does.
+                        try await store.store.read(path: path, into: destination) != nil
                     }
                 )
                 await offloadRequestedSources(library: library, observation: observation, server: server)
@@ -564,7 +564,7 @@ final class LibrarySyncController: ObservableObject {
         }
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: root) {
             hadRequests = true
-            willOffload(to: server.source, as: server.account)
+            willOffload(to: server)
             var refused: [String] = []
             var differs: [String] = []
             var unlisted: [String] = []
@@ -773,7 +773,7 @@ final class LibrarySyncController: ObservableObject {
             guard !OpenWritingEditors.writingIDs.contains(writingID),
                   !KeptAgentChats.isBusy(in: workspaceURL)
             else { continue }
-            willOffload(to: server.source, as: server.account)
+            willOffload(to: server)
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     relativePaths, in: workspaceURL,
@@ -792,8 +792,12 @@ final class LibrarySyncController: ObservableObject {
                             // An agent turn on this writing — started from
                             // the phone, say, with no editor open — is using
                             // its sources too.
+                            // And the setting still the one the candidates
+                            // were picked under: set to Never, or longer,
+                            // while a read was in flight, nothing more goes.
                             return !OpenWritingEditors.writingIDs.contains(writingID)
                                 && !KeptAgentChats.isBusy(in: workspaceURL)
+                                && WorkspaceSourceOffload.After.chosen() == after
                                 && self.offloadObservation() == observation
                         }
                     }
@@ -988,6 +992,15 @@ final class LibrarySyncController: ObservableObject {
         let store: any LampSyncRemoteStore
         let source: String
         let account: String
+        /// A folder's place on disk; nil for a server.
+        var place: String? = nil
+    }
+
+    /// A folder's device and inode, read without following a link.
+    private static func place(of folder: URL) -> String? {
+        var info = stat()
+        guard lstat(folder.path, &info) == 0 else { return nil }
+        return "\(info.st_dev):\(info.st_ino)"
     }
 
     /// Makes the one connection everything uses — a pass, a probe, an
@@ -1008,7 +1021,8 @@ final class LibrarySyncController: ObservableObject {
             return try await body(Connection(
                 store: LampSyncDirectoryStore(root: folder),
                 source: LampSyncFileRecords.folderSource(folder),
-                account: ""
+                account: "",
+                place: Self.place(of: folder)
             ))
         case .webDAV:
             guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
@@ -1125,8 +1139,15 @@ final class LibrarySyncController: ObservableObject {
     /// other way than they were put there: before it reads a manifest, which
     /// from another library would settle them as gone and lift the lock. A
     /// lock from before the account was kept takes this pass's.
-    private func admitPass(at source: String, as account: String) throws {
+    private func admitPass(at source: String, as account: String, place: String? = nil) throws {
         guard var lock = offloadLock else { return }
+        // A sync folder renamed or moved in Finder is the same folder at a
+        // new path: the lock follows it rather than refusing the very folder
+        // that holds the offloaded copies.
+        if let followed = lock.following(to: source, at: place) {
+            lock = followed
+            offloadLock = lock
+        }
         guard lock.admits(source: source, account: account) else {
             throw LibrarySyncError.offloadsHeldElsewhere
         }
@@ -1158,10 +1179,12 @@ final class LibrarySyncController: ObservableObject {
 
             case .folder:
                 let folder = try resolveFolderURL()
-                try admitPass(at: LampSyncFileRecords.folderSource(folder), as: "")
                 // Held for the store's whole lifetime, which is this pass.
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
+                try admitPass(
+                    at: LampSyncFileRecords.folderSource(folder), as: "", place: Self.place(of: folder)
+                )
                 try await sync(
                     library: library,
                     store: LampSyncDirectoryStore(root: folder),
