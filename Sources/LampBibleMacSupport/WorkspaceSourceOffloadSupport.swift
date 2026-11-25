@@ -228,6 +228,7 @@ extension WorkspaceSourceOffload {
                     folder: name, relativePath: relativePath
                 ),
                 observation.members.contains(path),
+                observation.listed.contains(path),
                 records.record(path, in: observation.source)?.uploadedDigest != nil
                 else { continue }
                 onTheServer.insert(relativePath)
@@ -340,6 +341,11 @@ public struct ServerObservation: Equatable, Sendable {
     public let account: String
     /// Every path the manifest counted as a member, as the pass left it.
     public let members: Set<String>
+    /// The members the pass's listing showed with a revision. Not proof of
+    /// any bytes; what Download needs to plan a fetch at all — a member the
+    /// server lists without one is never fetched back, so a copy offloaded
+    /// on matching bytes alone could be stuck on "Coming back" for ever.
+    public let listed: Set<String>
     public let at: Date
 
     /// How long a look at the server answers for anything. A pass runs every
@@ -347,16 +353,20 @@ public struct ServerObservation: Equatable, Sendable {
     /// bites where it should — on a Mac that synced once days ago.
     public static let lifetime: TimeInterval = 15 * 60
 
-    public init(source: String, account: String = "", members: Set<String>, at: Date = Date()) {
+    public init(
+        source: String, account: String = "", members: Set<String>,
+        listed: Set<String>? = nil, at: Date = Date()
+    ) {
         self.source = source
         self.account = account
         self.members = members
+        self.listed = listed ?? members
         self.at = at
     }
 
     /// The same look, with membership as the manifest the pass wrote has it.
     public func with(members: Set<String>) -> ServerObservation {
-        ServerObservation(source: source, account: account, members: members, at: at)
+        ServerObservation(source: source, account: account, members: members, listed: listed, at: at)
     }
 
     /// Whether this can answer for `source` as `account` now: the same
@@ -377,12 +387,15 @@ public struct ServerObservation: Equatable, Sendable {
 public struct OffloadServer: Sendable {
     public let source: String
     public let account: String
-    /// Reads `path` into `destination`; false where the server has no file.
-    public let fetch: @Sendable (_ path: String, _ destination: URL) async throws -> Bool
+    /// Reads at most `limit` bytes of `path` into `destination`; false where
+    /// the server has no file. The limit is the local copy's size and one
+    /// more, so a server copy replaced by something far larger costs a byte
+    /// beyond the expected read to tell apart, not the whole of it.
+    public let fetch: @Sendable (_ path: String, _ limit: Int64, _ destination: URL) async throws -> Bool
 
     public init(
         source: String, account: String,
-        fetch: @escaping @Sendable (_ path: String, _ destination: URL) async throws -> Bool
+        fetch: @escaping @Sendable (_ path: String, _ limit: Int64, _ destination: URL) async throws -> Bool
     ) {
         self.source = source
         self.account = account

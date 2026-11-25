@@ -478,7 +478,8 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     let row: SourceRow
     let url: URL
 
-    var id: String { row.relativePath }
+    /// The row's own: a source hidden by a folder shares the folder's path.
+    var id: String { row.id }
     /// The path under the context directory, which is what the row is called:
     /// two offloaded `history.pdf`s in different folders are two sources,
     /// and a reader about to delete one from the server has to see which.

@@ -1066,6 +1066,102 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == nil)
     }
 
+    /// The folder holding every workspace, unsearchable, is an inventory
+    /// that could not be read — not an empty one.
+    @Test(.enabled(if: geteuid() != 0, "root is not refused by permission bits"))
+    func aworkspaceFolderLampMayNotSearchIsUnknown() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        try FileManager.default.createDirectory(at: workspace(macs.a), withIntermediateDirectories: true)
+        let agentWorkspaces = workspace(macs.a).deletingLastPathComponent().deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: agentWorkspaces.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agentWorkspaces.path) }
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a) == nil)
+    }
+
+    /// Download plans a fetch only for a member the server lists with a
+    /// revision. One it does not is not offloaded, whatever its bytes: it
+    /// could never come back.
+    @Test func amemberTheServerDoesNotListIsNotOffloaded() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let file = workspaceURL.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file), revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: ServerObservation(source: source, members: [path], listed: []),
+            server: serverAsUploaded(in: source, library: macs.a)
+        )
+        #expect(result.skipped["history.pdf"] == .notOnTheServer)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// Two members whose names differ only in case would land on one name
+    /// fetched back, and the pass refuses such a pair: neither is offloaded.
+    @Test func membersWhoseNamesFoldTogetherAreNotOffloaded() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let file = workspaceURL.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        let folder = workspaceURL.lastPathComponent
+        let path = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "history.pdf")
+        let other = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "History.pdf")
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file), revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: ServerObservation(source: source, members: [path, other]),
+            server: serverAsUploaded(in: source, library: macs.a)
+        )
+        #expect(result.skipped["history.pdf"] == .nameCollides)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// The read-back asks for no more than the local copy and one byte: a
+    /// server copy replaced by something far larger is told apart without
+    /// fetching it.
+    @Test func theReadBackAsksForNoMoreThanTheLocalCopy() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let file = workspaceURL.appendingPathComponent("context/history.pdf")
+        try write("Daniell", to: file, at: 0)
+        let source = LampSyncFileRecords.webDAVSource(URL(string: "https://dav.example.com/s/")!)
+        let path = try LampWritingWorkspaceLayout.contextPath(
+            folder: workspaceURL.lastPathComponent, relativePath: "history.pdf"
+        )
+        var records = LampSyncFileRecords()
+        records.recordUpload(path, in: source, digest: try LampSyncContentRevision.digest(forFileAt: file), revision: "\"r1\"")
+        records.confirmRecorded([path: "\"r1\""], in: source)
+        try records.save(toLibraryAt: macs.a)
+        let asked = AskedLimits()
+        let large = Data(repeating: 0x41, count: 1_000_000)
+        let server = OffloadServer(source: source, account: "") { _, limit, destination in
+            await asked.note(limit)
+            try large.prefix(Int(limit)).write(to: destination)
+            return true
+        }
+        let result = try await WorkspaceContextFileStore.offloadSources(
+            ["history.pdf"], in: workspaceURL, libraryRootURL: macs.a,
+            observation: everythingRecorded(in: source, library: macs.a), server: server
+        )
+        #expect(result.skipped["history.pdf"] == .serverCopyDiffers)
+        #expect(await asked.limits == [Int64("Daniell".utf8.count) + 1])
+    }
+
     /// Attaching needs the ledger that says which names offloaded sources
     /// still hold; one that will not read refuses the attachment rather than
     /// guess none, which could put a new file over an offloaded one's copy.
@@ -1661,7 +1757,7 @@ struct WorkspaceFileDeletionSyncTests {
             paths["other.pdf"]!: Data("another copy".utf8),
         ]
         let unreadable = paths["unreadable.pdf"]!
-        let server = OffloadServer(source: source, account: "") { path, destination in
+        let server = OffloadServer(source: source, account: "") { path, _, destination in
             if path == unreadable { throw URLError(.timedOut) }
             guard let data = held[path] else { return false }
             try data.write(to: destination)
@@ -2196,6 +2292,11 @@ struct WorkspaceFileDeletionSyncTests {
 
 /// Says the writing is closed once, then open: the reader arriving while the
 /// batch is working.
+private actor AskedLimits {
+    private(set) var limits: [Int64] = []
+    func note(_ limit: Int64) { limits.append(limit) }
+}
+
 private actor OpenedPartWay {
     private var asked = 0
 
@@ -2236,9 +2337,9 @@ func serverAsUploaded(in source: String, library: URL, account: String = "") -> 
 
 /// A server holding exactly `held`.
 func serverHolding(_ held: [String: Data], source: String, account: String = "") -> OffloadServer {
-    OffloadServer(source: source, account: account) { path, destination in
+    OffloadServer(source: source, account: account) { path, limit, destination in
         guard let data = held[path] else { return false }
-        try data.write(to: destination)
+        try data.prefix(Int(limit)).write(to: destination)
         return true
     }
 }

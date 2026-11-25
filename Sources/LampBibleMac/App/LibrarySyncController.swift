@@ -186,13 +186,20 @@ final class LibrarySyncController: ObservableObject {
         _ = await syncAsked(library: library)
     }
 
-    /// Asks for the sync after which a requested offload is carried out. A
-    /// source not yet on the server goes up in that sync, and the offload
-    /// after it reads it back.
+    /// Asks for the sync after which a requested offload is carried out.
+    ///
+    /// A source not yet on the server goes up in that sync — but the
+    /// listing Download plans from was taken before the upload, so it is
+    /// not offloadable until a pass lists it. One more pass is allowed for
+    /// that, once per press; nothing local changes after it, so nothing else
+    /// would start one.
     func syncForOffload(library: LampLibrary, workspace: URL) async {
         offloadRefusals[workspace.standardizedFileURL.path] = nil
+        offloadFollowUp = true
         _ = await syncAsked(library: library)
     }
+
+    private var offloadFollowUp = false
 
     /// Why a requested offload could not happen, by the workspace that asked
     /// (its standardized path), for that writing's pane alone.
@@ -495,8 +502,12 @@ final class LibrarySyncController: ObservableObject {
                 let store = UncheckedStore(store: connection.store)
                 let server = OffloadServer(
                     source: connection.source, account: connection.account,
-                    fetch: { path, destination in
-                        try await store.store.read(path: path, into: destination) != nil
+                    fetch: { path, limit, destination in
+                        guard let file = try await store.store.readPrefix(
+                            path: path, count: Int(clamping: limit)
+                        ) else { return false }
+                        try file.data.write(to: destination)
+                        return true
                     }
                 )
                 await offloadRequestedSources(library: library, observation: observation, server: server)
@@ -540,10 +551,23 @@ final class LibrarySyncController: ObservableObject {
     ) async {
         let root = library.rootURL
         var offloaded = 0
+        var waitsForAListing = false
+        var hadRequests = false
+        defer {
+            if waitsForAListing {
+                offloadFollowUp = false
+                LampSyncRequest.wantAPass()
+            } else if hadRequests {
+                // Spent on the pass it was for, used or not.
+                offloadFollowUp = false
+            }
+        }
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: root) {
+            hadRequests = true
             willOffload(to: server.source, as: server.account)
             var refused: [String] = []
             var differs: [String] = []
+            var unlisted: [String] = []
             do {
                 let result = try await WorkspaceContextFileStore.offloadSources(
                     requested, in: workspace, libraryRootURL: root, observation: observation,
@@ -566,6 +590,7 @@ final class LibrarySyncController: ObservableObject {
                     if reason == .serverCopyDiffers || reason == .couldNotReadTheServer {
                         differs.append(path)
                     }
+                    if reason == .notOnTheServer { unlisted.append(path) }
                     if reason.isLasting {
                         try? await WorkspaceContextFileStore.cancelOffload(
                             relativePath: path, in: workspace
@@ -589,6 +614,13 @@ final class LibrarySyncController: ObservableObject {
                     : "\(refused.count) sources can't go back to the server, so they stay on this Mac."
                 errorMessage = message
                 offloadRefusals[key] = message
+            } else if !unlisted.isEmpty, offloadFollowUp {
+                // Probably uploaded by this very pass: one more lists it.
+                waitsForAListing = true
+            } else if !unlisted.isEmpty {
+                offloadRefusals[key] = unlisted.count == 1
+                    ? "“\(unlisted[0])” is waiting: the server hasn't listed it yet, so it stays here until a sync shows it there."
+                    : "\(unlisted.count) sources are waiting: the server hasn't listed them yet, so they stay here until a sync shows them there."
             } else if !differs.isEmpty {
                 // The request stays, for a pass whose read of the server
                 // matches; the pane says why nothing has happened yet.
@@ -2145,7 +2177,8 @@ extension LibrarySyncController {
         pendingObservation = ServerObservation(
             source: source,
             account: accountOfThisPass,
-            members: Set(manifest.members.map(\.path))
+            members: Set(manifest.members.map(\.path)),
+            listed: Set(unlisted.keys)
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
         return result

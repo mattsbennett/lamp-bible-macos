@@ -577,9 +577,31 @@ public enum LampWorkspaceSync {
         in libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws -> [URL] {
-        try childDirectoriesIfPresent(
-            of: LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager), fileManager: fileManager
-        )
+        let root = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
+        // Empty only where the folder is confirmed absent. `fileExists` and a
+        // failed resource read both answer "nothing here" for a folder Lamp
+        // has lost permission to search — and an inventory of nothing would
+        // lift the lock that guards sources only on the server. Anything but
+        // "no such file" throws, and every caller that guards the lock reads
+        // a throw as unknown.
+        var info = stat()
+        guard lstat(root.path, &info) == 0 else {
+            if errno == ENOENT { return [] }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
+            throw POSIXError(.ENOTDIR)
+        }
+        return try fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ).filter { url in
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+                return false
+            }
+            return values.isDirectory == true && values.isSymbolicLink != true
+        }
     }
 
     /// Run legacy workspace migration during the local pull transaction so
@@ -2064,6 +2086,12 @@ public struct LampWebDAVClient: Sendable, LampSyncRemoteStore {
 
     public func read(path: String) async throws -> LampSyncRemoteFile? {
         try await mapped { try await storage.read(path: path) }
+    }
+
+    /// Forwarded, or the protocol's default fetches the whole body: an
+    /// offload's read-back asks for no more than the copy it expects.
+    public func readPrefix(path: String, count: Int) async throws -> LampSyncRemoteFile? {
+        try await mapped { try await storage.readPrefix(path: path, count: count) }
     }
 
     public func list(directory: String) async throws -> [LampSyncRemoteEntry]? {

@@ -637,6 +637,10 @@ public enum WorkspaceContextFileStore {
         /// This run has read as much from the server as it may; the rest
         /// wait for the next.
         case later
+        /// Another member's path differs from this one only in case. Fetched
+        /// back, the two land on one name wherever names fold, and the pass
+        /// refuses such a pair — so neither could come back.
+        case nameCollides
         /// The bytes here are not the bytes that were uploaded, or they
         /// changed between being checked and being deleted. The next pass
         /// takes the new ones up, and the sweep after that may offload them.
@@ -662,7 +666,7 @@ public enum WorkspaceContextFileStore {
         /// and said, rather than retried for ever.
         public var isLasting: Bool {
             switch self {
-            case .notAsource, .untrustedVolume, .wouldLoseWhatNoStoreKeeps: true
+            case .notAsource, .untrustedVolume, .wouldLoseWhatNoStoreKeeps, .nameCollides: true
             case .notOnTheServer, .serverCopyDiffers, .couldNotReadTheServer, .later,
                  .changedSinceUpload, .couldNotRemove, .nowHeld, .withdrawn: false
             }
@@ -721,6 +725,10 @@ public enum WorkspaceContextFileStore {
 
         var ready: [VerifiedSource] = []
         var skipped: [String: Skipped] = [:]
+        // Members whose paths fold to the same name.
+        let folded = Dictionary(grouping: observation.members) {
+            $0.precomposedStringWithCanonicalMapping.lowercased()
+        }
         // Asked of the volume once, before any file is read. Off APFS nothing
         // would be offloaded anyway, and on a library kept on exFAT or a share
         // an hourly sweep would otherwise reread every eligible PDF just to
@@ -734,7 +742,14 @@ public enum WorkspaceContextFileStore {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: relativePath
             ) else { skipped[relativePath] = .notAsource; continue }
+            guard (folded[path.precomposedStringWithCanonicalMapping.lowercased()]?.count ?? 0) <= 1 else {
+                skipped[relativePath] = .nameCollides
+                continue
+            }
+            // A member the listing showed with a revision: what Download
+            // needs to plan the fetch back (`ServerObservation.listed`).
             guard observation.members.contains(path),
+                  observation.listed.contains(path),
                   records.record(path, in: observation.source)?.uploadedDigest != nil
             else {
                 skipped[relativePath] = .notOnTheServer
@@ -787,7 +802,9 @@ public enum WorkspaceContextFileStore {
             guard let path = try? LampWritingWorkspaceLayout.contextPath(
                 folder: folder, relativePath: verified.relativePath
             ) else { skipped[verified.relativePath] = .notAsource; continue }
-            switch await serverCopy(of: path, from: server, matches: verified.digest, fileManager: fileManager) {
+            switch await serverCopy(
+                of: path, from: server, matches: verified.digest, size: size, fileManager: fileManager
+            ) {
             case .matches: break
             case .differs:
                 skipped[verified.relativePath] = .serverCopyDiffers
@@ -869,7 +886,7 @@ public enum WorkspaceContextFileStore {
     /// Reads the server's copy of `path` into a scratch file and compares its
     /// digest. Not on this actor's time: nothing here touches a workspace.
     private nonisolated static func serverCopy(
-        of path: String, from server: OffloadServer, matches digest: String,
+        of path: String, from server: OffloadServer, matches digest: String, size: Int64,
         fileManager: FileManager
     ) async -> ServerCopy {
         let scratch = fileManager.temporaryDirectory
@@ -878,7 +895,7 @@ public enum WorkspaceContextFileStore {
         do {
             try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
             let copy = scratch.appendingPathComponent("copy")
-            guard try await server.fetch(path, copy) else { return .differs }
+            guard try await server.fetch(path, size + 1, copy) else { return .differs }
             return try LampSyncContentRevision.digest(forFileAt: copy) == digest ? .matches : .differs
         } catch {
             return .unreadable
