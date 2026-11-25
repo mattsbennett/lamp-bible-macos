@@ -738,7 +738,12 @@ public enum DevotionalAgentRevisionStore {
         }
         let goingAway = stored.filter { !keptIDs.contains($0.revision.id) }
         let retiring = goingAway.filter { !demotableCoverage.contains($0.revision.id) }
-        try retire(retiring.map(\.revision.id), in: workspace)
+        // Best effort, deliberately. `prepareLibraryForSync` compacts every
+        // workspace before importing anything, so a throw here would stop
+        // unrelated documents syncing over a bookkeeping file. A retirement
+        // that does not get written costs one download and is written next
+        // time; a blocked import costs the pass.
+        try? retire(retiring.map(\.revision.id), in: workspace)
 
         var removed = Set<URL>()
         for entry in goingAway {
@@ -758,7 +763,7 @@ public enum DevotionalAgentRevisionStore {
         for entry in stored.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent })
         where !removed.contains(entry.url) && !seen.insert(entry.revision.id).inserted {
             forgetDecodedHistory(in: workspace)
-            try retire([entry.revision.id], in: workspace)
+            try? retire([entry.revision.id], in: workspace)
             try FileManager.default.removeItem(at: entry.url)
         }
     }
@@ -779,24 +784,22 @@ public enum DevotionalAgentRevisionStore {
     public static func retiredRevisionIDs(in workspace: URL) -> Set<UUID> {
         let url = metadataDirectory(in: workspace)
             .appendingPathComponent(retiredRevisionsFilename)
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8)
-        else { return [] }
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        // Split on newline *bytes* and decode each line on its own. Decoding
+        // the whole file as UTF-8 first meant one bad byte anywhere answered
+        // "nothing is retired" — after which compaction would append good
+        // entries behind the damage and neither old nor new ones would ever
+        // be seen again. A line is cheap to lose; the file is not.
         var ids: Set<UUID> = []
-        for line in text.split(separator: "\n") {
-            if let id = UUID(uuidString: String(line)) { ids.insert(id) }
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            guard let text = String(data: Data(line), encoding: .utf8),
+                  let id = UUID(uuidString: text.trimmingCharacters(in: .whitespaces))
+            else { continue }
+            ids.insert(id)
         }
         return ids
     }
 
-    /// Adds `ids` to this workspace's retired list.
-    ///
-    /// Called by `compact` between writing the replacements and deleting what
-    /// they replace. That order is deliberate: a crash after this and before
-    /// the delete leaves a retired id whose file is still there, which
-    /// changes nothing because the claim is only ever consulted for a member
-    /// with no local file. A crash the other way round leaves a deleted
-    /// revision unretired, which costs one download and then retires itself.
     /// **Appended, never rewritten.** One id a line, because this is on the
     /// autosave path: an autosave that compacts used to decode, sort and
     /// rewrite the whole list under the store's lock, which a reviewer
@@ -832,8 +835,16 @@ public enum DevotionalAgentRevisionStore {
                 if last != Data("\n".utf8) { try handle.write(contentsOf: Data("\n".utf8)) }
             }
             try handle.write(contentsOf: Data(body.utf8))
-        } else {
+        } else if !FileManager.default.fileExists(atPath: url.path) {
             try Data(body.utf8).write(to: url, options: .atomic)
+        } else {
+            // There is a log and it cannot be opened — read-only, most
+            // likely. Writing a fresh one here would throw away every
+            // retirement before this batch, and those ids would then
+            // alternate between claimed and downloaded for ever. Better to
+            // lose this batch, which costs one download each and retires
+            // itself next time.
+            throw CocoaError(.fileWriteNoPermission)
         }
     }
 

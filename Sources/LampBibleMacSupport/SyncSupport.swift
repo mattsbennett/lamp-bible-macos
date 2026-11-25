@@ -111,6 +111,17 @@ public enum LampWorkspaceSync {
               name.hasSuffix(".json")
         else { return nil }
         let stem = name.dropLast(".json".count)
+
+        // `<uuid>.json`, with no stamp in front. The store writes
+        // `<millis>-<uuid>.json`, but a bare id is a shape the import and the
+        // compactor both accept and `SyncSupportTests` publishes, so it is a
+        // real name a library can hold. Requiring the stamp meant such a
+        // member could never be matched to a retirement and was fetched and
+        // deleted on every pass for ever — the very loop this is here to
+        // stop. A reviewer found it; the first version of this even had a
+        // test asserting the wrong answer.
+        if let bare = UUID(uuidString: String(stem)) { return bare }
+
         guard let dash = stem.lastIndex(of: "-") else { return nil }
         // A UUID has four of its own dashes, so the id starts at the fifth
         // from the end rather than at the last one.

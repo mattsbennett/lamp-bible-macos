@@ -77,11 +77,14 @@ struct RevisionMembersHeldTests {
         )
         #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/Revisions/17-A.json") == nil)
         #expect(LampWorkspaceSync.revisionID(named: "\(workspace)/draft.md") == nil)
+        // A bare id, with no stamp: not what the store writes, but a shape
+        // the import and the compactor both accept and sync publishes, so a
+        // library really can hold one. Read as the id it is — requiring the
+        // stamp left such a member unmatchable and fetched for ever.
         #expect(
             LampWorkspaceSync.revisionID(
                 named: "\(workspace)/Revisions/\(id.uuidString).json"
-            ) == nil,
-            "a name with no stamp in front of the id is not one the store wrote"
+            ) == id
         )
     }
 
@@ -352,6 +355,31 @@ struct RevisionMembersHeldTests {
             !text.contains("9F3A17-"),
             "the new id began a line of its own rather than joining the fragment"
         )
+    }
+
+    /// One damaged byte loses its own line and nothing else.
+    ///
+    /// Decoding the whole file as UTF-8 first meant a single bad byte
+    /// anywhere answered "nothing is retired" — after which compaction would
+    /// append good entries behind the damage and neither the old nor the new
+    /// ones would ever be seen again, so the downloads would repeat for ever.
+    @Test func keepsTheGoodLinesAroundAdamagedOne() throws {
+        let root = library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try workspaceURL(in: root, named: "W1")
+        let metadata = workspace.appendingPathComponent(".lamp", isDirectory: true)
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: true)
+
+        let before = UUID()
+        let after = UUID()
+        var bytes = Data("\(before.uuidString)\n".utf8)
+        bytes.append(contentsOf: [0xFF, 0xFE, UInt8(ascii: "\n")])
+        bytes.append(Data("\(after.uuidString)\n".utf8))
+        try bytes.write(to: metadata.appendingPathComponent("retired-revisions.json"))
+
+        let ids = DevotionalAgentRevisionStore.retiredRevisionIDs(in: workspace)
+
+        #expect(ids == [before, after])
     }
 
     /// The list is local state and must never be published: it lives in
