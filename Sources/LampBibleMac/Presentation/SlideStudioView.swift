@@ -1857,7 +1857,8 @@ struct SlideStudioView: View {
                     )
                     // Too large at up to 4K: offered at 1080p, which still
                     // looks the same at the size most rooms see it.
-                    if made.bytes > purpose.largestFileBytes, max(made.width, made.height) > 1_920 {
+                    if made.bytes > purpose.largestFileBytes,
+                       let at1080p = LampVisuallyLosslessVideo.longestSideAt1080p(width: made.width, height: made.height) {
                         let alert = NSAlert()
                         alert.messageText = "Save it at 1080p?"
                         alert.informativeText = "At full size this video is \(formatter.string(fromByteCount: made.bytes)), "
@@ -1870,7 +1871,7 @@ struct SlideStudioView: View {
                             return
                         }
                         made = try await LampVisuallyLosslessVideo.encode(
-                            source, to: video, keepingSound: purpose == .clip, largestSide: 1_920
+                            source, to: video, keepingSound: purpose == .clip, largestSide: at1080p
                         )
                     }
                     guard made.bytes <= purpose.largestFileBytes else {

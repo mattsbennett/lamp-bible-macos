@@ -28,30 +28,67 @@ public enum LampVisuallyLosslessVideo {
         public var bytes: Int64
         public var width: Int
         public var height: Int
+        /// Whether the pictures it read were see-through, which HEVC as
+        /// written here is not: they were laid on black.
+        public var seeThrough: Bool
     }
 
-    public enum EncodingError: LocalizedError {
+    public enum EncodingError: LocalizedError, Equatable {
         case noPictures
+        /// A track it would read keeps its media in another file.
+        case notSelfContained
         case failed(String)
 
         public var errorDescription: String? {
             switch self {
             case .noPictures: "The video has no pictures Lamp can read."
+            case .notSelfContained: "The video keeps its pictures or sound in another file."
             case .failed(let message): "The video could not be saved: \(message)"
             }
         }
     }
 
+    /// The longest side that brings a video to 1080p, its shorter side 1080
+    /// pixels, or nil where it is that small already. By the shorter side,
+    /// so a square or upright video is made 1080 across too: by the longer
+    /// side, a square one was made 1920 square and a 1440 square one not
+    /// made smaller at all. `shorterSide` stands in for 1080, for tests.
+    public static func longestSideAt1080p(width: Int, height: Int, shorterSide: Int = 1_080) -> Int? {
+        let shorter = min(width, height), longer = max(width, height)
+        guard shorter > shorterSide else { return nil }
+        return Int((Double(longer) * Double(shorterSide) / Double(shorter)).rounded())
+    }
+
     /// Writes `source` to `destination` as an HEVC .mp4, its longer side at
     /// most `largestSide`, keeping its sound where `keepingSound`.
+    ///
+    /// Where `requiringSelfContained`, a video whose pictures or kept sound
+    /// are in another file is refused before anything of it is read, by
+    /// AVFoundation's own answer for each track it would read: its
+    /// reference restrictions alone still followed a reference from one file
+    /// on this Mac to another (`decisions/0026`).
+    ///
+    /// One encode runs at a time on this Mac (`LampVideoEncodeGate`).
     public static func encode(
         _ source: URL,
         to destination: URL,
         keepingSound: Bool,
         largestSide: Int = largestPixels,
-        quality: Float = quality
+        quality: Float = quality,
+        requiringSelfContained: Bool = false
     ) async throws -> Result {
-        let asset = AVURLAsset(url: source)
+        let ticket = await LampVideoEncodeGate.acquire()
+        defer { ticket.release() }
+        // Given up on while it waited: its turn passes on, unused.
+        try Task.checkCancellation()
+        let asset = requiringSelfContained
+            ? AVURLAsset(url: source, options: [
+                AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue,
+            ])
+            : AVURLAsset(url: source)
+        // The first picture track that plays, as AVFoundation itself shows
+        // a movie: a second track laid over it in the file is not drawn by
+        // AVFoundation either (tried, 2026-11-26), so neither is it here.
         var pictures: AVAssetTrack?
         for candidate in try await asset.loadTracks(withMediaType: .video) {
             guard try await candidate.load(.isEnabled), try await candidate.load(.isPlayable) else { continue }
@@ -59,6 +96,23 @@ public enum LampVisuallyLosslessVideo {
             break
         }
         guard let pictures else { throw EncodingError.noPictures }
+        if requiringSelfContained {
+            guard try await pictures.load(.isSelfContained) else { throw EncodingError.notSelfContained }
+            if keepingSound {
+                for track in try await asset.loadTracks(withMediaType: .audio) where try await track.load(.isEnabled) {
+                    guard try await track.load(.isSelfContained) else { throw EncodingError.notSelfContained }
+                }
+            }
+        }
+        // See-through pictures, on the track read: an alpha channel said
+        // outright, or ProRes 4444's 32 bits a pixel.
+        var seeThrough = false
+        for format in try await pictures.load(.formatDescriptions) {
+            if let alpha = CMFormatDescriptionGetExtension(format, extensionKey: "ContainsAlphaChannel" as CFString) as? Bool,
+               alpha { seeThrough = true }
+            if let depth = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_Depth) as? Int,
+               depth == 32 { seeThrough = true }
+        }
         let natural = try await pictures.load(.naturalSize)
         let transform = try await pictures.load(.preferredTransform)
         // The bounds the turned picture covers, which a turned size alone
@@ -130,11 +184,25 @@ public enum LampVisuallyLosslessVideo {
             let isAAC = formats.first.map { CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC } ?? false
             let output: AVAssetReaderOutput
             let input: AVAssetWriterInput
+            // At the volume each track is set to play at: carried as the
+            // track's own setting where it is copied as it is, and mixed in
+            // where it is mixed.
             if isAAC && sounds.count == 1 {
                 output = AVAssetReaderTrackOutput(track: first, outputSettings: nil)
                 input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: formats.first)
+                input.preferredVolume = try await first.load(.preferredVolume)
             } else {
-                output = AVAssetReaderAudioMixOutput(audioTracks: sounds, audioSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+                let mixOutput = AVAssetReaderAudioMixOutput(audioTracks: sounds, audioSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+                let mix = AVMutableAudioMix()
+                var parameters: [AVMutableAudioMixInputParameters] = []
+                for sound in sounds {
+                    let level = AVMutableAudioMixInputParameters(track: sound)
+                    level.setVolume(try await sound.load(.preferredVolume), at: .zero)
+                    parameters.append(level)
+                }
+                mix.inputParameters = parameters
+                mixOutput.audioMix = mix
+                output = mixOutput
                 input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                     AVFormatIDKey: kAudioFormatMPEG4AAC,
                     AVSampleRateKey: 48_000,
@@ -214,8 +282,11 @@ public enum LampVisuallyLosslessVideo {
             try? FileManager.default.removeItem(at: destination)
             throw EncodingError.failed(writer.error?.localizedDescription ?? "unknown")
         }
-        let bytes = ((try? destination.resourceValues(forKeys: [.fileSizeKey]))?.fileSize).map(Int64.init) ?? 0
-        return Result(bytes: bytes, width: width, height: height)
+        // Read from the file system, not the URL: a URL keeps what it first
+        // read, and a second encode to the same one (the 1080p retry)
+        // reported the first's size.
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        return Result(bytes: bytes, width: width, height: height, seeThrough: seeThrough)
     }
 }
 
@@ -257,5 +328,78 @@ private final class Transfers: @unchecked Sendable {
         done.formUnion(all.keys)
         lock.unlock()
         all.values.forEach { $0.resume() }
+    }
+}
+
+/// One video encode at a time on this Mac, across Lamp and every `lamp-mcp`
+/// an agent session runs.
+///
+/// Test videos of 4K noise at 200 Mbps, encoded several at once, brought the
+/// hardware encoder down with the whole Mac (a kernel panic in `dart-ave`,
+/// 2026-11-26). Nothing shows ordinary encodes would, but several at once
+/// buy nothing a person waits less for, so they take turns: in this
+/// process by a queue, and between processes by a lock on a file in the
+/// user's temporary folder, which Lamp and its helper share.
+public enum LampVideoEncodeGate {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var busy = false
+    nonisolated(unsafe) private static var waiting: [CheckedContinuation<Void, Never>] = []
+    nonisolated(unsafe) private static var active = 0
+    /// The most encodes this process has had running at once, for tests.
+    nonisolated(unsafe) static var peak = 0
+
+    static let lockFile = FileManager.default.temporaryDirectory
+        .appendingPathComponent("lamp-video-encode.lock").path
+
+    /// A turn at the encoder, given back with `release()`.
+    public final class Ticket: @unchecked Sendable {
+        private let handle: Int32
+        private var released = false
+        fileprivate init(handle: Int32) { self.handle = handle }
+
+        public func release() {
+            LampVideoEncodeGate.lock.lock()
+            guard !released else {
+                LampVideoEncodeGate.lock.unlock()
+                return
+            }
+            released = true
+            LampVideoEncodeGate.active -= 1
+            LampVideoEncodeGate.lock.unlock()
+            if handle >= 0 {
+                flock(handle, LOCK_UN)
+                close(handle)
+            }
+            LampVideoEncodeGate.lock.lock()
+            let next = LampVideoEncodeGate.waiting.isEmpty ? nil : LampVideoEncodeGate.waiting.removeFirst()
+            if next == nil { LampVideoEncodeGate.busy = false }
+            LampVideoEncodeGate.lock.unlock()
+            next?.resume()
+        }
+    }
+
+    /// Waits for this process's turn, then for every other process's.
+    public static func acquire() async -> Ticket {
+        await withCheckedContinuation { (turn: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if busy {
+                waiting.append(turn)
+                lock.unlock()
+            } else {
+                busy = true
+                lock.unlock()
+                turn.resume()
+            }
+        }
+        let handle = open(lockFile, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        if handle >= 0 {
+            // Off this thread: another process's encode can take a while.
+            await Task.detached { _ = flock(handle, LOCK_EX) }.value
+        }
+        lock.lock()
+        active += 1
+        peak = max(peak, active)
+        lock.unlock()
+        return Ticket(handle: handle)
     }
 }

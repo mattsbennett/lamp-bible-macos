@@ -250,9 +250,10 @@ public enum LampMCPPromptCatalog {
       intentionally omitted from the screen. Do not put complete manuscript \
       paragraphs on slides by default.
     - Use semantic layouts and block roles. Do not invent coordinates, font \
-      sizes, or unsupported fields. An animation is a video made with the \
-      `render_animation` tool in a session opened on a writing's workspace, \
-      never a field of the deck.
+      sizes, or unsupported fields. An animation is a video, made with the \
+      `render_animation` tool or with any other tool and brought in with \
+      `prepare_video`, in a session opened on a writing's workspace, never a \
+      field of the deck.
     - Use an `image` block only when the referenced asset exists beside the deck, \
       and give it meaningful `altText`. Prefer public-domain or openly licensed \
       pictures and keep a note of each one's source and licence. A picture must \

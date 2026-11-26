@@ -112,6 +112,9 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         )
     }
 
+    /// Ten minutes for a call: a workspace's tools include making an
+    /// animation and preparing a video, which encode, and may wait their
+    /// turn at the encoder (`decisions/0026`).
     public var codexTOML: String {
         let encodedArguments = arguments.map(Self.quoted).joined(separator: ", ")
         return """
@@ -121,7 +124,7 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         args = [\(encodedArguments)]
         required = true
         startup_timeout_sec = 15
-        tool_timeout_sec = 60
+        tool_timeout_sec = 600
         default_tools_approval_mode = "auto"
         """ + "\n"
     }

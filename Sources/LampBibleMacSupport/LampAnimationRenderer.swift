@@ -315,6 +315,9 @@ public enum LampAnimationRenderer {
         }
         let frameCount = Int((duration * Double(framesPerSecond)).rounded())
 
+        // One encode at a time on this Mac (`LampVideoEncodeGate`).
+        let ticket = await LampVideoEncodeGate.acquire()
+        defer { ticket.release() }
         try? FileManager.default.removeItem(at: videoURL)
         let writer: AVAssetWriter
         do { writer = try AVAssetWriter(outputURL: videoURL, fileType: .mp4) } catch {
@@ -445,7 +448,7 @@ public enum LampAnimationRenderer {
     }
 
     /// The first eight hex digits of `file`'s SHA-256, read a piece at a time.
-    private static func fingerprint(of file: URL) throws -> String {
+    static func fingerprint(of file: URL) throws -> String {
         let reading = try FileHandle(forReadingFrom: file)
         defer { try? reading.close() }
         var hash = SHA256()
@@ -476,7 +479,7 @@ public enum LampAnimationRenderer {
     /// replaces is set aside, and if any rename fails the earlier ones are
     /// put back. Every step goes by the folder's handle, so no link on the way
     /// is followed, and only a plain file is ever replaced.
-    private static func publish(_ files: [(file: URL, name: String)], in folder: Int32) throws {
+    static func publish(_ files: [(file: URL, name: String)], in folder: Int32) throws {
         for (_, name) in files {
             guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else { throw RenderError.outputMoved }
             var existing = stat()

@@ -18,22 +18,24 @@ struct LampMCPServerTests {
         let all = LampMCPToolCatalog.tools(workspace: true)
         #expect(LampMCPToolCatalog.tools.count == 18)
         #expect(LampMCPToolCatalog.deckTools.count == 4)
-        #expect(LampMCPToolCatalog.animationTools.count == 1)
-        // It writes beside the page in a workspace, so only a session with one is offered it.
+        #expect(LampMCPToolCatalog.animationTools.count == 2)
+        // They write into a workspace, so only a session with one is offered them.
         #expect(!LampMCPToolCatalog.tools(workspace: false).contains { $0.name == "render_animation" })
+        #expect(!LampMCPToolCatalog.tools(workspace: false).contains { $0.name == "prepare_video" })
+        #expect(LampMCPToolCatalog.tools(workspace: true).contains { $0.name == "prepare_video" })
         #expect(LampMCPToolCatalog.writingTools.count == 2)
         #expect(LampMCPToolCatalog.writeTools.count == 3)
         #expect(LampMCPToolCatalog.writingImportTools.count == 3)
         // Both read-only: chats are read, never changed.
         #expect(LampMCPToolCatalog.chatTools.count == 2)
-        #expect(all.count == 34)
+        #expect(all.count == 35)
         #expect(Set(all.map(\.name)).count == all.count)
 
         // import_writings asks Lamp to show files for review, and what the
         // person accepts can replace a writing's text, so it says it writes.
-        // render_animation writes a video and still into the workspace.
-        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings", "render_animation"])
-        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings", "render_animation"])
+        // render_animation and prepare_video write a video and still into the workspace.
+        let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings", "render_animation", "prepare_video"])
+        #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings", "render_animation", "prepare_video"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(

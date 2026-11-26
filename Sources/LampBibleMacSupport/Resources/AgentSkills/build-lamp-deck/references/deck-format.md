@@ -712,6 +712,36 @@ the new video: after every render, write the names it returned into the deck.
   in the caption or the talk that it is a reconstruction, and leave out detail
   you cannot check.
 
+### A video you made: `prepare_video`
+
+When a page is not enough, make the video with anything you have or can
+install, with the writer's leave: Blender, run without its window
+(`/Applications/Blender.app/Contents/MacOS/Blender -b scene.blend -P build.py`),
+Manim, Remotion, a Swift program drawing with Metal, SceneKit or RealityKit, a
+browser, ffmpeg. Lamp ships none of them and asks nothing of how the video was
+made.
+
+- **Work in `.lamp-renders/`** at the top of the workspace. Frames, drafts and
+  caches there never sync; only what you prepare goes into the deck.
+- **Bring it in** with `prepare_video`: `"video"` is your file, relative to
+  the workspace, and `"as"` is `loop` (a picture's silent moving background,
+  the default) or `clip` (played once with its sound). Lamp saves it as HEVC
+  that looks the same, within a deck's limit (100 MB for a loop, 250 MB for a
+  clip; over it, at 1080p, and refused past that), takes its first frame as
+  its still, and writes both into `Assets`, named after the video and what it
+  holds, such as `Assets/tabernacle-1a2b3c4d.mp4` and `.jpg`. Use them as an
+  animation's are, and write the names into the deck again after every
+  prepare: they change whenever the video does.
+- **It must hold its own pictures.** A movie that refers to media in other
+  files is refused, and so is a file outside the workspace. Something
+  see-through is laid on black, and the answer says so: make it over the
+  background you want.
+- **Look at what comes back:** frames from across the video, and for a loop
+  its last frame and how far that is from its first. A loop that jumps where
+  it starts again needs an end that leads back into its beginning.
+- The rules for an animation hold: words on the slide, not in the video; quiet
+  colours behind words; a reconstruction said to be one.
+
 - Choose quiet footage whose colours stay near the still's: water, clouds,
   candlelight. Words are set once, for the still, and cannot follow a video
   that turns from dark to light.

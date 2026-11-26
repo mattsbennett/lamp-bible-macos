@@ -300,6 +300,9 @@ public actor LampMCPToolHandler {
         case "render_animation":
             return try await renderAnimation(arguments)
 
+        case "prepare_video":
+            return try await prepareVideo(arguments)
+
         case "find_place":
             guard let names = strings(arguments["names"]), !names.isEmpty else {
                 throw LampMCPToolError.missingArgument("names")
@@ -468,6 +471,69 @@ public actor LampMCPToolHandler {
             content.append(.image(
                 data: sample.jpeg.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil
             ))
+        }
+        return CallTool.Result(content: content, structuredContent: .object(report), isError: false)
+    }
+
+    /// A video the agent made, brought in as a deck can carry it.
+    private func prepareVideo(_ arguments: [String: Value]) async throws -> CallTool.Result {
+        guard let workspaceURL else { throw LampMCPToolError.animationNeedsWorkspace }
+        let path = try requiredString("video", in: arguments)
+        let purpose: LampVideoPreparation.Purpose
+        switch arguments["as"]?.stringValue ?? "loop" {
+        case "loop": purpose = .loop
+        case "clip": purpose = .clip
+        default: throw LampMCPToolError.invalidArgument("as", "loop or clip")
+        }
+        let prepared = try await LampVideoPreparation.prepare(path, in: workspaceURL, as: purpose)
+        // Named as the deck names them, inside the workspace's Assets.
+        let video = "\(LampVideoPreparation.assetsFolder)/\(prepared.videoURL.lastPathComponent)"
+        let still = "\(LampVideoPreparation.assetsFolder)/\(prepared.stillURL.lastPathComponent)"
+        var report: [String: Value] = [
+            "video": .string(video),
+            "still": .string(still),
+            "seconds": .double(prepared.seconds),
+            "width": .int(prepared.width),
+            "height": .int(prepared.height),
+            "bytes": .int(Int(prepared.bytes)),
+            "reducedTo1080p": .bool(prepared.reduced),
+            "use": .string(
+                (purpose == .loop
+                    ? "On an image block: \"assetPath\": \"\(still)\", \"video\": \"\(video)\"."
+                    : "On an image block: \"assetPath\": \"\(still)\", \"clip\": { \"source\": \"\(video)\" }.")
+                    + " These names change whenever the video does: write them into the deck again after each prepare."
+                    + " Look at the frames before using it."
+            ),
+        ]
+        if prepared.flattenedTransparency {
+            report["transparency"] = .string(
+                "The video was see-through, which a slide's video cannot be, so it was laid on black. "
+                    + "To have it over something else, make it over that."
+            )
+        }
+        if let seam = prepared.seam {
+            let closes = seam.difference <= LampVideoPreparation.seamThreshold
+            report["loopSeam"] = .object([
+                "difference": .double((seam.difference * 1_000).rounded() / 1_000),
+                "closes": .bool(closes),
+                "note": .string(closes
+                    ? "The last frame is close to the first, so the loop runs on without a jump."
+                    : "The last frame is far from the first, so the loop jumps each time it starts again. "
+                        + "Make the end lead back into the beginning."),
+            ])
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var content: [Tool.Content] = [
+            .text(text: String(decoding: try encoder.encode(report), as: UTF8.self), annotations: nil, _meta: nil),
+        ]
+        for sample in prepared.samples {
+            content.append(.text(text: String(format: "At %.1f s", sample.seconds), annotations: nil, _meta: nil))
+            content.append(.image(data: sample.jpeg.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
+        }
+        if let seam = prepared.seam {
+            content.append(.text(text: "The last frame, which the first follows", annotations: nil, _meta: nil))
+            content.append(.image(data: seam.lastFrame.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
         }
         return CallTool.Result(content: content, structuredContent: .object(report), isError: false)
     }
@@ -1116,7 +1182,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             """
         case .animationNeedsWorkspace:
             """
-            render_animation writes its video beside the page in a writing's \
+            render_animation and prepare_video write into a writing's \
             workspace, and this session serves none. Ask from a session opened \
             on the writing whose deck it is for.
             """

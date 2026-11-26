@@ -424,6 +424,41 @@ public enum LampMCPToolCatalog {
                 openWorldHint: false
             )
         ),
+        Tool(
+            name: "prepare_video",
+            description: """
+            Bring in a video you made yourself, with any tool (Blender, Manim, \
+            Remotion, a Metal or SceneKit program, a browser, ffmpeg), for a \
+            slide. Lamp saves it as HEVC that looks the same as what you made, \
+            within a deck's limit (100 MB for a looping video, 250 MB for a \
+            clip; over it, at 1080p), takes its first frame as its still, and \
+            writes both into the workspace's Assets folder, named after the \
+            video and what it holds (Assets/name-1a2b3c4d.mp4 and .jpg). A loop \
+            is silent; a clip keeps its sound. The names change whenever the \
+            video does, so write them into the deck again after every prepare. \
+            Returns frames from across it, and for a loop its last frame and \
+            how far that is from its first. Needs a session opened on a \
+            writing's workspace.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "video": string("The video, relative to the workspace, such as .lamp-renders/tabernacle.mp4."),
+                    "as": string("loop, a picture's silent moving background (the default), or clip, played once with its sound."),
+                ]),
+                "additionalProperties": .bool(false),
+                "required": .array([.string("video")]),
+            ]),
+            annotations: .init(
+                readOnlyHint: false,
+                // It replaces an earlier video and still of the same name.
+                destructiveHint: true,
+                // Not the same result twice: the file's own times differ, and its
+                // name is made from the whole file.
+                idempotentHint: false,
+                openWorldHint: false
+            )
+        ),
     ]
 
     /// Everything a session with a workspace is offered.
