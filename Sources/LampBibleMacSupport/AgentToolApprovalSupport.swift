@@ -354,10 +354,13 @@ public struct AgentToolApprovalSummary: Equatable, Sendable {
     /// The command or address in full; for a file, its path and what would
     /// be written into it, since the path alone doesn't decide it.
     public let detail: String?
+    /// What allowing it means, where that is more than the title says.
+    public let note: String?
 
-    public init(title: String, detail: String?) {
+    public init(title: String, detail: String?, note: String? = nil) {
         self.title = title
         self.detail = detail
+        self.note = note
     }
 
     public static func of(_ request: AgentToolApprovalRequest) -> AgentToolApprovalSummary {
@@ -367,6 +370,19 @@ public struct AgentToolApprovalSummary: Equatable, Sendable {
         }
         let rawInput = request.toolInputJSON == "{}" ? nil : request.toolInputJSON
         switch request.toolName {
+        case AgentCodexRun.commandToolName:
+            // The command and where it runs, then Codex's reason, said to be
+            // Codex's: it is the agent's account of itself, not Lamp's.
+            let parts = [
+                string("command"),
+                string("cwd").map { "In \($0)" },
+                string("reason").map { "Codex says: \($0)" },
+            ].compactMap { $0 }
+            return .init(
+                title: "Run a command outside its sandbox",
+                detail: parts.isEmpty ? rawInput : parts.joined(separator: "\n\n"),
+                note: "Outside its sandbox the command can read and change anything your account can, and use the network. Allow lets it run this once."
+            )
         case "Bash":
             return .init(title: "Run a command", detail: string("command") ?? rawInput)
         case "WebFetch":

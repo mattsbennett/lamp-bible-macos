@@ -620,16 +620,21 @@ struct AgentACPTests {
         #expect(catalogue.levels(for: "gemini-4-argon") == nil)
     }
 
-    @Test func aWritingsLampServerComesFromItsWorkspace() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("acp-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        try #"{"mcpServers":{"lamp":{"type":"stdio","command":"/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp","args":["--library-root","/lib"]}}}"#
-            .write(to: folder.appendingPathComponent(".mcp.json"), atomically: true, encoding: .utf8)
-        let servers = AgentACPRun.mcpServers(mode: .writing, workspace: folder)
+    /// The server Lamp made for the writing, never one named in the
+    /// workspace's `.mcp.json`, which the agent can rewrite.
+    @Test func aWritingsLampServerIsTheOneLampMade() throws {
+        let made = LampAgentMCPConfiguration(
+            helperExecutableURL: URL(fileURLWithPath: "/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp"),
+            libraryRootURL: URL(fileURLWithPath: "/lib"),
+            policyURL: URL(fileURLWithPath: "/policy.json"),
+            workspaceURL: URL(fileURLWithPath: "/lib/AgentWorkspaces/Writing/talk")
+        )
+        let servers = AgentACPRun.mcpServers(mode: .writing, writingServer: made)
         #expect(servers.count == 1)
         #expect(servers.first?["name"] as? String == "lamp")
-        #expect(servers.first?["args"] as? [String] == ["--library-root", "/lib"])
+        #expect(servers.first?["command"] as? String == "/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp")
+        #expect((servers.first?["args"] as? [String])?.contains("/lib/AgentWorkspaces/Writing/talk") == true)
+        #expect(AgentACPRun.mcpServers(mode: .writing, writingServer: nil).isEmpty)
     }
 
     private func request(_ call: [String: Any]) -> [String: Any] {

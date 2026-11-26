@@ -124,6 +124,26 @@ struct AgentCLIProcessResult: Sendable {
     )
 }
 
+/// The last few kilobytes a Codex server wrote to stderr, read on its own
+/// thread.
+private final class AgentCodexErrorTail: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tail = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        tail += chunk
+        if tail.count > 4096 { tail = Data(tail.suffix(4096)) }
+        lock.unlock()
+    }
+
+    var value: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return tail
+    }
+}
+
 final class AgentCLIProcessRunner: @unchecked Sendable {
     private let lock = NSLock()
     private var activeProcess: AgentSpawnedProcess?
@@ -137,6 +157,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Set while an ACP turn runs: how to ask the agent to stop, which is
     /// its own `session/cancel` rather than a signal.
     private var acpCancel: (() -> Void)?
+    /// Set while a Codex app-server turn runs: how the card's answer reaches
+    /// the request waiting on it.
+    private var codexAnswer: ((String, AgentToolApprovalAnswer) -> Bool)?
 
     /// How long a run may say nothing before Lamp stops it. A provider in
     /// trouble — retrying an overloaded API, or held at a usage limit — can
@@ -378,6 +401,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         executableName: String,
         workingDirectory: URL,
         mode: AgentChatMode,
+        writingServer: LampAgentMCPConfiguration? = nil,
         sessionID: String?,
         model: String?,
         effort: String?,
@@ -388,6 +412,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 continuation.resume(returning: runACPSynchronously(
                     executableName: executableName, workingDirectory: workingDirectory, mode: mode,
+                    writingServer: writingServer,
                     sessionID: sessionID, model: model, effort: effort, prompt: prompt, onLine: onLine
                 ))
             }
@@ -398,6 +423,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         executableName: String,
         workingDirectory: URL,
         mode: AgentChatMode,
+        writingServer: LampAgentMCPConfiguration?,
         sessionID resumed: String?,
         model: String?,
         effort: String?,
@@ -564,7 +590,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     case "initialize":
                         let open = AgentACPRun.open(
                             sessionID: resumed, workspace: workingDirectory,
-                            mcpServers: AgentACPRun.mcpServers(mode: mode, workspace: workingDirectory)
+                            mcpServers: AgentACPRun.mcpServers(mode: mode, writingServer: writingServer)
                         )
                         _ = request(open.method, open.params)
                     case "session/new", "session/resume":
@@ -616,6 +642,333 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 exitCode: answered && !failed ? 0 : 1,
                 output: String(decoding: collected, as: UTF8.self),
                 launchError: refusal,
+                stalled: wasStalled
+            )
+        } catch {
+            return AgentCLIProcessResult(exitCode: -1, output: "", launchError: error.localizedDescription)
+        }
+    }
+
+    /// One Codex writing turn over `codex app-server`; see `AgentCodexRun`.
+    /// What Codex sent, but for its commentary, is the output, line by line,
+    /// as for any provider. A command it asks to run outside its sandbox is
+    /// handed to `onApprovals` for the card, and answered by
+    /// `answerCodexApproval`; unanswered, it is declined after
+    /// `AgentCodexRun.answerSeconds`, and on Stop, never allowed.
+    func runCodexAppServer(
+        executableName: String,
+        workingDirectory: URL,
+        writingServer: LampAgentMCPConfiguration?,
+        threadID: String?,
+        model: String?,
+        effort: String?,
+        prompt: String,
+        answerSeconds: Double = AgentCodexRun.answerSeconds,
+        onLine: (@Sendable (String) -> Void)? = nil,
+        onApprovals: (@Sendable ([AgentToolApprovalRequest]) -> Void)? = nil
+    ) async -> AgentCLIProcessResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                continuation.resume(returning: runCodexAppServerSynchronously(
+                    executableName: executableName, workingDirectory: workingDirectory,
+                    writingServer: writingServer, threadID: threadID, model: model, effort: effort,
+                    prompt: prompt, answerSeconds: answerSeconds, onLine: onLine, onApprovals: onApprovals
+                ))
+            }
+        }
+    }
+
+    /// Gives a waiting Codex request the person's answer. False when it is
+    /// no longer waiting: answered by its timeout, or ended with the turn.
+    @discardableResult
+    func answerCodexApproval(_ id: String, with answer: AgentToolApprovalAnswer) -> Bool {
+        lock.lock()
+        let answering = codexAnswer
+        lock.unlock()
+        return answering?(id, answer) ?? false
+    }
+
+    private func runCodexAppServerSynchronously(
+        executableName: String,
+        workingDirectory: URL,
+        writingServer: LampAgentMCPConfiguration?,
+        threadID resumed: String?,
+        model: String?,
+        effort: String?,
+        prompt: String,
+        answerSeconds: Double,
+        onLine: (@Sendable (String) -> Void)?,
+        onApprovals: (@Sendable ([AgentToolApprovalRequest]) -> Void)?
+    ) -> AgentCLIProcessResult {
+        do {
+            let executableURL = try resolveExecutable(named: executableName)
+            guard !isCancelled else { return .stoppedBeforeStarting }
+            let process = AgentSpawnedProcess()
+            let input = Pipe()
+            let output = Pipe()
+            process.executableURL = executableURL
+            process.arguments = AgentCodexRun.launchArguments(writingServer: writingServer, effort: effort)
+            process.currentDirectoryURL = workingDirectory
+            AgentHelperProcesses.refuseSIGPIPE(input)
+            process.standardInput = input
+            process.standardOutput = output
+            // Its own logs, not the conversation; but where it ends before
+            // the protocol could say why, the reason is only there, so the
+            // last of it is kept.
+            let errors = Pipe()
+            process.standardError = errors
+            let errorTail = AgentCodexErrorTail()
+            let readingErrors = DispatchGroup()
+            var environment = AgentProcessEnvironment.cleaned(ProcessInfo.processInfo.environment)
+            environment["PWD"] = workingDirectory.path
+            process.environment = environment
+
+            // As in `runACPSynchronously`: one lock keeps lines whole on the
+            // server's input, the other guards what Stop and the card read.
+            let writeLock = NSLock()
+            let stateLock = NSLock()
+            func send(_ message: [String: Any]) {
+                // Slashes as written, so a method reads as itself in a log.
+                guard let data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes])
+                else { return }
+                writeLock.lock()
+                defer { writeLock.unlock() }
+                try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+            }
+
+            var thread: String?
+            var turn: String?
+            var interruptSent = false
+            var stopped = false
+            // Requests on the card, by Lamp's key: Codex's own id, to answer
+            // with, and the request as shown.
+            var waiting: [(key: String, id: Any, request: AgentToolApprovalRequest)] = []
+            func publish() {
+                // Called with `stateLock` held, so the list goes out in order.
+                onApprovals?(waiting.map(\.request))
+                setWaitingOnPerson(!waiting.isEmpty)
+            }
+            /// Answers one waiting request, once. After Stop, nothing is
+            /// allowed, whatever the answer: read from the runner's own
+            /// flag, which Stop sets before anything else, as well as this
+            /// turn's, set a moment later on another thread.
+            func settle(_ key: String, _ answer: AgentToolApprovalAnswer) -> Bool {
+                stateLock.lock()
+                guard let index = waiting.firstIndex(where: { $0.key == key }) else {
+                    stateLock.unlock()
+                    return false
+                }
+                let entry = waiting.remove(at: index)
+                let given = stopped || isCancelled ? .deny : answer
+                publish()
+                stateLock.unlock()
+                send(["id": entry.id, "result": AgentCodexRun.decision(given)])
+                return true
+            }
+            func declineAll() {
+                stateLock.lock()
+                let keys = waiting.map(\.key)
+                stateLock.unlock()
+                for key in keys { _ = settle(key, .deny) }
+            }
+
+            lock.lock()
+            activeProcess = process
+            codexAnswer = { settle($0, $1) }
+            acpCancel = { [weak self] in
+                // Nothing waiting is allowed after Stop; then the turn is
+                // interrupted, which lets Codex save, and a server that does
+                // not end is stopped with what it started.
+                stateLock.lock()
+                stopped = true
+                let toInterrupt = thread.flatMap { thread in turn.map { (thread, $0) } }
+                let first = !interruptSent
+                interruptSent = true
+                stateLock.unlock()
+                declineAll()
+                if let toInterrupt, first {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + Self.acpCancelGraceSeconds) {
+                        self?.stop(process)
+                    }
+                    send(["id": 1_000_000, "method": "turn/interrupt",
+                          "params": AgentCodexRun.interrupt(threadID: toInterrupt.0, turnID: toInterrupt.1)])
+                } else {
+                    self?.stop(process)
+                }
+            }
+            lock.unlock()
+            defer {
+                lock.lock()
+                if activeProcess === process { activeProcess = nil }
+                acpCancel = nil
+                codexAnswer = nil
+                lock.unlock()
+            }
+
+            guard !isCancelled else { return .stoppedBeforeStarting }
+            try AgentHelperProcesses.launch(process)
+            // Read once it runs: launching closes this end's writer, so the
+            // reader ends with the server, and one started for a launch that
+            // never happened would wait for ever.
+            readingErrors.enter()
+            DispatchQueue.global(qos: .utility).async {
+                defer { readingErrors.leave() }
+                let handle = errors.fileHandleForReading
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { return }
+                    errorTail.append(chunk)
+                }
+            }
+            let recording = recordMembers(of: process)
+            defer { recording.cancel() }
+            if isCancelled { stop(process) }
+            let watchdog = watchForStall(in: process)
+            defer { watchdog.cancel() }
+
+            var nextID = 1
+            var pending: [Int: String] = [:]
+            func request(_ method: String, _ params: [String: Any]) {
+                let id = nextID
+                nextID += 1
+                pending[id] = method
+                send(["id": id, "method": method, "params": params])
+            }
+            request("initialize", AgentCodexRun.initialize())
+            var answered = false
+            var failed = false
+            // Whether Codex said what went wrong, in the protocol.
+            var explained = false
+            var commentary = AgentCodexRun.Commentary()
+
+            let handle = output.fileHandleForReading
+            var collected = Data()
+            var reader = AgentChatLineReader()
+            reading: while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                lock.lock()
+                lastOutput = Date()
+                lock.unlock()
+                for line in reader.lines(from: chunk) {
+                    let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                    if let message, AgentCodexRun.isUnread(message) || commentary.isCommentary(message) { continue }
+                    collected += Data(line.utf8) + Data([0x0A])
+                    onLine?(line)
+                    guard let message else { continue }
+                    let params = message["params"] as? [String: Any] ?? [:]
+                    if let method = message["method"] as? String, let id = message["id"] {
+                        // A request from Codex.
+                        guard let key = AgentCodexRun.requestKey(id) else { continue }
+                        switch AgentCodexRun.reply(to: method, params: params, id: key) {
+                        case .ask(let approval):
+                            stateLock.lock()
+                            let refuse = stopped || isCancelled
+                            if !refuse {
+                                waiting.append((key, id, approval))
+                                publish()
+                            }
+                            stateLock.unlock()
+                            if refuse {
+                                send(["id": id, "result": AgentCodexRun.decision(.deny)])
+                            } else {
+                                DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) {
+                                    _ = settle(key, .deny)
+                                }
+                            }
+                        case .answer(let result):
+                            send(["id": id, "result": result])
+                        case .refuse(let reason):
+                            send(["id": id, "error": ["code": -32601, "message": reason]])
+                        }
+                        continue
+                    }
+                    if let method = message["method"] as? String {
+                        switch method {
+                        case "serverRequest/resolved":
+                            // Settled by Codex itself, the turn ending: the
+                            // card goes.
+                            if let id = params["requestId"], let key = AgentCodexRun.requestKey(id) {
+                                stateLock.lock()
+                                waiting.removeAll { $0.key == key }
+                                publish()
+                                stateLock.unlock()
+                            }
+                        case "turn/started":
+                            if let id = (params["turn"] as? [String: Any])?["id"] as? String {
+                                stateLock.lock(); turn = id; stateLock.unlock()
+                            }
+                        case "turn/completed":
+                            let status = (params["turn"] as? [String: Any])?["status"] as? String
+                            answered = status == "completed"
+                            failed = status == "failed"
+                            explained = true
+                            break reading
+                        case "error":
+                            explained = true
+                        default:
+                            break
+                        }
+                        continue
+                    }
+                    guard let id = message["id"] as? Int, let method = pending.removeValue(forKey: id) else { continue }
+                    if message["error"] != nil {
+                        failed = true
+                        explained = true
+                        break reading
+                    }
+                    let result = message["result"] as? [String: Any] ?? [:]
+                    switch method {
+                    case "initialize":
+                        send(["method": "initialized"])
+                        let open = AgentCodexRun.open(threadID: resumed, workspace: workingDirectory, model: model)
+                        request(open.method, open.params)
+                    case "thread/start", "thread/resume":
+                        guard let id = (result["thread"] as? [String: Any])?["id"] as? String else {
+                            failed = true
+                            break reading
+                        }
+                        stateLock.lock(); thread = id; stateLock.unlock()
+                        if isCancelled { break reading }
+                        request("turn/start", AgentCodexRun.turn(threadID: id, text: prompt))
+                    case "turn/start":
+                        if let id = (result["turn"] as? [String: Any])?["id"] as? String {
+                            stateLock.lock(); turn = id; stateLock.unlock()
+                        }
+                        // Stop pressed before the turn had a name to
+                        // interrupt it by.
+                        if isCancelled { acpCancel?() }
+                    default:
+                        break
+                    }
+                }
+            }
+            if let onLine, let last = reader.flush() { onLine(last) }
+            // Nothing outlives the turn on the card.
+            stateLock.lock(); stopped = true; stateLock.unlock()
+            declineAll()
+            try? input.fileHandleForWriting.close()
+            if !process.waitUntilExit(within: Self.stopGraceSeconds) {
+                stop(process)
+                process.waitUntilExit()
+            }
+            endWhatTheRunLeft(process)
+            readingErrors.wait()
+            AgentHelperProcesses.untrack(process)
+            process.release()
+            lock.lock()
+            let wasStalled = stalled
+            lock.unlock()
+            // Ended without a word from the protocol, and not by Stop: what
+            // Codex printed is the only account of why ("Codex exited with
+            // status 1" says nothing).
+            let unexplained = !answered && !explained && !isCancelled && !wasStalled
+            let printed = String(decoding: errorTail.value, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return AgentCLIProcessResult(
+                exitCode: answered && !failed ? 0 : 1,
+                output: String(decoding: collected, as: UTF8.self),
+                launchError: unexplained && !printed.isEmpty ? "Codex stopped before answering: \(printed)" : nil,
                 stalled: wasStalled
             )
         } catch {
@@ -721,6 +1074,11 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private static let versionLock = NSLock()
 
     func resolveExecutable(named name: String) throws -> URL {
+        // A path is already resolved; a login shell has nothing to add, and
+        // a startup file that prints would only garble it.
+        if name.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: name) {
+            return URL(fileURLWithPath: name)
+        }
         let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -1204,6 +1562,12 @@ private struct AgentToolApprovalCard: View {
                 .padding(8)
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
             }
+            if let note = summary.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let rule = request.alwaysAllowRule {
                 // Said in full, since it outlasts this chat.
                 Text("Always Allow saves permission for \(rule.description) in this writing, on this Mac.")
@@ -1673,7 +2037,28 @@ final class NativeAgentChatModel: ObservableObject {
     @Published private(set) var stoppedNotice: String?
     /// Tool calls the running reply is waiting on the person for, oldest
     /// first. Only a Claude writing chat asks; see `ClaudePermissionHook`.
-    @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = []
+    @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = [] {
+        didSet {
+            // Said as the turn's step, so wherever the turn is watched — a
+            // pane, or the phone that asked, which has no card — it reads
+            // as waiting on the person, not as working.
+            guard isRunning else { return }
+            guard let first = pendingApprovals.first else {
+                // Answered: back to what the turn was doing, which is what
+                // goes on now, the command it was waiting to run.
+                if case .tool(name: Self.waitingStepName, _) = activity { activity = activityBeforeWaiting }
+                return
+            }
+            let step = AgentChatActivity.tool(name: Self.waitingStepName, summary: AgentToolApprovalSummary.of(first).title)
+            if activity != step {
+                if case .tool(name: Self.waitingStepName, _) = activity {} else { activityBeforeWaiting = activity }
+                record(step)
+                activity = step
+            }
+        }
+    }
+    private static let waitingStepName = "Waiting for your answer on the Mac"
+    private var activityBeforeWaiting: AgentChatActivity?
     /// What the running reply is doing — thinking, a tool call, writing — for
     /// the pane to show while it does it. Cleared when the run ends. Claude
     /// only: the other providers' streams don't say, and `AgentChatWireParser`
@@ -1876,6 +2261,9 @@ final class NativeAgentChatModel: ObservableObject {
     private var cancelRequested = false
     private var loadingMessageID: UUID?
     private var approvalChannel: AgentToolApprovalChannel?
+    /// Whether the card's requests are a Codex turn's, answered over its
+    /// protocol rather than through a hook's folder.
+    private var codexApprovals = false
     /// The reply as it arrives, and as much of it as the pane has been shown.
     /// Shown on a timer rather than per fragment: a reply arrives as hundreds
     /// of small deltas, and redrawing the transcript for each one would put
@@ -2281,11 +2669,36 @@ final class NativeAgentChatModel: ObservableObject {
             lines.yield(parsed)
         }
         let result: AgentCLIProcessResult
-        if provider == .antigravity {
+        if wire == .codex, !mode.isReadOnly {
+            // In order, on the main thread: each list replaces the last.
+            let showApprovals: @Sendable ([AgentToolApprovalRequest]) -> Void = { [weak self] pending in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, self.isRunning else { return }
+                        if pending != self.pendingApprovals { self.pendingApprovals = pending }
+                    }
+                }
+            }
+            codexApprovals = true
+            result = await runner.runCodexAppServer(
+                executableName: provider.executable,
+                workingDirectory: workspace,
+                writingServer: WritingChatTurns.mcpConfiguration(forWorkspace: workspace),
+                threadID: resumedSessionID,
+                model: chosenModel,
+                effort: chosenEffort,
+                prompt: prompt,
+                onLine: onLine,
+                onApprovals: showApprovals
+            )
+            codexApprovals = false
+        } else if provider == .antigravity {
             result = await runner.runACP(
                 executableName: provider.executable,
                 workingDirectory: workspace,
                 mode: mode,
+                // Made by Lamp, never read from the workspace.
+                writingServer: mode == .writing ? WritingChatTurns.mcpConfiguration(forWorkspace: workspace) : nil,
                 sessionID: resumedSessionID,
                 model: chosenModel,
                 effort: chosenEffort,
@@ -2411,8 +2824,16 @@ final class NativeAgentChatModel: ObservableObject {
         )
     }
 
-    /// Gives the waiting hook the person's answer.
+    /// Gives the waiting hook, or the waiting Codex request, the person's
+    /// answer.
     func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer) {
+        if codexApprovals {
+            if !runner.answerCodexApproval(request.id, with: answer) {
+                errorMessage = "That request had already ended, and the command did not run."
+            }
+            pendingApprovals.removeAll { $0.id == request.id }
+            return
+        }
         guard let approvalChannel else { return }
         do {
             try approvalChannel.answer(request.id, with: answer)

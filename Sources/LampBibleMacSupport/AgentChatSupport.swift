@@ -928,6 +928,11 @@ public enum AgentChatWireParser {
     }
 
     private static func parseCodex(_ object: [String: Any]) -> [AgentChatWireEvent] {
+        // `codex app-server` speaks in messages, `codex exec --json` in typed
+        // events; a line is read by which it is.
+        if object["method"] != nil || object["result"] != nil || object["error"] is [String: Any] {
+            return parseCodexAppServer(object)
+        }
         switch object.string("type") {
         case "thread.started":
             return object.string("thread_id").map { [.sessionStarted($0)] } ?? []
@@ -939,6 +944,73 @@ public enum AgentChatWireParser {
             return [.finalText(text)]
         case "turn.failed", "error":
             return failureEvents(in: object)
+        default:
+            return []
+        }
+    }
+
+    /// A writing chat's turn over `codex app-server`; see `AgentCodexRun`.
+    /// Commentary is kept out by the runner before a line arrives here.
+    private static func parseCodexAppServer(_ object: [String: Any]) -> [AgentChatWireEvent] {
+        let params = object.dictionary("params")
+        guard let method = object.string("method") else {
+            // The answer to one of Lamp's requests: the thread it opened, or
+            // why it could not — "no rollout found for thread id …" for one
+            // Codex no longer has, which the resume path reads.
+            if let thread = object.dictionary("result")?.dictionary("thread"), let id = thread.string("id") {
+                return [.sessionStarted(id)]
+            }
+            return object["error"] is [String: Any] ? failureEvents(in: object) : []
+        }
+        switch method {
+        case "thread/started":
+            return params?.dictionary("thread")?.string("id").map { [.sessionStarted($0)] } ?? []
+        case "item/agentMessage/delta":
+            return params?.string("delta").flatMap { $0.isEmpty ? nil : [.textFragment($0)] } ?? []
+        case "item/started":
+            guard let item = params?.dictionary("item") else { return [] }
+            switch item.string("type") {
+            case "reasoning":
+                return [.activity(.thinking(estimatedTokens: nil))]
+            case "agentMessage":
+                return [.activity(.writing)]
+            case "commandExecution":
+                // Shortened, as Claude's commands are: a step is kept in the
+                // transcript and sent to a phone, and is no place for the
+                // whole of one. The card has it in full.
+                return [.activity(.tool(
+                    name: "Command",
+                    summary: AgentChatToolDescription.summary(of: item.string("command").map { ["command": AgentCodexRun.shown($0)] })
+                ))]
+            case "mcpToolCall":
+                guard let server = item.string("server"), let tool = item.string("tool") else { return [] }
+                return [.activity(.tool(
+                    name: "mcp__\(server)__\(tool)",
+                    summary: AgentChatToolDescription.summary(of: item.dictionary("arguments"))
+                ))]
+            case "webSearch":
+                return [.activity(.tool(name: "WebSearch", summary: item.string("query")))]
+            case "fileChange":
+                let paths = (item["changes"] as? [[String: Any]] ?? []).compactMap { $0.string("path") }
+                return [.activity(.tool(name: "Edit", summary: AgentChatToolDescription.summary(of: paths.first.map { ["path": $0] })))]
+            default:
+                return []
+            }
+        case "item/completed":
+            guard let item = params?.dictionary("item") else { return [] }
+            if item.string("type") == "agentMessage" {
+                guard let text = item.string("text"), !text.isEmpty else { return [] }
+                return [.finalText(text)]
+            }
+            return ["commandExecution", "mcpToolCall", "webSearch", "fileChange"].contains(item.string("type") ?? "")
+                ? [.activity(.toolFinished)] : []
+        case "turn/completed":
+            guard let turn = params?.dictionary("turn"), turn.string("status") == "failed" else { return [] }
+            return failureEvents(in: turn)
+        case "error":
+            // One Codex will try again is not yet a failure.
+            guard params?.bool("willRetry") != true, let params else { return [] }
+            return failureEvents(in: params)
         default:
             return []
         }
@@ -1799,20 +1871,19 @@ public enum AgentACPRun {
     }
 
     /// Lamp's MCP server, as ACP describes a stdio server. A reader chat's
-    /// comes from its mode; a writing's from the `.mcp.json` Lamp writes in
-    /// its workspace for every provider.
-    public static func mcpServers(mode: AgentChatMode, workspace: URL) -> [[String: Any]] {
+    /// comes from its mode; a writing's is the one Lamp makes for it from
+    /// the workspace's path (`WritingChatTurns.mcpConfiguration`), never the
+    /// workspace's `.mcp.json`, which the agent can rewrite to name any
+    /// program for Antigravity to start.
+    public static func mcpServers(mode: AgentChatMode, writingServer: LampAgentMCPConfiguration?) -> [[String: Any]] {
         switch mode {
         case .reader(let configuration):
             let answering = configuration.answering(provider: AgentChatWireProvider.antigravity.rawValue)
             return [server(command: answering.helperExecutableURL.path, arguments: answering.arguments)]
         case .writing:
-            guard let data = try? Data(contentsOf: workspace.appendingPathComponent(".mcp.json")),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let lamp = (object["mcpServers"] as? [String: Any])?["lamp"] as? [String: Any],
-                  let command = lamp["command"] as? String
-            else { return [] }
-            return [server(command: command, arguments: lamp["args"] as? [String] ?? [])]
+            guard let writingServer else { return [] }
+            let answering = writingServer.answering(provider: AgentChatWireProvider.antigravity.rawValue)
+            return [server(command: answering.helperExecutableURL.path, arguments: answering.arguments)]
         }
     }
 
@@ -1923,6 +1994,193 @@ public enum AgentACPRun {
         defer { free(real) }
         let base = String(cString: real)
         return missing.isEmpty ? base : (base == "/" ? "" : base) + "/" + missing.joined(separator: "/")
+    }
+}
+
+/// One Codex writing-chat turn over `codex app-server`, so a command Codex
+/// wants to run outside its sandbox — Blender reaching the GPU, which the
+/// sandbox never opens — is put to the person rather than refused unasked,
+/// as `codex exec` refuses every such request (`decisions/0028`). Reader
+/// chats stay on `codex exec`, which can never ask.
+///
+/// A turn is one process, as with the other CLIs: `initialize`, then
+/// `thread/start` or `thread/resume`, then `turn/start`, ending at
+/// `turn/completed`; closing its input ends the server (0.07 s, measured).
+/// The messages are those Codex 0.170 sends, pinned by a recorded turn in
+/// `AgentCodexRunTests`; the protocol is labelled experimental, so anything
+/// else Codex asks of Lamp is answered as a refusal, never by guessing.
+public enum AgentCodexRun {
+    /// The tool name a Codex command request carries on Lamp's approval
+    /// card, where Claude's carry `Bash` and the like.
+    public static let commandToolName = "codex.command"
+
+    /// How long a request waits for the person before it is declined: the
+    /// Claude hook's wait, so both providers' cards behave alike.
+    public static let answerSeconds = Double(ClaudePermissionHook.waitSeconds)
+
+    /// The server, with Lamp's own MCP server and the chosen thinking level
+    /// on its command line, where Codex reads settings for a folder it has
+    /// not been told to trust.
+    public static func launchArguments(writingServer: LampAgentMCPConfiguration?, effort: String?) -> [String] {
+        ["app-server"]
+            + (writingServer?.codexWritingOverrides ?? [])
+            + AgentChatEffortChoice.arguments(for: effort, provider: .codex)
+    }
+
+    public static func initialize() -> [String: Any] {
+        ["clientInfo": ["name": "lamp-bible", "title": "Lamp Bible", "version": "1"]]
+    }
+
+    /// `thread/resume` for a thread Lamp has, else `thread/start`, with the
+    /// sandbox, the approval policy and who answers set every time: a
+    /// person whose Codex settings name `auto_review` would otherwise have
+    /// a model answer, and one whose settings say `never` would never be
+    /// asked. A thread `codex exec` made resumes here (tried).
+    public static func open(threadID: String?, workspace: URL, model: String?) -> (method: String, params: [String: Any]) {
+        var params: [String: Any] = [
+            "cwd": workspace.path,
+            "sandbox": "workspace-write",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+        ]
+        if let model = AgentChatModelChoice.canonical(model) { params["model"] = model }
+        guard let threadID else { return ("thread/start", params) }
+        params["threadId"] = threadID
+        // Its earlier turns are Codex's to keep; the chat has its own copy.
+        params["excludeTurns"] = true
+        return ("thread/resume", params)
+    }
+
+    public static func turn(threadID: String, text: String) -> [String: Any] {
+        ["threadId": threadID, "input": [["type": "text", "text": text]]]
+    }
+
+    public static func interrupt(threadID: String, turnID: String) -> [String: Any] {
+        ["threadId": threadID, "turnId": turnID]
+    }
+
+    /// What Lamp does with a request Codex makes of it.
+    public enum Reply {
+        /// Put to the person on the approval card; answered by `decision`.
+        case ask(AgentToolApprovalRequest)
+        /// Answered at once with this result.
+        case answer([String: Any])
+        /// Answered at once as an error: a request Lamp has no part in.
+        case refuse(String)
+    }
+
+    /// Only a command, named in full and asked about for the sandbox, comes
+    /// to the person. Everything else is turned down where it stands, the
+    /// turn going on without it:
+    ///
+    /// - a network prompt (`networkApprovalContext`): an escalated command
+    ///   is already unsandboxed and its card says so; this is the managed
+    ///   network asking for a host, which the card cannot put plainly;
+    /// - a file change outside the workspace: what it writes is not in the
+    ///   request, and a card must show what it allows;
+    /// - more permissions for the rest of the turn, a question for the
+    ///   person, an MCP server's form, and the older approval messages.
+    public static func reply(to method: String, params: [String: Any], id: String) -> Reply {
+        switch method {
+        case "item/commandExecution/requestApproval":
+            let kind = params["kind"] as? String ?? "command"
+            guard kind == "command",
+                  params["networkApprovalContext"] == nil || params["networkApprovalContext"] is NSNull,
+                  let command = (params["command"] as? String).flatMap({ $0.isEmpty ? nil : $0 })
+            else { return .answer(["decision": "decline"]) }
+            var input: [String: Any] = ["command": shown(command)]
+            if let cwd = params["cwd"] as? String, !cwd.isEmpty { input["cwd"] = cwd }
+            if let reason = params["reason"] as? String, !reason.isEmpty { input["reason"] = reason }
+            let data = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+            return .ask(AgentToolApprovalRequest(
+                id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self)
+            ))
+        case "item/fileChange/requestApproval":
+            return .answer(["decision": "decline"])
+        case "item/permissions/requestApproval":
+            return .answer(["permissions": [String: Any](), "scope": "turn"])
+        case "item/tool/requestUserInput":
+            return .answer(["answers": [String: Any]()])
+        case "mcpServer/elicitation/request":
+            return .answer(["action": "decline"])
+        case "applyPatchApproval", "execCommandApproval":
+            return .answer(["decision": "denied"])
+        default:
+            return .refuse("Lamp does not provide \(method).")
+        }
+    }
+
+    /// The answer to a command request. Only Allow Once and Deny: never
+    /// Codex's own remembered approvals, which write a rule into the
+    /// person's Codex settings for every session on the Mac, reader chats
+    /// included. `decline` lets the turn go on, telling Codex no; Codex
+    /// 0.170 accepts it though its request lists only `accept`, the rule
+    /// and `cancel` (recorded).
+    public static func decision(_ answer: AgentToolApprovalAnswer) -> [String: Any] {
+        if case .allow = answer { return ["decision": "accept"] }
+        return ["decision": "decline"]
+    }
+
+    /// A request's identity, as Lamp keys its card: Codex numbers its own
+    /// requests from 0, apart from Lamp's.
+    public static func requestKey(_ id: Any) -> String? {
+        if let number = id as? Int { return "codex-\(number)" }
+        if let text = id as? String { return "codex-\(text)" }
+        return nil
+    }
+
+    /// The command as it will run, without the `zsh -lc '…'` Codex puts
+    /// round it, where that is all it is: a single-quoted body holds no
+    /// quote of its own, so nothing is hidden by taking it out.
+    static func shown(_ command: String) -> String {
+        for shell in ["/bin/zsh", "/bin/bash", "/bin/sh"] {
+            let prefix = "\(shell) -lc '"
+            guard command.hasPrefix(prefix), command.hasSuffix("'"), command.count > prefix.count + 1 else { continue }
+            let body = command.dropFirst(prefix.count).dropLast()
+            if !body.contains("'") { return String(body) }
+        }
+        return command
+    }
+
+    /// Messages Lamp reads nothing from, dropped as they arrive: a command's
+    /// output streams line by line for as long as it runs, and a render's
+    /// log is long. Each still counts as the turn saying something.
+    public static func isUnread(_ message: [String: Any]) -> Bool {
+        guard message["id"] == nil, let method = message["method"] as? String else { return false }
+        return unread.contains(method)
+    }
+
+    private static let unread: Set<String> = [
+        "item/commandExecution/outputDelta", "item/fileChange/outputDelta", "command/exec/outputDelta",
+        "process/outputDelta", "item/reasoning/textDelta", "item/reasoning/summaryTextDelta",
+        "item/reasoning/summaryPartAdded", "item/plan/delta", "thread/tokenUsage/updated",
+        "account/rateLimits/updated", "hook/started", "hook/completed", "mcpServer/startupStatus/updated",
+    ]
+
+    /// Keeps a turn's commentary out of its reply. Codex streams what it says
+    /// on the way ("I'll check the folder, then…") in the same deltas as its
+    /// answer; only the item's start says which it is.
+    public struct Commentary {
+        private var ids: Set<String> = []
+
+        public init() {}
+
+        /// Whether `message` is commentary, to be left out of the reply.
+        public mutating func isCommentary(_ message: [String: Any]) -> Bool {
+            let params = message["params"] as? [String: Any]
+            switch message["method"] as? String {
+            case "item/started", "item/completed":
+                guard let item = params?["item"] as? [String: Any], item["type"] as? String == "agentMessage",
+                      item["phase"] as? String == "commentary", let id = item["id"] as? String
+                else { return false }
+                ids.insert(id)
+                return true
+            case "item/agentMessage/delta":
+                return (params?["itemId"] as? String).map(ids.contains) ?? false
+            default:
+                return false
+            }
+        }
     }
 }
 
