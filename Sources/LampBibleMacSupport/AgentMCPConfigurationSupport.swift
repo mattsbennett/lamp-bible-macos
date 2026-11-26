@@ -115,6 +115,11 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
     /// Ten minutes for a call: a workspace's tools include making an
     /// animation and preparing a video, which encode, and may wait their
     /// turn at the encoder (`decisions/0026`).
+    ///
+    /// `"auto"` here: the Codex terminal reads this file in a workspace the
+    /// person trusted, and can ask them. Lamp's own headless chats, which
+    /// cannot, are given the server approved on their command line
+    /// (`codexCommandLineOverrides`, `codexWritingOverrides`).
     public var codexTOML: String {
         let encodedArguments = arguments.map(Self.quoted).joined(separator: ", ")
         return """
@@ -133,7 +138,23 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         [
             // Replace the server table so a reader session cannot inherit unrelated
             // writable MCP tools from the user's global coding configuration.
-            "-c", "mcp_servers={lamp={command=\(Self.quoted(helperExecutableURL.path)),args=[\(arguments.map(Self.quoted).joined(separator: ", "))],required=true,default_tools_approval_mode=\"auto\"}}",
+            "-c", "mcp_servers={lamp={command=\(Self.quoted(helperExecutableURL.path)),args=[\(arguments.map(Self.quoted).joined(separator: ", "))],required=true,tool_timeout_sec=600,default_tools_approval_mode=\"approve\"}}",
+        ]
+    }
+
+    /// Lamp's server for a headless Codex writing chat, on its command line.
+    ///
+    /// Codex reads a project's own `.codex/config.toml` only in a folder the
+    /// person trusted, and no writing workspace is one, so a Codex writing
+    /// chat had none of Lamp's tools (tried, 2026-11-26). Built from this
+    /// configuration, which Lamp makes, never from a file in the workspace,
+    /// which the agent can change: a server named there would be started
+    /// outside the sandbox. Approved, since `codex exec` cannot ask: under
+    /// `"auto"` it refused every Lamp tool marked as changing anything. Set
+    /// as one server, so the person's others stay.
+    public var codexWritingOverrides: [String] {
+        [
+            "-c", "mcp_servers.lamp={command=\(Self.quoted(helperExecutableURL.path)),args=[\(arguments.map(Self.quoted).joined(separator: ", "))],required=true,startup_timeout_sec=15,tool_timeout_sec=600,default_tools_approval_mode=\"approve\"}",
         ]
     }
 

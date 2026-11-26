@@ -684,6 +684,36 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         return major
     }
 
+    /// Whether `codex exec --help` lists `flag`, asked once per executable
+    /// and kept; nil where the help could not be read.
+    func codexExecTakes(_ flag: String, executableNamed name: String) -> Bool? {
+        let key = "\(name) exec \(flag)"
+        Self.versionLock.lock()
+        let known = Self.flagsByKey[key]
+        Self.versionLock.unlock()
+        if let known { return known }
+        guard let url = try? resolveExecutable(named: name) else { return nil }
+        let process = AgentSpawnedProcess()
+        let output = Pipe()
+        process.executableURL = url
+        process.arguments = ["exec", "--help"]
+        process.standardOutput = output
+        guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }
+        Self.giveUp(on: process, after: 20)
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        AgentHelperProcesses.untrack(process)
+        process.release()
+        let text = String(decoding: data, as: UTF8.self)
+        let takes: Bool? = text.isEmpty ? nil : text.contains(flag)
+        Self.versionLock.lock()
+        Self.flagsByKey[key] = takes
+        Self.versionLock.unlock()
+        return takes
+    }
+
+    private nonisolated(unsafe) static var flagsByKey: [String: Bool?] = [:]
+
     // Shared across runners — a reader chat and a writing chat each have their
     // own — so it is guarded. Two chats answering at once would otherwise be
     // writing this dictionary from two threads.
@@ -2226,6 +2256,11 @@ final class NativeAgentChatModel: ObservableObject {
         let providerMajorVersion = await Task.detached {
             runner.majorVersion(ofExecutableNamed: executable)
         }.value
+        // A Codex older than `--ignore-rules` refuses it and every reader
+        // chat with it; unknown is taken as the current Codex, which has it.
+        let codexIgnoresRules = wire == .codex && mode.isReadOnly
+            ? (await Task.detached { runner.codexExecTakes("--ignore-rules", executableNamed: executable) }.value ?? true)
+            : true
         // Read as the run starts rather than held on the model: the picker
         // writes straight to this chat's own choices, and a chat left open
         // while they changed would otherwise keep launching the old one. This
@@ -2269,7 +2304,11 @@ final class NativeAgentChatModel: ObservableObject {
                     permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
                     model: chosenModel,
                     effort: chosenEffort,
-                    providerMajorVersion: providerMajorVersion
+                    providerMajorVersion: providerMajorVersion,
+                    codexIgnoresRules: codexIgnoresRules,
+                    // Made by Lamp from the workspace's path, never read
+                    // from a file the agent can change.
+                    writingServer: mode == .writing ? WritingChatTurns.mcpConfiguration(forWorkspace: workspace) : nil
                 ),
                 workingDirectory: workspace,
                 onLine: onLine

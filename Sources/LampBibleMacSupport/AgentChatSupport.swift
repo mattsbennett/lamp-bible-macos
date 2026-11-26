@@ -440,7 +440,9 @@ public enum AgentChatLaunchArguments {
         permissionHookSettings: String? = nil,
         model: String? = nil,
         effort: String? = nil,
-        providerMajorVersion: Int? = nil
+        providerMajorVersion: Int? = nil,
+        codexIgnoresRules: Bool = true,
+        writingServer: LampAgentMCPConfiguration? = nil
     ) -> [String] {
         // The effort is given to both: one of them takes it. A provider with a
         // setting of its own gets a flag for it, and OpenCode, which has none,
@@ -460,7 +462,19 @@ public enum AgentChatLaunchArguments {
             if case .reader(let configuration) = mode {
                 // Explicit overrides also work before a generated workspace is trusted.
                 arguments += ["-c", "approval_policy=\"never\""]
+                // No exec-policy rules: an `allow` rule in the person's Codex
+                // settings runs a matching command outside the sandbox
+                // without asking, whatever the policy, which a reader chat
+                // must never do. Their `forbidden` rules go too; the chat
+                // stays read-only and offline in its sandbox without them.
+                // Not on a Codex too old to take the flag, which would
+                // refuse every reader chat.
+                if codexIgnoresRules { arguments += ["--ignore-rules"] }
                 arguments += configuration.answering(provider: provider.rawValue).codexCommandLineOverrides
+            } else if let writingServer {
+                // A writing workspace is not trusted either, so its own
+                // settings file goes unread; Lamp's server is given here.
+                arguments += writingServer.codexWritingOverrides
             }
             if let sessionID { arguments += ["resume", sessionID] }
             arguments += ["--", prompt]

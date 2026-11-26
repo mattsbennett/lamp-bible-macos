@@ -191,6 +191,7 @@ public actor LampMCPToolHandler {
             return try result(try await library.planWritingImport(files.files).report)
 
         case "import_writings":
+            try refuseInAReaderChat()
             return try await importWritings(arguments)
 
         case "writing_import_status":
@@ -349,6 +350,7 @@ public actor LampMCPToolHandler {
             }
 
         case "write_writing_draft":
+            try refuseInAReaderChat()
             return try await writeWritingDraft(arguments)
 
         default:
@@ -476,6 +478,14 @@ public actor LampMCPToolHandler {
             ))
         }
         return CallTool.Result(content: content, structuredContent: .object(report), isError: false)
+    }
+
+    /// A reader chat is read-only but for starting a writing the reader asks
+    /// for (`ReaderChatContext`). Refused here, where every provider's
+    /// reader chat reaches, rather than left to each one's tool list:
+    /// Claude's allowed every Lamp tool, and Codex's are approved.
+    private func refuseInAReaderChat() throws {
+        if readerChatID != nil { throw LampMCPToolError.readerChatCannotChangeWritings }
     }
 
     /// A video the agent made, brought in as a deck can carry it.
@@ -1211,6 +1221,7 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case noLibraryRoot
     case noWritingWorkspace(String)
     case writingNotAllowed
+    case readerChatCannotChangeWritings
     case readingPlansNotAllowed
     case writingStartsNotAllowed
     case writingImportsNotAllowed
@@ -1256,6 +1267,13 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             """
         case .noLibraryRoot:
             "This session was started without a library, so it has no writings."
+        case .readerChatCannotChangeWritings:
+            """
+            A reader chat cannot change or import writings: it is a \
+            conversation about scripture, and can only start a new writing \
+            when the reader asks for one, with start_writing. Nothing was \
+            changed.
+            """
         case .writingNotAllowed:
             """
             Lamp is not letting other apps change writings. Turn on "Allow \

@@ -57,6 +57,51 @@ struct AgentMCPConfigurationSupportTests {
         #expect(!reader.arguments.contains("--workspace"))
     }
 
+    /// Codex reads a project's own settings only in a folder the person
+    /// trusted, and a writing workspace is not one, so a Codex writing chat
+    /// is given Lamp's server on its command line, approved, since
+    /// `codex exec` cannot ask; built from Lamp's configuration, never the
+    /// workspace's files. The project file stays "auto", for the Codex
+    /// terminal, which can ask.
+    @Test func codexIsGivenLampsServerApprovedInEveryHeadlessChat() throws {
+        let workspace = URL(fileURLWithPath: "/tmp/library/AgentWorkspaces/Writing/talk", isDirectory: true)
+        let configuration = LampAgentMCPConfiguration(
+            helperExecutableURL: URL(fileURLWithPath: "/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp"),
+            libraryRootURL: URL(fileURLWithPath: "/tmp/library"),
+            policyURL: URL(fileURLWithPath: "/tmp/policy.json"),
+            workspaceURL: workspace
+        )
+        #expect(configuration.codexTOML.contains(#"default_tools_approval_mode = "auto""#))
+
+        let writing = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Write", sessionID: "thread-1", proposedSessionID: nil, writingServer: configuration
+        )
+        let override = try #require(writing.firstIndex(of: "-c").map { writing[$0 + 1] })
+        #expect(override.hasPrefix(#"mcp_servers.lamp={command="/Applications/Lamp Bible.app/Contents/Helpers/lamp-mcp""#))
+        #expect(override.contains(workspace.path))
+        #expect(override.contains(#"default_tools_approval_mode="approve""#))
+        // Before `resume`, which takes the flags after it as its own.
+        let resume = try #require(writing.firstIndex(of: "resume"))
+        #expect(writing.firstIndex(of: "-c")! < resume)
+        // Without a server Lamp made, none is named.
+        #expect(!AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Write", sessionID: nil, proposedSessionID: nil
+        ).contains("-c"))
+
+        // A reader chat's own server, approved too, and no rules read.
+        let reader = AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: nil, proposedSessionID: nil, mode: .reader(configuration)
+        )
+        #expect(reader.contains { $0.hasPrefix("mcp_servers={lamp=") && $0.contains(#"default_tools_approval_mode="approve""#) })
+        #expect(reader.contains("--ignore-rules"))
+        #expect(!writing.contains("--ignore-rules"))
+        // Except on a Codex too old to take it, which would refuse the chat.
+        #expect(!AgentChatLaunchArguments.make(
+            provider: .codex, prompt: "Read", sessionID: nil, proposedSessionID: nil,
+            mode: .reader(configuration), codexIgnoresRules: false
+        ).contains("--ignore-rules"))
+    }
+
     @Test func writesAllThreeProjectLocalFiles() throws {
         let workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("lamp-agent-config-tests-\(UUID().uuidString)", isDirectory: true)

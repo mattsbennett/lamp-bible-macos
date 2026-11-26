@@ -36,6 +36,10 @@ struct LampMCPServerTests {
         // render_animation and prepare_video write a video and still into the workspace.
         let writing = Set(LampMCPToolCatalog.writeTools.map(\.name)).union(["import_writings", "render_animation", "prepare_video"])
         #expect(writing == ["write_writing_draft", "add_reading_plan", "start_writing", "import_writings", "render_animation", "prepare_video"])
+        // Only these take anything away; Codex asks before a destructive
+        // tool unless told Lamp's are approved.
+        #expect(Set(all.filter { $0.annotations.destructiveHint == true }.map(\.name))
+            == ["write_writing_draft", "import_writings", "render_animation", "prepare_video"])
         for tool in all {
             if writing.contains(tool.name) {
                 #expect(
@@ -894,6 +898,19 @@ extension LampMCPClientCompatibilityTests {
         #expect(description.contains("Settings"))
         #expect(tool.annotations.readOnlyHint == false)
         #expect(tool.annotations.destructiveHint == false, "a writing that was not there before")
+    }
+
+    /// A reader chat changes no writing and imports none, whichever
+    /// provider's it is and whatever the settings allow other apps.
+    @Test func aReaderChatCannotChangeOrImportWritings() async throws {
+        let fixture = try await writingFixture(allowsWriting: true, allowsReadingPlans: true, allowsWritingStarts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        for name in ["write_writing_draft", "import_writings"] {
+            await #expect(throws: LampMCPToolError.readerChatCannotChangeWritings) {
+                try await handler(fixture, readerChatID: UUID()).call(name: name, arguments: [:])
+            }
+        }
+        #expect(LampMCPToolError.readerChatCannotChangeWritings.localizedDescription.contains("Nothing was changed"))
     }
 
     /// Refused out loud, so the agent does not tell the reader a writing

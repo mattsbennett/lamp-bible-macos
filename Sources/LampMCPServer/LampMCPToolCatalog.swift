@@ -457,8 +457,6 @@ public enum LampMCPToolCatalog {
                 readOnlyHint: false,
                 // It replaces an earlier video and still of the same name.
                 destructiveHint: true,
-                // Not the same result twice: the file's own times differ, and its
-                // name is made from the whole file.
                 idempotentHint: false,
                 openWorldHint: false
             )

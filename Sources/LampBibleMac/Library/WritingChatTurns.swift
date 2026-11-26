@@ -83,6 +83,30 @@ enum WritingChatTurns {
         return workspace
     }
 
+    /// Lamp's server for the writing whose workspace is `workspace`, made as
+    /// `prepare` makes it, from what Lamp knows: the helper in the app, the
+    /// library the workspace sits in (`<library>/AgentWorkspaces/Writing/…`,
+    /// as `LampWritingWorkspace.root` places it), its access policy and the
+    /// bundled modules. Nil for a folder that is not a writing's workspace.
+    static func mcpConfiguration(
+        forWorkspace workspace: URL,
+        helperExecutableURL: URL? = AgentModuleAccessPreferences.mcpHelperExecutableURL
+    ) -> LampAgentMCPConfiguration? {
+        let writing = workspace.deletingLastPathComponent()
+        let workspaces = writing.deletingLastPathComponent()
+        guard writing.lastPathComponent == "Writing", workspaces.lastPathComponent == "AgentWorkspaces",
+              let helperExecutableURL
+        else { return nil }
+        let libraryRootURL = workspaces.deletingLastPathComponent()
+        return LampAgentMCPConfiguration(
+            helperExecutableURL: helperExecutableURL,
+            libraryRootURL: libraryRootURL,
+            bundledModulesArchiveURL: Bundle.main.url(forResource: "bundled_modules.db", withExtension: "zlib"),
+            policyURL: AgentModuleAccessPreferences.accessPolicyURL(libraryRootURL: libraryRootURL),
+            workspaceURL: workspace
+        )
+    }
+
     /// The chat on a writing's workspace: the same model its window shows,
     /// if one is open.
     static func model(provider: AIProviderCLI, workspace: URL) -> NativeAgentChatModel {
