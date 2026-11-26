@@ -2455,6 +2455,13 @@ struct DevotionalEditorView: View {
                 markedMarkdown: clear.marked, pageText: clear.pageText, askedIn: askedIn
             )
         }
+        // The page's context menu, as the toolbar's review menu does it:
+        // each asks the page what is selected when chosen.
+        coordinator.onMenuMarkAsReviewed = { markSelectionAsReviewed() }
+        coordinator.onMenuRestoreWording = { offerRestoreForSelection() }
+        coordinator.menuCanRestoreWording = { [weak reviewSession] in
+            !(reviewSession?.restorable.isEmpty ?? true)
+        }
         coordinator.onReviewMarksRejected = { [weak reviewSession] asked in
             guard let askedIn = asked as? WritingReviewKey else { return }
             reviewSession?.marksRejected(askedIn: askedIn)

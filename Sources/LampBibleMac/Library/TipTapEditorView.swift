@@ -324,6 +324,15 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     /// changes anything: the host works out the writing that results and
     /// hands it back through `restoreWording`.
     var onReviewRestore: ((TipTapReviewRestore) -> Void)?
+    /// The review commands of the page's context menu, as the Markdown
+    /// editor's has them: each acts on the page's selection, and the menu
+    /// offers them only while the page shows marks. Without them a writer
+    /// right-clicking a marked passage found nothing to accept it with
+    /// (owner, 2026-11-26).
+    var onMenuMarkAsReviewed: (() -> Void)?
+    var onMenuRestoreWording: (() -> Void)?
+    /// Whether anything marked could be put back, which the record knows.
+    var menuCanRestoreWording: () -> Bool = { false }
     /// Each of these answers is given what the marks it answers were sent
     /// for (`setReviewMarks(_:changes:askedIn:)`), not what the host is
     /// showing when it arrives: the page answers after a turn of its own,
@@ -996,6 +1005,35 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             completion(.done(self.portableMarkdown(from: held)))
         }
     }
+
+    /// Puts the review commands at the top of the page's context menu while
+    /// it shows marks, over a separator.
+    fileprivate func addReviewItems(to menu: NSMenu) {
+        guard viewMode == .edit, reviewMarks != nil else { return }
+        var items: [NSMenuItem] = []
+        if onMenuMarkAsReviewed != nil {
+            items.append(NSMenuItem(
+                title: "Mark as Reviewed", action: #selector(menuMarkAsReviewed(_:)), keyEquivalent: ""
+            ))
+        }
+        if onMenuRestoreWording != nil, menuCanRestoreWording() {
+            // Its ellipsis is the promise that nothing changes yet: what
+            // would come back is shown first.
+            items.append(NSMenuItem(
+                title: "Restore Original Wording…", action: #selector(menuRestoreWording(_:)), keyEquivalent: ""
+            ))
+        }
+        guard !items.isEmpty else { return }
+        for (index, item) in items.enumerated() {
+            item.target = self
+            menu.insertItem(item, at: index)
+        }
+        menu.insertItem(.separator(), at: items.count)
+    }
+
+    @objc private func menuMarkAsReviewed(_ item: NSMenuItem) { onMenuMarkAsReviewed?() }
+
+    @objc private func menuRestoreWording(_ item: NSMenuItem) { onMenuRestoreWording?() }
 
     /// What the page's own selection stands in, for a restore asked for
     /// from the menu rather than from a passage's own button.
@@ -1693,6 +1731,18 @@ extension TipTapEditorCoordinator: WritingReplaceTarget {
 /// It receives the page's messages and navigation and passes them to whichever
 /// coordinator holds it now, and remembers what the page has already said —
 /// ready, painted, finished loading — for a coordinator that takes it later.
+/// The editor's web view, whose context menu carries the review commands of
+/// whichever editor holds its page now: pages are pooled and pass between
+/// editors.
+final class TipTapWebView: WKWebView {
+    weak var page: TipTapEditorPage?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        page?.owner?.addReviewItems(to: menu)
+    }
+}
+
 final class TipTapEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let webView: WKWebView
     let key: TipTapEditorPool.Key
@@ -1872,8 +1922,9 @@ final class TipTapEditorPool {
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = TipTapWebView(frame: .zero, configuration: configuration)
         let page = TipTapEditorPage(webView: webView, key: key)
+        webView.page = page
         configuration.userContentController.add(page, name: "tiptapBridge")
         webView.navigationDelegate = page
         webView.allowsBackForwardNavigationGestures = false
