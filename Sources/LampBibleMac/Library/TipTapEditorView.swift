@@ -1229,18 +1229,20 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // the line's lower-case letters: centred on the line's box instead,
         // in a serif whose letters sit low in their line, the buttons rode
         // high of the words.
-        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; box-sizing: border-box; width: 22px; height: 22px; padding: 0 0 4px; border-radius: 11px; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        // Lifted two points, circle and mark together, where the circle's
+        // middle is the middle of the line's lower-case letters: the lift was
+        // the mark's alone, by padding, and left it high in its own circle
+        // (owner, 2026-11-25; measured 1.6 and 2.4 points high).
+        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transform: translateY(-2px); box-sizing: border-box; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
         'html .ProseMirror .review-clear { margin: -11px 8px -11px -30px; }',
         'html .ProseMirror .review-restore { margin: -11px 8px -11px 0; }',
         // With a ↺ beside it, which is shown only while editing, further out.
         'html body.mode-edit .ProseMirror .review-clear:has(~ .review-restore) { margin: -11px 4px -11px -56px; }',
-        // In the system's face whatever the writing's is, so each glyph sits
-        // the same in its circle in serif and sans alike; lifted two points
-        // by the button's padding, where its ink stands at the middle of the
-        // line's lower-case letters rather than low of it (measured in both
-        // faces).
-        'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { font: 14px/1 -apple-system, system-ui, sans-serif; }',
-        'html .ProseMirror .review-clear::before { content: "\\u2713"; }',
+        // Drawn marks rather than characters: a character's ink sits where
+        // its font puts it, and no face put a ✓ or a ↺ in the middle of its
+        // box. These are centred in the circle to a tenth of a point.
+        'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: center / contain no-repeat; }',
+        'html .ProseMirror .review-clear::before { -webkit-mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxNiAxNic+PHBhdGggZD0nTTMuNiA4LjQgNi42IDExLjQgMTIuNCA0LjgnIGZpbGw9J25vbmUnIHN0cm9rZT0nYmxhY2snIHN0cm9rZS13aWR0aD0nMS45JyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4="); }',
         'html .ProseMirror .review-clear:hover, html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
         // A focus ring round the circle, for a writer moving by keyboard.
         'html .ProseMirror .review-clear:focus-visible, html .ProseMirror .review-restore:focus-visible { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
@@ -1261,7 +1263,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // cell: out of the flow there, where the block starts, or inline
         // they took a line of their own above it, which went when they did.
         // Centred on the first line's box.
-        'html body :is(.ProseMirror, blockquote, li, td, th) > .review-clear, html body :is(.ProseMirror, blockquote, li, td, th) > .review-restore { position: absolute; float: none; margin: calc((1lh - 22px) / 2) 0 0 -30px; }',
+        'html body :is(.ProseMirror, blockquote, li, td, th) > .review-clear, html body :is(.ProseMirror, blockquote, li, td, th) > .review-restore { position: absolute; float: none; transform: none; margin: calc((1lh - 22px) / 2) 0 0 -30px; }',
         'html body.mode-edit :is(.ProseMirror, blockquote, li, td, th) > .review-clear:has(~ .review-restore) { margin: calc((1lh - 22px) / 2) 0 0 -56px; }',
         // More particular than the rule above, or a list item's offset lost
         // to it and the ✓ and ↺ came apart.
@@ -1295,7 +1297,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // and what it would do written out — for a passage the assistant
         // only took words out of, that is the one way to see it.
         // Its glyph; drawn as the tick's is, above.
-        'html .ProseMirror .review-restore::before { content: "\\u21BA"; }',
+        'html .ProseMirror .review-restore::before { -webkit-mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxNiAxNic+PHBhdGggZD0nTTQuMSA1LjJBNS4yIDUuMiAwIDEgMSAyLjkgOScgZmlsbD0nbm9uZScgc3Ryb2tlPSdibGFjaycgc3Ryb2tlLXdpZHRoPScxLjcnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcvPjxwYXRoIGQ9J00zLjQgMi42IDMuOSA1LjYgNi45IDUuMScgZmlsbD0nbm9uZScgc3Ryb2tlPSdibGFjaycgc3Ryb2tlLXdpZHRoPScxLjcnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjwvc3ZnPg=="); }',
         'html .review-mark.review-current { background: rgba(232, 176, 44, 0.42); border-bottom-style: solid; }',
         'html .review-point.review-current { border-left-width: 3px; box-shadow: 0 0 0 2px rgba(232, 176, 44, 0.35); }',
         // Placed by the page, which measures it and sets left and top

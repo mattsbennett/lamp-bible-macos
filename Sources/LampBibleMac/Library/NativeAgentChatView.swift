@@ -908,6 +908,103 @@ private struct StreamingAgentReplyBubble: View {
     }
 }
 
+/// The row that stands for a reply until its first words arrive.
+struct AgentWaitingContent {}
+
+/// Three dots in the reply's bubble, as SwiftyChat's loading row draws them,
+/// but Lamp's own so it can carry `ChatEndPin`. SwiftyChat scrolls to a new
+/// row as soon as it is added, while the lazy stack still has its height as
+/// an estimate; where the row came out taller the scroll stopped short, and
+/// the dots sat half under the message field (owner, 2026-11-25, not every
+/// time).
+private struct AgentWaitingBubble: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var lit = 0
+    private let tick = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 14, bottomTrailingRadius: 14, topTrailingRadius: 14)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(Color.primary)
+                    .opacity(reduceMotion || lit == index ? 1 : 0.5)
+            }
+        }
+        .frame(width: 40, height: 8)
+        .frame(height: 42)
+        .padding(.horizontal, 12)
+        .background(shape.fill(LampChatSurface.agentBubble))
+        .overlay(shape.stroke(LampChatSurface.agentBubbleBorder, lineWidth: 1))
+        .onReceive(tick) { _ in
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 0.5)) { lit = (lit + 1) % 3 }
+        }
+        .background { ChatEndPin() }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 18)
+        .accessibilityElement()
+        .accessibilityLabel("Waiting for the reply")
+    }
+}
+
+/// Scrolls the chat to its true end once the row it sits in has been laid
+/// out, and again after SwiftyChat's own 0.2 s scroll has finished, which
+/// was aimed at the estimate. The end is the clip view's own limit, so it
+/// counts the message field's inset. It acts when the row appears, which is
+/// just after a message is sent, so a reader who scrolls up while the reply
+/// is awaited is left where they are.
+private struct ChatEndPin: NSViewRepresentable {
+    func makeNSView(context: Context) -> PinView { PinView() }
+    func updateNSView(_ view: PinView, context: Context) {}
+
+    final class PinView: NSView {
+        /// Set once the reader scrolls, which ends the pinning: the second
+        /// pin is for SwiftyChat's scroll, not for a reader who has moved.
+        private var readerScrolled = false
+        private var scrollObservers: [NSObjectProtocol] = []
+
+        deinit {
+            scrollObservers.forEach(NotificationCenter.default.removeObserver)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            scrollObservers.forEach(NotificationCenter.default.removeObserver)
+            scrollObservers = []
+            guard window != nil else { return }
+            readerScrolled = false
+            // A trackpad starts a live scroll; a legacy mouse wheel only
+            // reports one in progress.
+            scrollObservers = [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification].map { name in
+                NotificationCenter.default.addObserver(forName: name, object: enclosingScrollView, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.readerScrolled = true }
+                }
+            }
+            DispatchQueue.main.async { [weak self] in self?.pin() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.pin() }
+        }
+
+        private func pin() {
+            guard !readerScrolled, let scrollView = enclosingScrollView,
+                  let document = scrollView.documentView else { return }
+            let clip = scrollView.contentView
+            // Asked for the document's foot and given back the furthest the
+            // view may go, insets counted. A huge number in its place came
+            // back as 0, the top: precision lost in the clamp.
+            var far = clip.bounds
+            far.origin.y = document.frame.maxY
+            let end = clip.constrainBoundsRect(far).origin.y
+            guard abs(clip.bounds.origin.y - end) > 0.5 else { return }
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: end))
+            scrollView.reflectScrolledClipView(clip)
+        }
+    }
+}
+
 /// Keeps the chat from scrolling past its end while a reply grows.
 ///
 /// SwiftyChat lists its messages in a lazy stack anchored at the bottom. As
@@ -1881,7 +1978,7 @@ final class NativeAgentChatModel: ObservableObject {
         messages.append(NativeAgentChatMessage(
             id: loadingID,
             user: agentUser,
-            messageKind: .loading,
+            messageKind: .custom(AgentWaitingContent()),
             isSender: false,
             date: Date()
         ))
@@ -3100,6 +3197,8 @@ struct NativeAgentChatView: View {
                         AgentReplyBubble(markdown: content.markdown)
                     } else if let content = payload as? StreamingAgentMessage {
                         StreamingAgentReplyBubble(content: content)
+                    } else if payload is AgentWaitingContent {
+                        AgentWaitingBubble()
                     } else if let content = payload as? TurnStepsContent {
                         TurnStepsRow(steps: content.steps)
                     } else if let content = payload as? CopiedConversationContent {

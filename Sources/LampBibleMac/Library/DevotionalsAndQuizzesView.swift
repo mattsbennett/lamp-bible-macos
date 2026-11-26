@@ -1003,13 +1003,18 @@ struct DevotionalsView: View {
                     previewFilesMenu(devotional)
                 }
 
-                Text(devotional.title)
-                    .font(.system(
-                        size: max(devotionalFontSize * 1.8, 30),
-                        weight: .bold,
-                        design: devotionalTypeface.design
-                    ))
-                    .fixedSize(horizontal: false, vertical: true)
+                // Wrapped and never cut, as tall as it needs at the width it
+                // is given, but asking nothing of a window measuring how
+                // small it may go (`NoHeightWhenUnreadable`).
+                NoHeightWhenUnreadable {
+                    Text(devotional.title)
+                        .font(.system(
+                            size: max(devotionalFontSize * 1.8, 30),
+                            weight: .bold,
+                            design: devotionalTypeface.design
+                        ))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let subtitle = devotional.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(
@@ -1059,6 +1064,32 @@ struct DevotionalsView: View {
         }
         .task(id: devotional.id) { await monitorOtherFiles(of: devotional.id) }
         .onChange(of: devotional.id) { _, _ in shownFileName = nil }
+    }
+
+    /// Text that wraps to its full height at any width it is laid out at,
+    /// and reports no height at a width too narrow to hold a word.
+    ///
+    /// The window takes its least size from its content measured at its
+    /// least width, where a title free to wrap breaks after nearly every
+    /// letter: "Why are there so many Bible versions?" asked 1385 points of
+    /// a 923-point screen, and the window grew past the screen each time
+    /// the writing was shown (owner, 2026-11-25). A line limit would have
+    /// stopped that and cut a long title at a large text size instead.
+    struct NoHeightWhenUnreadable: Layout {
+        /// Narrower than any word of a title at its smallest size.
+        static let unreadableWidth: CGFloat = 40
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            guard let subview = subviews.first else { return .zero }
+            if let width = proposal.width, width < Self.unreadableWidth {
+                return CGSize(width: width, height: 0)
+            }
+            return subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        }
     }
 
     /// What else is kept beside a writing, as a menu: the writing itself
