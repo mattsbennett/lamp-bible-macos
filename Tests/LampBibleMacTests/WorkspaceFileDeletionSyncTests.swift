@@ -1292,6 +1292,14 @@ struct WorkspaceFileDeletionSyncTests {
         )
         #expect(added == [here])
         #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[here] == future + 1)
+
+        // Downloaded since: here again, its act is done with and it is
+        // cleaned up like the rest.
+        try write("lib", to: workspaceURL.appendingPathComponent("context/deck/node_modules/away.js"), at: 0)
+        let again = try await LampSyncRemovedModules.queueToolOutput(amongMembers: [(away, 1)], inLibraryAt: macs.a)
+        #expect(again == [away])
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
+        #expect(await LampWorkspaceSync.sourcesNotHere(in: workspaceURL).isEmpty)
     }
 
     /// Removing a tool's folder itself queues nothing and walks nothing.
@@ -1783,7 +1791,7 @@ struct WorkspaceFileDeletionSyncTests {
         let start = try #require(source.range(of: "public static func removeContextItem("))
         let end = try #require(source.range(of: "\n    /// ", range: start.upperBound..<source.endIndex))
         let body = source[start.upperBound..<end.lowerBound]
-        let queued = try #require(body.range(of: "removed.save("))
+        let queued = try #require(body.range(of: "LampSyncRemovedModules.update("))
         let cleared = try #require(body.range(of: "ledger.recordDeletion("))
         #expect(queued.lowerBound < cleared.lowerBound)
     }

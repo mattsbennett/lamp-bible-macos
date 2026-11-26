@@ -57,6 +57,33 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         return moved
     }
 
+    /// Reads, changes and writes the library's queue under one lock, writing
+    /// only if the change moved it.
+    ///
+    /// Every writer goes through here. They run on different actors — a
+    /// module removed on the main actor, a source removed and tool output
+    /// queued on `WritingWorkspaceFiles`, the pass's bookkeeping on the main
+    /// actor — and two reading the same copy and each saving its own would
+    /// lose the other's entry: a removed module or source would come back.
+    /// The lock spans the read to the write, which an atomic write alone
+    /// does not.
+    @discardableResult
+    public static func update<Result>(
+        inLibraryAt libraryRoot: URL,
+        fileManager: FileManager = .default,
+        _ change: (inout LampSyncRemovedModules) throws -> Result
+    ) throws -> Result {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        let before = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        var records = before
+        let result = try change(&records)
+        if records != before { try records.save(toLibraryAt: libraryRoot, fileManager: fileManager) }
+        return result
+    }
+
+    private static let queueLock = NSLock()
+
     public func save(
         toLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
@@ -111,12 +138,11 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         inLibraryAt libraryRoot: URL,
         fileManager: FileManager = .default
     ) throws -> Bool {
-        let before = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
-        var records = before
-        records.forget(paths, carried: carried)
-        guard records != before else { return false }
-        try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
-        return true
+        try update(inLibraryAt: libraryRoot, fileManager: fileManager) { records in
+            let before = records
+            records.forget(paths, carried: carried)
+            return records != before
+        }
     }
 
     /// Queues for removal every member that is a tool's output under a
@@ -148,30 +174,43 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     ) throws -> [String] {
         let root = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
         var acted: [String: [String: WorkspaceFileLedger.SourceAct]?] = [:]
+        // Acts on files that are here again: a download of tool output lands
+        // where no gather looks, so nothing else would ever answer them.
+        var landed: [String: [String]] = [:]
         let toolOutput = members.filter { member in
             guard let file = LampWritingWorkspaceLayout.contextFile(ofPath: member.path),
                   LampWritingWorkspaceLayout.isToolOutput(relativePath: file.relativePath)
             else { return false }
+            let workspace = root.appendingPathComponent(file.folder, isDirectory: true)
             if acted[file.folder] == nil {
-                acted[file.folder] = .some(WorkspaceFileLedger.loadIfReadable(
-                    in: root.appendingPathComponent(file.folder, isDirectory: true)
-                )?.acts)
+                acted[file.folder] = .some(WorkspaceFileLedger.loadIfReadable(in: workspace)?.acts)
             }
             // A ledger that will not read cannot say; leave the file.
             guard let acts = acted[file.folder] ?? nil else { return false }
-            let act = acts[WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(file.relativePath))]
-            return act != .offloaded && act != .wanted
+            let key = WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(file.relativePath))
+            guard let act = acts[key], act == .offloaded || act == .wanted else { return true }
+            // Away from this Mac, the server's copy may be the only one; here
+            // again, it is not, and the act is done with.
+            guard LampWorkspaceSync.isHere(file.relativePath, inContextOf: workspace, fileManager: fileManager)
+            else { return false }
+            landed[file.folder, default: []].append(key)
+            return true
+        }
+        for (folder, keys) in landed {
+            let workspace = root.appendingPathComponent(folder, isDirectory: true)
+            guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspace) else { continue }
+            for key in keys { ledger.forgetAct(key) }
+            try ledger.save(in: workspace)
         }
         guard !toolOutput.isEmpty else { return [] }
-        var records = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
-        let fresh = toolOutput.filter { records.removedAt[$0.path] == nil }.sorted { $0.path < $1.path }
-        guard !fresh.isEmpty else { return [] }
         let now = Int64(date.timeIntervalSince1970 * 1_000)
-        for member in fresh {
-            records.record(member.path, at: max(now, (member.presentSince ?? .min) &+ 1))
+        return try update(inLibraryAt: libraryRoot, fileManager: fileManager) { records in
+            let fresh = toolOutput.filter { records.removedAt[$0.path] == nil }.sorted { $0.path < $1.path }
+            for member in fresh {
+                records.record(member.path, at: max(now, (member.presentSince ?? .min) &+ 1))
+            }
+            return fresh.map(\.path)
         }
-        try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
-        return fresh.map(\.path)
     }
 
     /// Records a module's removal, at the path it is published under.
@@ -189,9 +228,9 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         // `deleteLocally` answers to. Recording a deletion no client carries
         // out is how an imported module whose ID is `notes` would tombstone
         // the file every note lives in.
-        var records = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
-        records.record(path, at: Int64(date.timeIntervalSince1970 * 1_000))
-        try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
+        try update(inLibraryAt: libraryRoot, fileManager: fileManager) { records in
+            records.record(path, at: Int64(date.timeIntervalSince1970 * 1_000))
+        }
         return path
     }
 }

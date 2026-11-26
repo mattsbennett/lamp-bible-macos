@@ -486,12 +486,10 @@ public enum WorkspaceContextFileStore {
             )
         }
         if !members.isEmpty {
-            var removed = LampSyncRemovedModules.load(
-                fromLibraryAt: libraryRootURL, fileManager: fileManager
-            )
             let now = WorkspaceFileLedger.milliseconds(Date())
-            for member in members { removed.record(member, at: now) }
-            try removed.save(toLibraryAt: libraryRootURL, fileManager: fileManager)
+            try LampSyncRemovedModules.update(inLibraryAt: libraryRootURL, fileManager: fileManager) { removed in
+                for member in members { removed.record(member, at: now) }
+            }
         }
 
         for key in allKeys { ledger.recordDeletion(of: key) }

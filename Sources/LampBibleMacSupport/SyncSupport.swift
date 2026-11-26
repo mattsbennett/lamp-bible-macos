@@ -1181,10 +1181,10 @@ public enum LampWorkspaceSync {
             return try? LampWritingWorkspaceLayout.documentPath(folder: workspace.lastPathComponent, name: name)
         }
         guard !paths.isEmpty else { return }
-        var removed = LampSyncRemovedModules.load(fromLibraryAt: libraryRoot, fileManager: fileManager)
         let now = WorkspaceFileLedger.milliseconds(Date())
-        for path in paths { removed.record(path, at: now) }
-        try removed.save(toLibraryAt: libraryRoot, fileManager: fileManager)
+        try LampSyncRemovedModules.update(inLibraryAt: libraryRoot, fileManager: fileManager) { removed in
+            for path in paths { removed.record(path, at: now) }
+        }
     }
 
     /// Core's rule, which the phone keeps to as well.

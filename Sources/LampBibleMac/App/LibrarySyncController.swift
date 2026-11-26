@@ -562,17 +562,40 @@ final class LibrarySyncController: ObservableObject {
     /// Under a sync folder nothing is offloaded, so a request made under
     /// WebDAV that is still waiting is withdrawn and said, rather than left
     /// promising a sync that will never carry it out.
+    ///
+    /// Only while offloads are not allowed: the reader may turn workspace
+    /// sync back on while this runs, and a request queued after that is
+    /// theirs to keep. And a cancellation that could not be saved is said as
+    /// such — that request still stands.
     func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
+        var mayOffload: Bool { provider == .webDAV && syncsWorkspaceFiles }
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL) {
+            var withdrawn: [String] = []
+            var stuck: [String] = []
             for path in requested {
-                try? await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
+                guard !mayOffload else { return }
+                do {
+                    try await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
+                    withdrawn.append(path)
+                } catch {
+                    stuck.append(path)
+                }
             }
-            let why = provider == .webDAV
-                ? "sources go back to the server only while workspace sync is on"
-                : "sources go back only to a WebDAV server"
-            offloadRefusals[workspace.standardizedFileURL.path] = requested.count == 1
-                ? "“\(requested[0])” stays on this Mac: \(why)."
-                : "\(requested.count) sources stay on this Mac: \(why)."
+            let key = workspace.standardizedFileURL.path
+            if let first = stuck.first {
+                let message = stuck.count == 1
+                    ? "“\(first)” is still waiting to go back to the server: Lamp couldn't withdraw the request. Press Keep Here on it."
+                    : "\(stuck.count) sources are still waiting to go back to the server: Lamp couldn't withdraw the requests. Press Keep Here on them."
+                offloadRefusals[key] = message
+                errorMessage = message
+            } else if let first = withdrawn.first {
+                let why = provider == .webDAV
+                    ? "sources go back to the server only while workspace sync is on"
+                    : "sources go back only to a WebDAV server"
+                offloadRefusals[key] = withdrawn.count == 1
+                    ? "“\(first)” stays on this Mac: \(why)."
+                    : "\(withdrawn.count) sources stay on this Mac: \(why)."
+            }
         }
     }
 
@@ -1427,11 +1450,16 @@ extension LibrarySyncController {
         // A move runs its own pass, not through `sync(library:)`, so the
         // offloads that come after a pass do not run after it. Any the reader
         // has asked for get a pass of their own once the move is done.
+        //
+        // And a pass asked for while the move ran — turning workspace sync
+        // on, say, which promises the downloads — is run then too, as an
+        // ordinary pass runs one queued behind it.
         defer {
             Task { [weak self] in
-                guard let self,
-                      await !LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL).isEmpty
-                else { return }
+                guard let self else { return }
+                let asked = LampSyncRequest.takePending()
+                let requested = await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL)
+                guard asked || !requested.isEmpty else { return }
                 _ = await self.sync(library: library)
             }
         }
@@ -2220,14 +2248,12 @@ extension LibrarySyncController {
             }
         }
         if !reviewRemovals.isEmpty {
-            var records = LampSyncRemovedModules.load(
-                fromLibraryAt: library.rootURL, fileManager: fileManager
-            )
-            for (path, removedAt) in reviewRemovals {
-                guard let removedAt else { continue }
-                records.record(path, at: removedAt)
+            try? LampSyncRemovedModules.update(inLibraryAt: library.rootURL, fileManager: fileManager) { records in
+                for (path, removedAt) in reviewRemovals {
+                    guard let removedAt else { continue }
+                    records.record(path, at: removedAt)
+                }
             }
-            try? records.save(toLibraryAt: library.rootURL, fileManager: fileManager)
             let cancelled = reviewRemovals.filter { $0.value == nil }.map(\.key)
             if !cancelled.isEmpty {
                 try? LampSyncRemovedModules.forget(
