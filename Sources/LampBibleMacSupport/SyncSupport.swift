@@ -491,9 +491,13 @@ public enum LampWorkspaceSync {
             // And one asked back that cannot land — something in its way —
             // which a download would only fail on, stopping the rest of the
             // workspace's import with it.
+            // Never tool output: it is removed from the server whatever its
+            // mark (`decisions/0023`), and withholding it would strip the
+            // tombstone that removal needs.
             for (path, act) in sourcesNotHere(in: workspace, fileManager: fileManager)
-            where act == .offloaded
-                || (act == .wanted && destinationIsObstructed(path, inContextOf: workspace)) {
+            where !LampWritingWorkspaceLayout.isToolOutput(relativePath: path)
+                && (act == .offloaded
+                    || (act == .wanted && destinationIsObstructed(path, inContextOf: workspace))) {
                 guard let member = try? LampWritingWorkspaceLayout.contextPath(
                     folder: workspace.lastPathComponent, relativePath: path
                 ), namesAsource(member) else { continue }

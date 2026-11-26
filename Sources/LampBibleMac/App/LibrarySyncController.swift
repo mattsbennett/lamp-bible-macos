@@ -569,6 +569,11 @@ final class LibrarySyncController: ObservableObject {
     /// such — that request still stands.
     func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
         var mayOffload: Bool { provider == .webDAV && syncsWorkspaceFiles }
+        // Why, as it is now, before anything awaits: said afterwards, a
+        // provider switched meanwhile would give the wrong reason.
+        let why = provider == .webDAV
+            ? "sources go back to the server only while workspace sync is on"
+            : "sources go back only to a WebDAV server"
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL) {
             var withdrawn: [String] = []
             var stuck: [String] = []
@@ -592,9 +597,6 @@ final class LibrarySyncController: ObservableObject {
                 offloadRefusals[key] = message
                 errorMessage = message
             } else if let first = withdrawn.first {
-                let why = provider == .webDAV
-                    ? "sources go back to the server only while workspace sync is on"
-                    : "sources go back only to a WebDAV server"
                 offloadRefusals[key] = withdrawn.count == 1
                     ? "“\(first)” stays on this Mac: \(why)."
                     : "\(withdrawn.count) sources stay on this Mac: \(why)."
@@ -1457,12 +1459,16 @@ extension LibrarySyncController {
         //
         // And a pass asked for while the move ran — turning workspace sync
         // on, say, which promises the downloads — is run then too, as an
-        // ordinary pass runs one queued behind it. Only once the library has
-        // moved: a move refused leaves its own error to act on, which a pass
-        // against the unmoved archive would replace with a vaguer one.
+        // ordinary pass runs one queued behind it. Not after a move refused
+        // before anything was written — a stale archive, or one with entries
+        // it cannot place: that leaves its own error to act on, which a pass
+        // against the unmoved archive would replace with a vaguer one. After
+        // anything else, a write the server took and did not confirm
+        // included, it runs.
+        var refusedBeforeWriting = false
         defer {
-            Task { [weak self] in
-                guard let self, self.moveOffer == nil else { return }
+            Task { [weak self, refusedBeforeWriting] in
+                guard let self, !refusedBeforeWriting else { return }
                 let asked = LampSyncRequest.takePending()
                 let requested = await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL)
                 guard asked || !requested.isEmpty else { return }
@@ -1515,6 +1521,7 @@ extension LibrarySyncController {
             // rather than a refusal halfway through.
             let unplaceable = LampSyncLibraryMigration.unplaceableEntries(in: archive)
             guard unplaceable.isEmpty else {
+                refusedBeforeWriting = true
                 errorMessage = "Sync cannot place these, so the library was left as it is: "
                     + unplaceable.prefix(5).joined(separator: ", ")
                 return false
@@ -1540,6 +1547,7 @@ extension LibrarySyncController {
             return true
         } catch {
             print("[LibrarySync] move failed: \(error)")
+            if case LibrarySyncError.libraryMovedOn = error { refusedBeforeWriting = true }
             errorMessage = LampSyncErrorText.sentence(for: error)
             return false
         }

@@ -1293,6 +1293,8 @@ struct WorkspaceFileDeletionSyncTests {
         )
         #expect(added == [away, here])
         #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[here] == future + 1)
+        // And not withheld, which would strip the tombstone its removal needs.
+        #expect(await !LampWorkspaceSync.offloadedSources(inLibraryAt: macs.a).contains(away))
     }
 
     /// Removing a tool's folder itself queues nothing and walks nothing.
