@@ -1176,6 +1176,19 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate("document.documentElement.classList.toggle('lamp-serif', \(typeface == .serif))")
     }
 
+    /// How wide the writing page is, edge to edge, at a text size: the
+    /// `max-width` of `writingPageStyleScript`, 35 of the page's `em`s and
+    /// its 56-point sides. The page sets its type at the size handed it,
+    /// whole points (`setFontSize`), times 1.13.
+    static func writingPageWidth(forFontSize fontSize: Double) -> CGFloat {
+        CGFloat(35 * Double(Int(fontSize)) * 1.13 + 112)
+    }
+
+    /// How far in from the page's edges its text starts while it is read:
+    /// the bundle's padding in read mode, which takes the place of the
+    /// 56-point sides above.
+    static let readingPageSideInset: CGFloat = 16
+
     /// The writing editor's page, set as a page rather than a form.
     ///
     /// The bundle is built for a phone: prose runs edge to edge inside a 16pt

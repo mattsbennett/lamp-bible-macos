@@ -153,6 +153,8 @@ struct DevotionalsView: View {
     @State private var query = ""
     @State private var categoryFilter: String?
     @State private var moduleFilter: String?
+    /// The series shown, by its name as the list groups by it.
+    @State private var seriesFilter: String?
     @AppStorage(LampReadingMode.defaultsKey) private var readingModeRawValue = LampReadingMode.silent.rawValue
     @AppStorage(LampReadingMode.silent.wordsPerMinuteKey)
     private var silentWordsPerMinute = LampReadingMode.silent.defaultWordsPerMinute
@@ -249,7 +251,8 @@ struct DevotionalsView: View {
             guard categoryFilter == nil
                     || LampWritingCategory.foldedKey(devotional.category)
                         == LampWritingCategory.foldedKey(categoryFilter),
-                  moduleFilter == nil || devotional.moduleID == moduleFilter else { return false }
+                  moduleFilter == nil || devotional.moduleID == moduleFilter,
+                  seriesFilter == nil || Self.series(of: devotional) == seriesFilter else { return false }
             guard !needle.isEmpty else { return true }
             return matchesWhatTheRowShows(devotional, needle)
                 || bodies?.contains(devotional.id) == true
@@ -368,7 +371,7 @@ struct DevotionalsView: View {
                 }
             } else {
                 ToolbarItemGroup {
-                    if showsWritingList, devotionalCollections.count > 1 {
+                    if showsWritingList, devotionalCollections.count > 1 || !devotionalSeries.isEmpty {
                         filterMenu
                     }
                     // As Books' list hides, so this one does, to read wide.
@@ -433,6 +436,12 @@ struct DevotionalsView: View {
         }
         .onChange(of: categoryFilter) { _, _ in selectFirstIfNeeded() }
         .onChange(of: moduleFilter) { _, _ in selectFirstIfNeeded() }
+        .onChange(of: seriesFilter) { _, _ in selectFirstIfNeeded() }
+        // A series renamed or emptied away takes its filter with it, or the
+        // list would stand empty under a menu with nothing to untick.
+        .onChange(of: devotionalSeries) { _, series in
+            if let seriesFilter, !series.contains(seriesFilter) { self.seriesFilter = nil }
+        }
         .task { await monitorLinkedPresentationDecks() }
         // Writings an agent in another app asked for turn up here, which is
         // where the reader will look for them.
@@ -464,24 +473,39 @@ struct DevotionalsView: View {
         CGFloat(min(max(preferredWritingListWidth, 240), 420))
     }
 
-    /// Category and collection filters in one menu that says what is shown.
+    /// Collection and series filters in one menu that says what is shown.
     /// As two pop-ups reading "All Categories" and "All Collections" they
     /// were the widest pills in a crowded toolbar, and said nothing at all
-    /// while nothing was filtered.
+    /// while nothing was filtered. Each part is offered only where there is
+    /// a choice to make.
     private var filterMenu: some View {
-        Menu {
-            Picker("Collection", selection: $moduleFilter) {
-                Text("All Collections").tag(String?.none)
-                ForEach(devotionalCollections, id: \.id) { collection in
-                    Text(collection.name).tag(Optional(collection.id))
+        let collections = devotionalCollections
+        let series = devotionalSeries
+        return Menu {
+            if collections.count > 1 {
+                Picker("Collection", selection: $moduleFilter) {
+                    Text("All Collections").tag(String?.none)
+                    ForEach(collections, id: \.id) { collection in
+                        Text(collection.name).tag(Optional(collection.id))
+                    }
                 }
+                .pickerStyle(.inline)
+                .accessibilityLabel("Filter writing by collection")
             }
-            .pickerStyle(.inline)
-            .accessibilityLabel("Filter writing by collection")
+            if !series.isEmpty {
+                Picker("Series", selection: $seriesFilter) {
+                    Text("All Series").tag(String?.none)
+                    ForEach(series, id: \.self) { name in
+                        Text(name).tag(Optional(name))
+                    }
+                }
+                .pickerStyle(.inline)
+                .accessibilityLabel("Filter writing by series")
+            }
         } label: {
             Label(
                 filterSummary,
-                systemImage: moduleFilter == nil
+                systemImage: moduleFilter == nil && seriesFilter == nil
                     ? "line.3.horizontal.decrease.circle"
                     : "line.3.horizontal.decrease.circle.fill"
             )
@@ -492,17 +516,18 @@ struct DevotionalsView: View {
         // footprint, still fully rounded like every other Lamp control.
         .controlSize(.small)
         .accessibilityLabel("Filter writing")
-        .help("Show one collection of writing")
+        .help("Show one collection or series of writing")
     }
 
-    /// What the filter menu says: everything, or the category and the
-    /// collection being shown.
+    /// What the filter menu says: everything, or the collection and the
+    /// series being shown.
     private var filterSummary: String {
         var parts: [String] = []
         if let moduleFilter, let collection = devotionalCollections.first(where: { $0.id == moduleFilter }) {
             parts.append(collection.name)
         }
-        return parts.isEmpty ? "All Collections" : parts.joined(separator: " · ")
+        if let seriesFilter { parts.append(seriesFilter) }
+        return parts.isEmpty ? "All Writing" : parts.joined(separator: " · ")
     }
 
     /// Sorting and grouping in one menu: two unlabelled pills beside each
@@ -973,10 +998,7 @@ struct DevotionalsView: View {
     /// What kind of writing this is, over its title, as "Chapter 2" is over
     /// a book section's: its series where it has one, else its category.
     private func previewEyebrow(_ devotional: LampDevotional) -> String? {
-        if let series = devotional.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !series.isEmpty {
-            return series
-        }
+        if let series = Self.series(of: devotional) { return series }
         return LampWritingCategory.displayName(devotional.category)
     }
 
@@ -1024,14 +1046,17 @@ struct DevotionalsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(
-                maxWidth: Self.readingMeasure(for: devotionalFontSize),
-                alignment: .leading
-            )
-            .padding(.horizontal, 40)
+            // In the page's own column, so the name lines up with the
+            // writing under it and has the room the writing has. In a
+            // narrower column of its own, a name a few points wider than it
+            // was broken in two well short of the page's edge, since a
+            // title's lines are balanced (owner, 2026-11-26).
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, TipTapEditorCoordinator.readingPageSideInset)
+            .frame(maxWidth: TipTapEditorCoordinator.writingPageWidth(forFontSize: devotionalFontSize))
             .padding(.top, 20)
             .padding(.bottom, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity)
 
             Divider()
 
@@ -1176,11 +1201,6 @@ struct DevotionalsView: View {
     /// a title.
     private static func hasWriting(_ devotional: LampDevotional) -> Bool {
         !devotional.displayMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// The column a writing is read in, in points, for a text size.
-    static func readingMeasure(for fontSize: Double) -> CGFloat {
-        CGFloat(min(max(fontSize * 33, 500), 880))
     }
 
     /// The writing's other files, each folded under its name: the outline,
@@ -1448,10 +1468,21 @@ struct DevotionalsView: View {
         case .collection:
             return collectionName(for: devotional)
         case .series:
-            let series = devotional.seriesName?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return series.isEmpty ? "No Series" : series
+            return Self.series(of: devotional) ?? "No Series"
         }
+    }
+
+    /// A writing's series as the list groups and filters by it, or nil for
+    /// none.
+    private static func series(of devotional: LampDevotional) -> String? {
+        let series = devotional.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return series.isEmpty ? nil : series
+    }
+
+    /// Every series a writing is in, by name, in order.
+    private var devotionalSeries: [String] {
+        Set(model.devotionals.compactMap(Self.series(of:)))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     private func collectionName(for devotional: LampDevotional) -> String {
