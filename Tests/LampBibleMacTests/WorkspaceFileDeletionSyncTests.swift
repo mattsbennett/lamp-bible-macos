@@ -1181,6 +1181,54 @@ struct WorkspaceFileDeletionSyncTests {
             == ["Research/asked.pdf", "Research/history.pdf"])
     }
 
+    /// A link at a source's path stands in its way as surely as a folder:
+    /// the import refuses to write through it.
+    @Test func alinkAtAsourcesPathStandsInItsWay() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let context = workspaceURL.appendingPathComponent("context")
+        let elsewhere = macs.root.appendingPathComponent("elsewhere.pdf")
+        try write("x", to: elsewhere, at: 0)
+        try FileManager.default.createDirectory(at: context, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: context.appendingPathComponent("history.pdf"), withDestinationURL: elsewhere
+        )
+        #expect(await LampWorkspaceSync.destinationIsObstructed("history.pdf", inContextOf: workspaceURL))
+        #expect(await !LampWorkspaceSync.destinationIsObstructed("free.pdf", inContextOf: workspaceURL))
+    }
+
+    /// The manifest naming a source neither as a member nor as a deletion —
+    /// a tombstone expired, an older manifest restored — marks it; the act,
+    /// and so the lock, stays until the reader removes it from the list,
+    /// which touches nothing but this Mac's note.
+    @Test func asourceTheServerNoLongerNamesWaitsForTheReader() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        try FileManager.default.createDirectory(
+            at: workspaceURL.appendingPathComponent("context"), withIntermediateDirectories: true
+        )
+        var ledger = WorkspaceFileLedger()
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("gone.pdf"))
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("kept.pdf"))
+        try await ledger.save(in: workspaceURL)
+        let folder = workspaceURL.lastPathComponent
+        let kept = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "kept.pdf")
+
+        await LampWorkspaceSync.noteSourcesTheServerDoesNotName(inLibraryAt: macs.a, members: [kept], deleted: [])
+        #expect(await LampWorkspaceSync.unaccountedSourceNames(in: workspaceURL) == ["gone.pdf"])
+        #expect(await LampWorkspaceSync.sourcesOnlyOnTheServer(inLibraryAt: macs.a)?.count == 2, "the lock still holds")
+
+        // Removing a source the server still names does nothing.
+        try await WorkspaceContextFileStore.forgetSourceNoLongerOnTheServer(relativePath: "kept.pdf", in: workspaceURL)
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["gone.pdf", "kept.pdf"])
+
+        try await WorkspaceContextFileStore.forgetSourceNoLongerOnTheServer(relativePath: "gone.pdf", in: workspaceURL)
+        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL) == ["kept.pdf"])
+        #expect(await LampWorkspaceSync.unaccountedSourceNames(in: workspaceURL).isEmpty)
+    }
+
     /// A read the server refuses costs nothing from the run's allowance, so
     /// one that fails every time cannot hold back the sources behind it.
     @Test func afailedReadCostsNothingFromTheAllowance() async throws {

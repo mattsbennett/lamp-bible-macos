@@ -181,14 +181,16 @@ struct LampBibleMacApp: App {
                     agentRemoteHost.attach(libraryModel) { [syncController, libraryModel] in
                         // A pass already running is let finish, then one
                         // run for this, so what it brings in is sure to be
-                        // what the phone saved. And waited for again after:
-                        // the offloads after a pass can outlast any short
-                        // wait, and a sync asked for meanwhile is queued
-                        // behind them rather than run — the library must
-                        // not be read until that queued pass has run too.
-                        await syncController.waitForPasses()
+                        // what the phone saved. Bounded: offloads after a
+                        // pass can outlast the wait, and then this sync is
+                        // queued behind them and the phone reads the library
+                        // as it was — a stale read, never a lost edit
+                        // (`decisions/0022`).
+                        let started = Date()
+                        while syncController.isPassRunning, Date().timeIntervalSince(started) < 60 {
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
                         await syncController.sync(library: libraryModel.library)
-                        await syncController.waitForPasses()
                         await libraryModel.refreshNow()
                     }
                 }
@@ -1207,16 +1209,25 @@ private struct ReaderSettingsView: View {
                                 Text($0.title).tag($0.rawValue)
                             }
                         }
+                        // WebDAV only (`decisions/0022`): a sync folder is on
+                        // this Mac's disk, so there is no space to win.
+                        .disabled(syncController.provider != .webDAV)
                         Text(
-                            """
-                            A writing's sources — the PDFs and files you gather \
-                            beside it — are most of what a library holds. Once a \
-                            writing has been left alone this long, Lamp deletes \
-                            this Mac's copies after a sync and keeps the \
-                            server's. The Context list still shows them, and \
-                            Download brings one back. Nothing is removed from the \
-                            server, and a writing open in a window is left alone.
-                            """
+                            syncController.provider == .webDAV
+                                ? """
+                                  A writing's sources — the PDFs and files you gather \
+                                  beside it — are most of what a library holds. Once a \
+                                  writing has been left alone this long, Lamp deletes \
+                                  this Mac's copies after a sync and keeps the \
+                                  server's. The Context list still shows them, and \
+                                  Download brings one back. Nothing is removed from the \
+                                  server, and a writing open in a window is left alone.
+                                  """
+                                : """
+                                  Sources can be put back only on a WebDAV server. A \
+                                  sync folder is on this Mac already, and with iCloud \
+                                  Drive, macOS frees the space itself.
+                                  """
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)

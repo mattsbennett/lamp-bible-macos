@@ -403,22 +403,17 @@ public struct ServerObservation: Equatable, Sendable {
 public struct OffloadServer: Sendable {
     public let source: String
     public let account: String
-    /// Where a folder store's folder is on disk (`device:inode`), so a lock
-    /// taken on it follows the folder when Finder renames or moves it. Nil
-    /// for a server.
-    public let place: String?
     /// Reads the whole of `path` into `destination`, as Download does; false
     /// where the server has no file. Whole, not a range: a partial answer
     /// that matched the local bytes would say nothing about the rest.
     public let fetch: @Sendable (_ path: String, _ destination: URL) async throws -> Bool
 
     public init(
-        source: String, account: String, place: String? = nil,
+        source: String, account: String,
         fetch: @escaping @Sendable (_ path: String, _ destination: URL) async throws -> Bool
     ) {
         self.source = source
         self.account = account
-        self.place = place
         self.fetch = fetch
     }
 }
@@ -436,31 +431,18 @@ public struct OffloadLock: Codable, Equatable, Sendable {
     /// Nil for a lock written before the account was kept; the next pass at
     /// its address fills it in.
     public var account: String?
-    /// A sync folder's place on disk (`device:inode`), where the source is a
-    /// folder: the folder keeps it when renamed or moved, and its path — the
-    /// source — does not.
-    public var place: String?
 
-    public init(source: String, account: String?, place: String? = nil) {
+    public init(source: String, account: String?) {
         self.source = source
         self.account = account
-        self.place = place
     }
 
-    /// The lock moved to `source`, where that is the same folder as the one
-    /// it was taken on, renamed or moved — or nil where it is not.
-    public func following(to source: String, at place: String?) -> OffloadLock? {
-        guard source != self.source, let place, place == self.place else { return nil }
-        return OffloadLock(source: source, account: account, place: place)
-    }
-
-    /// Whether a pass at `source` as `account` may run while this holds —
-    /// and, for a folder, at the same folder: another folder put at the
-    /// locked path is not the one holding the copies, path or no path.
-    public func admits(source: String, account: String, place: String? = nil) -> Bool {
-        self.source == source
-            && (self.account == nil || self.account == account)
-            && (self.place == nil || self.place == place)
+    /// Whether a pass at `source` as `account` may run while this holds.
+    /// Offloads go only to a WebDAV server (`decisions/0022`), so a source
+    /// here is an address, never a folder whose identity would also need
+    /// keeping.
+    public func admits(source: String, account: String) -> Bool {
+        self.source == source && (self.account == nil || self.account == account)
     }
 }
 
@@ -557,6 +539,9 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
         /// until the folder is moved. Drawn beside the folder's own row so
         /// the reader can see what it hides.
         case blockedByAFolder
+        /// Away from this Mac, and the server's manifest no longer names it:
+        /// nothing can bring it back. The reader may remove it from the list.
+        case noLongerOnTheServer
     }
 
     /// Where the source is under the context directory. What a row is
@@ -571,7 +556,7 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public var isHere: Bool {
         switch state {
         case .here, .leaving, .folder: true
-        case .onTheServer, .comingBack, .blockedByAFolder: false
+        case .onTheServer, .comingBack, .blockedByAFolder, .noLongerOnTheServer: false
         }
     }
     /// Whether Remove waits for a Download first: the row, or something
@@ -580,7 +565,8 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     /// it is not offered (`decisions/0022`).
     public var removalWaitsForDownload: Bool {
         switch state {
-        case .onTheServer, .comingBack, .blockedByAFolder, .folder(holdsSourcesNotHere: true): true
+        case .onTheServer, .comingBack, .blockedByAFolder, .noLongerOnTheServer,
+             .folder(holdsSourcesNotHere: true): true
         case .here, .leaving, .folder(holdsSourcesNotHere: false): false
         }
     }
@@ -621,9 +607,11 @@ extension WorkspaceSourceOffload {
         onDisk: [DiskEntry],
         notHere: [String: WorkspaceSourceAct],
         leaving: Set<String> = [],
-        obstructed: Set<String> = []
+        obstructed: Set<String> = [],
+        unaccounted: Set<String> = []
     ) -> [SourceRow] {
         let obstructed = Set(obstructed.map { $0.precomposedStringWithCanonicalMapping })
+        let unaccounted = Set(unaccounted.map { $0.precomposedStringWithCanonicalMapping })
         let leaving = Set(leaving.map { $0.precomposedStringWithCanonicalMapping })
         let notHere = Dictionary(
             notHere.map { ($0.key.precomposedStringWithCanonicalMapping, $0.value) },
@@ -651,7 +639,9 @@ extension WorkspaceSourceOffload {
             }
         }
         for (path, act) in notHere where act != .leaving {
-            if folders.contains(path) || obstructed.contains(path) {
+            if unaccounted.contains(path), !shown.contains(path) {
+                rows.append(SourceRow(relativePath: path, state: .noLongerOnTheServer))
+            } else if folders.contains(path) || obstructed.contains(path) {
                 rows.append(SourceRow(relativePath: path, state: .blockedByAFolder))
             } else if !shown.contains(path) {
                 rows.append(SourceRow(
@@ -695,7 +685,8 @@ extension WorkspaceSourceOffload {
             leaving: Set(LampWorkspaceSync.leavingSourceNames(in: workspace, fileManager: fileManager)),
             obstructed: Set(notHere.keys.filter {
                 LampWorkspaceSync.destinationIsObstructed($0, inContextOf: workspace)
-            })
+            }),
+            unaccounted: LampWorkspaceSync.unaccountedSourceNames(in: workspace)
         )
     }
 }

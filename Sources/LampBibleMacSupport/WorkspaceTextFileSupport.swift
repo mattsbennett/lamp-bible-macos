@@ -607,6 +607,22 @@ public enum WorkspaceContextFileStore {
         try ledger.save(in: workspaceURL)
     }
 
+    /// Takes a source the server no longer names off the list: the reader's
+    /// own act, the only way such a row goes. Nothing on the server or here
+    /// is touched; only this Mac's note that it had let the source go.
+    @WritingWorkspaceFiles
+    public static func forgetSourceNoLongerOnTheServer(
+        relativePath: String, in workspaceURL: URL
+    ) throws {
+        guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspaceURL) else {
+            throw WorkspaceFileLedger.UnreadableLedger()
+        }
+        let key = WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(relativePath))
+        guard ledger.unaccounted.contains(key) else { return }
+        ledger.forgetAct(key)
+        try ledger.save(in: workspaceURL)
+    }
+
     /// Asks for an offloaded source back.
     ///
     /// Recorded as what the reader did, and that is all: the gather stops

@@ -330,18 +330,60 @@ public enum LampWorkspaceSync {
     /// path itself, or something other than a folder — a file, a link — at
     /// any folder on the way. The import would fail to put it there, and the
     /// failure would stop the rest of the workspace's import with it.
+    ///
+    /// By the importer's rules: every folder on the way, the context folder
+    /// included, a real folder and not a link; and at the path itself
+    /// nothing, or a plain file — a link there is refused by the import as
+    /// surely as a folder is.
     static func destinationIsObstructed(_ relativePath: String, inContextOf workspace: URL) -> Bool {
         var at = workspace.appendingPathComponent("context", isDirectory: true)
+        var info = stat()
+        if lstat(at.path, &info) == 0, (info.st_mode & S_IFMT) != S_IFDIR { return true }
         let parts = relativePath.split(separator: "/").map(String.init)
         for (index, part) in parts.enumerated() {
             at = at.appendingPathComponent(part)
-            var info = stat()
             guard lstat(at.path, &info) == 0 else { return false }
-            let isFolder = (info.st_mode & S_IFMT) == S_IFDIR
-            if index == parts.count - 1 { return isFolder }
-            if !isFolder { return true }
+            let kind = info.st_mode & S_IFMT
+            if index == parts.count - 1 { return kind != S_IFREG }
+            if kind != S_IFDIR { return true }
         }
         return false
+    }
+
+    /// Marks the sources away from this Mac that the manifest says nothing
+    /// about — neither a member nor a recorded deletion — and unmarks the
+    /// rest. Only the marks change; the acts, and so the withholding and the
+    /// lock, stay until the reader removes such a row from the list.
+    @WritingWorkspaceFiles
+    public static func noteSourcesTheServerDoesNotName(
+        inLibraryAt libraryRoot: URL,
+        members: Set<String>,
+        deleted: Set<String>,
+        fileManager: FileManager = .default
+    ) {
+        for workspace in (try? workspaces(in: libraryRoot, fileManager: fileManager)) ?? [] {
+            guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspace) else { continue }
+            var marks: Set<String> = []
+            for (path, act) in ledger.contextActs() where act != .leaving {
+                guard let member = try? LampWritingWorkspaceLayout.contextPath(
+                    folder: workspace.lastPathComponent, relativePath: path
+                ), !members.contains(member), !deleted.contains(member)
+                else { continue }
+                marks.insert(WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(path)))
+            }
+            guard marks != ledger.unaccounted else { continue }
+            ledger.unaccounted = marks
+            try? ledger.save(in: workspace)
+        }
+    }
+
+    /// The sources here drawn as no longer on the server, relative paths.
+    @WritingWorkspaceFiles
+    static func unaccountedSourceNames(in workspace: URL) -> Set<String> {
+        let prefix = WorkspaceFileLedger.contextKey("")
+        return Set(WorkspaceFileLedger.load(in: workspace).unaccounted
+            .filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) })
     }
 
     /// Every source this Mac has only on the server — let go, or asked back
@@ -1647,6 +1689,13 @@ struct WorkspaceFileLedger: Codable, Equatable {
 
     enum ReturnNotice: String, Codable, Sendable { case changed, unmarked }
 
+    /// Sources away from this Mac that the server's manifest neither counts
+    /// nor records the deletion of — a tombstone expired, or an older
+    /// manifest restored. Drawn as no longer on the server for the reader to
+    /// remove from the list; never forgotten on absence alone, which is the
+    /// inference `decisions/0018` refuses.
+    var unaccounted: Set<String> = []
+
     /// Which file a request to offload was made about, as its place on disk
     /// (`device:inode`). A file attached later at the same path — the first
     /// one deleted in Finder and another dropped in under its name, between
@@ -1712,6 +1761,9 @@ struct WorkspaceFileLedger: Codable, Equatable {
         returnNotices = try container.decodeIfPresent(
             [String: ReturnNotice].self, forKey: .returnNotices
         ) ?? [:]
+        unaccounted = try container.decodeIfPresent(
+            Set<String>.self, forKey: .unaccounted
+        ) ?? []
     }
 
     init() {}
@@ -1907,6 +1959,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
         // been checked.
         var saved = self
         saved.leavingFile = leavingFile.filter { acts[$0.key] == .leaving }
+        saved.unaccounted = unaccounted.filter { acts[$0] == .offloaded || acts[$0] == .wanted }
         try encoder.encode(saved).write(to: destination, options: .atomic)
     }
 

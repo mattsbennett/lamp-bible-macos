@@ -491,6 +491,7 @@ private struct DevotionalAgentContextFile: Identifiable, Equatable {
     var isAwaited: Bool { row.state == .comingBack }
     var isLeaving: Bool { row.state == .leaving }
     var isBlocked: Bool { row.state == .blockedByAFolder }
+    var isGoneFromTheServer: Bool { row.state == .noLongerOnTheServer }
     var removalWaitsForDownload: Bool { row.removalWaitsForDownload }
 }
 
@@ -2000,7 +2001,7 @@ struct DevotionalAgentWorkspaceView: View {
     /// would make them look like a choice of wording.
     private func contextFileRow(_ file: DevotionalAgentContextFile) -> some View {
         HStack {
-            Image(systemName: file.isBlocked
+            Image(systemName: file.isBlocked || file.isGoneFromTheServer
                 ? "exclamationmark.triangle"
                 : file.isAwaited
                 ? "arrow.down.circle.dotted"
@@ -2011,9 +2012,17 @@ struct DevotionalAgentWorkspaceView: View {
                 : (file.isDirectory ? "folder" : "doc"))
                 .foregroundStyle(.secondary)
             Text(file.name).lineLimit(1)
-                .foregroundStyle(file.isOffloaded || file.isAwaited || file.isBlocked ? .secondary : .primary)
+                .foregroundStyle(
+                    file.isOffloaded || file.isAwaited || file.isBlocked || file.isGoneFromTheServer
+                        ? .secondary : .primary
+                )
             Spacer()
-            if file.isBlocked {
+            if file.isGoneFromTheServer {
+                Text("No longer on the server")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help("The server's library no longer names this source, so it can't be downloaded. Remove it from the list once you're sure you don't need it.")
+            } else if file.isBlocked {
                 // On the server, hidden by a folder at its path: no download
                 // can land until the folder moves.
                 Text("Move the folder to download")
@@ -2037,7 +2046,14 @@ struct DevotionalAgentWorkspaceView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            if file.isBlocked {
+            if file.isGoneFromTheServer {
+                Button("Remove from List", systemImage: "minus.circle") {
+                    Task { await forgetSourceGoneFromTheServer(file) }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Stop listing this source. Nothing on the server or this Mac is deleted.")
+            } else if file.isBlocked {
                 EmptyView()
             } else if file.isOffloaded || file.isAwaited {
                 Button(
@@ -2077,11 +2093,12 @@ struct DevotionalAgentWorkspaceView: View {
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .disabled(syncController.provider == .off)
+                    // WebDAV only (`decisions/0022`).
+                    .disabled(syncController.provider != .webDAV)
                     .help(
-                        syncController.provider == .off
-                            ? "Turn sync on to put sources back on the server"
-                            : "Free the space here after the next sync, keeping this source on the server"
+                        syncController.provider == .webDAV
+                            ? "Free the space here after the next sync, keeping this source on the server"
+                            : "Sources can be put back only on a WebDAV server"
                     )
                 }
             }
@@ -2810,6 +2827,21 @@ struct DevotionalAgentWorkspaceView: View {
             Task { _ = await syncController.syncAsked(library: libraryModel.library) }
             try await DevotionalAgentWorkspaceStore.refreshSourceInventory(in: workspaceURL)
             contextNote = "“\(file.name)” will come back on the next sync."
+            schedulePoll()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func forgetSourceGoneFromTheServer(_ file: DevotionalAgentContextFile) async {
+        guard let workspaceURL else { return }
+        errorMessage = nil
+        do {
+            try await WorkspaceContextFileStore.forgetSourceNoLongerOnTheServer(
+                relativePath: file.relativePath, in: workspaceURL
+            )
+            // It may have been the last thing holding where sync points.
+            await syncController.refreshSourcesOnlyOnTheServer(library: libraryModel.library)
             schedulePoll()
         } catch {
             errorMessage = error.localizedDescription

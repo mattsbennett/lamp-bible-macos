@@ -153,23 +153,10 @@ final class LibrarySyncController: ObservableObject {
             && SyncAccount.identity(username: username, password: password) == account
     }
 
-    /// Whether `provider` is the folder provider pointing at the very folder
-    /// the lock was taken on, renamed or moved since: turning sync back on to
-    /// it is how the offloaded sources come back. A pass then moves the lock
-    /// to its new path.
-    private func isTheLockedFolder(_ provider: Provider) -> Bool {
-        guard provider == .folder, let lockedPlace = offloadLock?.place,
-              let folder = try? resolveFolderURL()
-        else { return false }
-        let hasScope = folder.startAccessingSecurityScopedResource()
-        defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
-        return Self.place(of: folder) == lockedPlace
-    }
-
     /// Engages the lock before an offload deletes anything.
     private func willOffload(to server: OffloadServer) {
         if offloadLock == nil {
-            offloadLock = OffloadLock(source: server.source, account: server.account, place: server.place)
+            offloadLock = OffloadLock(source: server.source, account: server.account)
         }
     }
 
@@ -262,10 +249,7 @@ final class LibrarySyncController: ObservableObject {
     var provider: Provider {
         get { Provider(rawValue: defaults.string(forKey: "sync.provider") ?? "off") ?? .off }
         set {
-            guard newValue == provider
-                    || isTheLockedFolder(newValue)
-                    || mayPointSync(at: source(for: newValue))
-            else {
+            guard newValue == provider || mayPointSync(at: source(for: newValue)) else {
                 objectWillChange.send()
                 return
             }
@@ -486,15 +470,6 @@ final class LibrarySyncController: ObservableObject {
     /// than run, so waiting on it alone returns before the pass it queued.
     var isPassRunning: Bool { isSyncing || passGate }
 
-    /// Waits until no pass — nor the offloads after one, nor a pass queued
-    /// behind them — is running. Bounded, so a wedged pass cannot hold a
-    /// caller for ever; a run of offloads reads at most a gigabyte back.
-    func waitForPasses() async {
-        let started = Date()
-        while isPassRunning, Date().timeIntervalSince(started) < 10 * 60 {
-            try? await Task.sleep(for: .milliseconds(250))
-        }
-    }
 
     /// Whether the offloads after a pass are being carried out. While they
     /// are, no pass starts and the lock on where sync points is not released.
@@ -513,9 +488,20 @@ final class LibrarySyncController: ObservableObject {
     /// written down before anything goes and not released until after.
     ///
     /// Each offload reads the server's copy back through a store made the
-    /// way the pass's was — same address, same credentials, same folder
-    /// access — and goes only where it is the local bytes (`decisions/0022`).
+    /// way the pass's was — same address, same credentials — and goes only
+    /// where it is the local bytes (`decisions/0022`).
+    ///
+    /// **WebDAV only.** A sync folder is on this Mac's disk — iCloud Drive's
+    /// included — so deleting a source here frees nothing while the synced
+    /// copy sits beside it; iCloud's own storage optimisation is what frees
+    /// that, and reading the copy back would download what it had evicted.
+    /// A folder also has no identity Lamp controls, and locking to one cost
+    /// three review rounds (owner's decision, `decisions/0022`).
     private func carryOutOffloads(library: LampLibrary) async {
+        guard provider == .webDAV else {
+            await withdrawRequestsOffAWebDAVServer(library: library)
+            return
+        }
         guard let observation = offloadObservation() else { return }
         isOffloading = true
         defer { isOffloading = false }
@@ -530,7 +516,6 @@ final class LibrarySyncController: ObservableObject {
                 let store = UncheckedStore(store: connection.store)
                 let server = OffloadServer(
                     source: connection.source, account: connection.account,
-                    place: connection.place,
                     fetch: { path, destination in
                         // The whole body, streamed to disk: what Download does.
                         try await store.store.read(path: path, into: destination) != nil
@@ -541,6 +526,20 @@ final class LibrarySyncController: ObservableObject {
             }
         } catch {
             Self.log.error("Offloads skipped: the server could not be reached as the pass reached it: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Under a sync folder nothing is offloaded, so a request made under
+    /// WebDAV that is still waiting is withdrawn and said, rather than left
+    /// promising a sync that will never carry it out.
+    private func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
+        for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL) {
+            for path in requested {
+                try? await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
+            }
+            offloadRefusals[workspace.standardizedFileURL.path] = requested.count == 1
+                ? "“\(requested[0])” stays on this Mac: sources go back only to a WebDAV server."
+                : "\(requested.count) sources stay on this Mac: sources go back only to a WebDAV server."
         }
     }
 
@@ -748,6 +747,11 @@ final class LibrarySyncController: ObservableObject {
         let forgotten = await LampWorkspaceSync.forgetActsNoLongerOnTheServer(
             inLibraryAt: library.rootURL, deleted: deleted
         )
+        if let members = lastObservation?.members {
+            await LampWorkspaceSync.noteSourcesTheServerDoesNotName(
+                inLibraryAt: library.rootURL, members: members, deleted: deleted
+            )
+        }
         if !forgotten.isEmpty {
             Self.log.info("Forgot \(forgotten.count, privacy: .public) offload(s) the server no longer holds")
         }
@@ -1033,15 +1037,6 @@ final class LibrarySyncController: ObservableObject {
         let store: any LampSyncRemoteStore
         let source: String
         let account: String
-        /// A folder's place on disk; nil for a server.
-        var place: String? = nil
-    }
-
-    /// A folder's device and inode, read without following a link.
-    private static func place(of folder: URL) -> String? {
-        var info = stat()
-        guard lstat(folder.path, &info) == 0 else { return nil }
-        return "\(info.st_dev):\(info.st_ino)"
     }
 
     /// Makes the one connection everything uses — a pass, a probe, an
@@ -1062,8 +1057,7 @@ final class LibrarySyncController: ObservableObject {
             return try await body(Connection(
                 store: LampSyncDirectoryStore(root: folder),
                 source: LampSyncFileRecords.folderSource(folder),
-                account: "",
-                place: Self.place(of: folder)
+                account: ""
             ))
         case .webDAV:
             guard let url = URL(string: endpoint), url.scheme?.hasPrefix("http") == true else {
@@ -1180,16 +1174,9 @@ final class LibrarySyncController: ObservableObject {
     /// other way than they were put there: before it reads a manifest, which
     /// from another library would settle them as gone and lift the lock. A
     /// lock from before the account was kept takes this pass's.
-    private func admitPass(at source: String, as account: String, place: String? = nil) throws {
+    private func admitPass(at source: String, as account: String) throws {
         guard var lock = offloadLock else { return }
-        // A sync folder renamed or moved in Finder is the same folder at a
-        // new path: the lock follows it rather than refusing the very folder
-        // that holds the offloaded copies.
-        if let followed = lock.following(to: source, at: place) {
-            lock = followed
-            offloadLock = lock
-        }
-        guard lock.admits(source: source, account: account, place: place) else {
+        guard lock.admits(source: source, account: account) else {
             throw LibrarySyncError.offloadsHeldElsewhere
         }
         if lock.account == nil {
@@ -1223,9 +1210,7 @@ final class LibrarySyncController: ObservableObject {
                 // Held for the store's whole lifetime, which is this pass.
                 let hasScope = folder.startAccessingSecurityScopedResource()
                 defer { if hasScope { folder.stopAccessingSecurityScopedResource() } }
-                try admitPass(
-                    at: LampSyncFileRecords.folderSource(folder), as: "", place: Self.place(of: folder)
-                )
+                try admitPass(at: LampSyncFileRecords.folderSource(folder), as: "")
                 try await sync(
                     library: library,
                     store: LampSyncDirectoryStore(root: folder),
