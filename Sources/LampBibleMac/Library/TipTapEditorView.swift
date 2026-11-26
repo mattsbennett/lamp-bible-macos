@@ -1439,22 +1439,21 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
       if (window.__lampDrawnCaret) return;
       window.__lampDrawnCaret = true;
       var html = document.documentElement;
-      var highlights = !!(window.CSS && CSS.highlights && window.Highlight);
       var style = document.createElement('style');
       style.id = 'lamp-drawn-caret';
       style.textContent = [
         'html.lamp-drawn-caret .ProseMirror[contenteditable="true"] { caret-color: transparent !important; }',
         'html.lamp-drawn-selection .ProseMirror ::selection, html.lamp-drawn-selection .ProseMirror::selection { background: transparent; }',
-        '::highlight(lamp-selection) { background-color: var(--lamp-selection, -apple-system-selected-text-background); }',
-        'html.lamp-selection-inactive ::highlight(lamp-selection) { background-color: var(--lamp-selection-inactive, -apple-system-unemphasized-selected-text-background); }',
-        '#lamp-selection-gap { position: fixed; left: 0; top: 0; width: 0; height: 0; background: var(--lamp-selection, -apple-system-selected-text-background); pointer-events: none; z-index: 2147482999; display: none; }',
-        'html.lamp-selection-inactive #lamp-selection-gap { background: var(--lamp-selection-inactive, -apple-system-unemphasized-selected-text-background); }',
+        // Behind the text and above the page's ground, as the system draws
+        // a selection: the words keep their colour over it, and a quote's
+        // or a review mark's tint lies over it a little.
+        '#lamp-selection { position: fixed; left: 0; top: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: -1; }',
+        '#lamp-selection > div { position: absolute; left: 0; top: 0; display: none; background: var(--lamp-selection, -apple-system-selected-text-background); }',
+        'html.lamp-selection-inactive #lamp-selection > div { background: var(--lamp-selection-inactive, -apple-system-unemphasized-selected-text-background); }',
         '#lamp-caret { position: fixed; left: 0; top: 0; width: 2px; height: 0; border-radius: 1px; background: var(--accent-color, #007aff); pointer-events: none; z-index: 2147483000; display: none; will-change: transform; }'
       ].join('\n');
       html.appendChild(style);
 
-      var selection = highlights ? new Highlight() : null;
-      if (selection) CSS.highlights.set('lamp-selection', selection);
       var caret = null;
       var blink = null;
       var frame = 0;
@@ -1508,17 +1507,11 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         var focused = !!root && document.hasFocus() && document.activeElement === root;
         if (root && resized && !root.__lampWatched) { root.__lampWatched = true; resized.observe(root); }
 
-        // The selection, drawn the height of its letters.
-        if (selection) {
-          if (selection.size) selection.clear();
-          // Not while ProseMirror hides the text selection itself, as it
-          // does with a picture or a block selected whole.
-          var drawn = root && !range.collapsed && !root.classList.contains('ProseMirror-hideselection');
-          if (drawn) selection.add(range.cloneRange());
-          html.classList.toggle('lamp-drawn-selection', !!root);
-          html.classList.toggle('lamp-selection-inactive', !focused);
-          placeGap(drawn ? range : null);
-        }
+        // The selection, as the system draws one; not while ProseMirror
+        // hides the text selection itself, as it does with a picture or a
+        // block selected whole.
+        drawSelection(range, root);
+        html.classList.toggle('lamp-selection-inactive', !focused);
 
         // The caret, where it can be measured with certainty; elsewhere WebKit's.
         var rect = null;
@@ -1558,14 +1551,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         }
       }
 
-      // A selection as the system draws one runs from the top of a line's
-      // letters to the top of the next line's: WebKit's highlight already
-      // fills between the lines it covers, and this is the same gap below
-      // the last of them. Measured from the selection's two ends, collapsed,
-      // which WebKit gives the height of their letters, so a long selection
-      // costs no more than a short one.
-      var gap = null;
-      var gapShown = false;
       // A block's lines, by its first letters: where the first line's
       // letters stand, how tall they are, and the pitch from line to line.
       // Taken from the block rather than the caret, which in a run of
@@ -1587,65 +1572,149 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         return Math.round((rect.top + rect.height / 2 - (metrics.top + metrics.height / 2)) / metrics.pitch);
       }
 
-      function blockOf(node) {
-        var element = node.nodeType === 1 ? node : node.parentElement;
-        return element && element.closest('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, pre, figcaption');
-      }
+          // The selection, drawn as the system draws one: a box for each line,
+          // from just above its tallest letters to the same place on the next
+          // line, so the space under a line is its own (owner, 2026-11-25,
+          // after Pages). WebKit's selection and highlights are both set by the
+          // font's box, which in a face with room for accents, New York's,
+          // stands well above the letters. Lines in the middle run margin to
+          // margin, and the space between paragraphs is filled. The boxes lie
+          // behind the text.
+          var TEXTBLOCKS = 'p, h1, h2, h3, h4, h5, h6, pre';
+          var layer = null;
+          var boxes = [];
+          var boxesShown = 0;
+          var inks = {};
+          var measure = null;
 
-      function placeGap(range) {
-        var box = null;
-        var block = range && blockOf(range.endContainer);
-        var near = range && range.endContainer.nodeType === 3
-          ? range.endContainer.data.slice(Math.max(0, range.endOffset - 1), range.endOffset + 1)
-          : '';
-        // Not beside right to left letters, whose lines run the other way.
-        if (block && !rtl.test(near) && getComputedStyle(block).direction !== 'rtl') {
-          var endCaret = range.cloneRange();
-          endCaret.collapse(false);
-          var end = endCaret.getClientRects()[0];
-          var metrics = end && lineMetrics(block);
-          if (metrics) {
-            var line = lineOf(metrics, end);
-            var startCaret = range.cloneRange();
-            startCaret.collapse(true);
-            var start = startCaret.getClientRects()[0];
-            // On one line, from where the selection starts; on more, from
-            // the start of the last line, the block's text edge.
-            var oneLine = start && blockOf(range.startContainer) === block && lineOf(metrics, start) === line;
-            var left = oneLine
-              ? start.left
-              : block.getBoundingClientRect().left + parseFloat(getComputedStyle(block).paddingLeft || '0');
-            var top = metrics.top + line * metrics.pitch + metrics.height;
-            var bottom = metrics.top + (line + 1) * metrics.pitch;
-            // Within a box that clips the editor, as the text is.
-            var clipper = clipperOf(rootOf(block));
-            if (clipper) {
-              var clip = clipper.getBoundingClientRect();
-              top = Math.max(top, clip.top);
-              bottom = Math.min(bottom, clip.bottom);
-            }
-            if (bottom - top > 0.5 && end.left - left > 0.5) {
-              box = { x: left, y: top, w: end.left - left, h: bottom - top };
-            }
+          // From the top of a block's font box to just above its tallest
+          // letters, measured once a face and size.
+          function inkOffset(block) {
+            var style = getComputedStyle(block);
+            var font = style.fontStyle + ' ' + style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+            if (inks[font] !== undefined) return inks[font];
+            if (!measure) measure = document.createElement('canvas').getContext('2d');
+            measure.font = font;
+            var metrics = measure.measureText('bdfhklt');
+            var offset = Math.max(0, metrics.fontBoundingBoxAscent - metrics.actualBoundingBoxAscent - 1);
+            inks[font] = offset;
+            return offset;
           }
-        }
-        if (box) {
-          if (!gap && document.body) {
-            gap = document.createElement('div');
-            gap.id = 'lamp-selection-gap';
-            gap.setAttribute('aria-hidden', 'true');
-            document.body.appendChild(gap);
+
+          function textBlockOf(node) {
+            var element = node.nodeType === 1 ? node : node.parentElement;
+            return element && element.closest(TEXTBLOCKS);
           }
-          if (!gap) return;
-          gap.style.transform = 'translate(' + box.x + 'px,' + box.y + 'px)';
-          gap.style.width = box.w + 'px';
-          gap.style.height = box.h + 'px';
-          if (!gapShown) { gap.style.display = 'block'; gapShown = true; }
-        } else if (gap && gapShown) {
-          gap.style.display = 'none';
-          gapShown = false;
-        }
-      }
+
+          // Each selected line as the system would box it, or null where this
+          // cannot be sure of the lines, and WebKit's selection is shown instead.
+          function selectedLines(range, root) {
+            var first = textBlockOf(range.startContainer);
+            var last = textBlockOf(range.endContainer);
+            if (!first || !last || !root.contains(first) || !root.contains(last)) return null;
+            // Not in the footnote's popover, whose own ground would cover a
+            // layer behind the page; WebKit's is shown there.
+            if (clipperOf(root)) return null;
+            // Right to left letters run their lines the other way.
+            if (rtl.test(range.toString())) return null;
+            var lines = [];
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+              acceptNode: function (node) { return node.matches(TEXTBLOCKS) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP; }
+            });
+            walker.currentNode = first;
+            for (var block = first; block; block = block === last ? null : walker.nextNode()) {
+              if (getComputedStyle(block).direction === 'rtl') return null;
+              // A table's cells sit side by side, not one line after another;
+              // WebKit's selection is shown across one.
+              if (block.closest('td, th')) return null;
+              var metrics = lineMetrics(block);
+              // An empty paragraph has no letters to measure its line by.
+              if (!metrics) return null;
+              var part = document.createRange();
+              part.selectNodeContents(block);
+              if (block.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+              if (block.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+              var rects = part.getClientRects();
+              var byLine = {};
+              for (var i = 0; i < rects.length; i++) {
+                var rect = rects[i];
+                if (rect.height <= 0) continue;
+                var index = lineOf(metrics, rect);
+                var line = byLine[index] || (byLine[index] = { left: rect.left, right: rect.right });
+                line.left = Math.min(line.left, rect.left);
+                line.right = Math.max(line.right, rect.right);
+              }
+              var box = block.getBoundingClientRect();
+              var style = getComputedStyle(block);
+              var textLeft = box.left + parseFloat(style.paddingLeft || '0');
+              var textRight = box.right - parseFloat(style.paddingRight || '0');
+              var ink = inkOffset(block);
+              Object.keys(byLine).map(Number).sort(function (a, b) { return a - b; }).forEach(function (index) {
+                lines.push({
+                  top: metrics.top + index * metrics.pitch + ink,
+                  pitch: metrics.pitch,
+                  left: byLine[index].left,
+                  right: byLine[index].right,
+                  textLeft: textLeft,
+                  textRight: textRight
+                });
+              });
+            }
+            return lines.length ? lines : null;
+          }
+
+          function showBoxes(lines, root) {
+            var clipper = clipperOf(root);
+            var clip = clipper ? clipper.getBoundingClientRect() : null;
+            var shown = 0;
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              var top = line.top;
+              var bottom = i + 1 < lines.length ? lines[i + 1].top : line.top + line.pitch;
+              var left = i === 0 ? line.left : line.textLeft;
+              var right = i === lines.length - 1 ? line.right : line.textRight;
+              // Within a box that clips the editor, as the text is.
+              if (clip) {
+                top = Math.max(top, clip.top);
+                bottom = Math.min(bottom, clip.bottom);
+              }
+              if (bottom - top < 0.5 || right - left < 0.5) continue;
+              if (!layer) {
+                if (!document.body) return 0;
+                layer = document.createElement('div');
+                layer.id = 'lamp-selection';
+                layer.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(layer);
+              }
+              var element = boxes[shown];
+              if (!element) {
+                element = boxes[shown] = document.createElement('div');
+                layer.appendChild(element);
+              }
+              element.style.transform = 'translate(' + left + 'px,' + top + 'px)';
+              element.style.width = (right - left) + 'px';
+              element.style.height = (bottom - top) + 'px';
+              if (shown >= boxesShown) element.style.display = 'block';
+              shown++;
+            }
+            for (var j = shown; j < boxesShown; j++) boxes[j].style.display = 'none';
+            boxesShown = shown;
+            return shown;
+          }
+
+          function drawSelection(range, root) {
+            var lines = range && root && !range.collapsed && !root.classList.contains('ProseMirror-hideselection')
+              ? selectedLines(range, root)
+              : null;
+            if (lines) {
+              showBoxes(lines, root);
+            } else {
+              for (var j = 0; j < boxesShown; j++) boxes[j].style.display = 'none';
+              boxesShown = 0;
+            }
+            // WebKit's own is hidden only where this one is drawn.
+            html.classList.toggle('lamp-drawn-selection', !!lines);
+          }
 
       function soon() {
         if (!frame) frame = requestAnimationFrame(update);
