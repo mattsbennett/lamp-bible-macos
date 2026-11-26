@@ -124,7 +124,6 @@ struct TipTapEditorView: NSViewRepresentable {
         // Last: a page that is already ready takes everything above at once.
         coordinator.attach(page)
         applyBackgroundColor(to: webView, coordinator: coordinator)
-        coordinator.setSelectionColors(.init(appearance: webView.effectiveAppearance))
         return webView
     }
 
@@ -147,7 +146,6 @@ struct TipTapEditorView: NSViewRepresentable {
         coordinator.setTheme(isDark: context.environment.colorScheme == .dark)
         coordinator.setProseTypeface(proseTypeface)
         applyBackgroundColor(to: webView, coordinator: coordinator)
-        coordinator.setSelectionColors(.init(appearance: webView.effectiveAppearance))
 
         // Changes made by TipTap have already updated lastKnownMarkdown. A
         // different value here therefore came from loading a devotional or from
@@ -214,21 +212,6 @@ struct TipTapEditorView: NSViewRepresentable {
 
     private func cssColor(for color: NSColor, in appearance: NSAppearance) -> String {
         Self.cssColor(for: color, in: appearance)
-    }
-
-    /// As `cssColor`, keeping the colour's alpha.
-    fileprivate static func cssRGBA(for color: NSColor, in appearance: NSAppearance) -> String {
-        var resolved = color
-        appearance.performAsCurrentDrawingAppearance {
-            resolved = color.usingColorSpace(.sRGB) ?? color
-        }
-        return String(
-            format: "rgba(%d, %d, %d, %.3f)",
-            Int((resolved.redComponent * 255).rounded()),
-            Int((resolved.greenComponent * 255).rounded()),
-            Int((resolved.blueComponent * 255).rounded()),
-            resolved.alphaComponent
-        )
     }
 
     /// Dynamic system colours have no fixed value until they are resolved against
@@ -404,9 +387,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     private var pendingTheme: Bool?
     private var pendingBackgroundColor: String?
     private var appliedBackgroundColor: String?
-    private var shownSelectionColors: SelectionColors?
-    private var pendingSelectionColors: SelectionColors?
-    private var appliedSelectionColors: SelectionColors?
     private var shownProseTypeface: ProseTypeface??
     private var pendingProseTypeface: ProseTypeface??
     private var appliedProseTypeface: ProseTypeface??
@@ -637,10 +617,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingBackgroundColor = nil
             setBackgroundColor(color)
         }
-        if let colors = pendingSelectionColors {
-            pendingSelectionColors = nil
-            setSelectionColors(colors)
-        }
         if let typeface = pendingProseTypeface {
             pendingProseTypeface = nil
             setProseTypeface(typeface)
@@ -812,7 +788,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         hasPainted = false
         appliedTheme = nil
         appliedBackgroundColor = nil
-        appliedSelectionColors = nil
         appliedProseTypeface = nil
         appliedMediaMap = nil
         appliedFontSize = nil
@@ -825,7 +800,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         pendingPlaceholder = shownPlaceholder
         pendingTheme = shownTheme
         pendingBackgroundColor = shownBackgroundColor
-        pendingSelectionColors = shownSelectionColors
         pendingProseTypeface = shownProseTypeface
         page?.prepareForReload()
         webView.reload()
@@ -1188,34 +1162,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         evaluate("window.editorAPI.setBackgroundColor(\(Self.javascriptString(cssColor)))")
     }
 
-    /// The selection's colours as the app draws them, for the page's drawn
-    /// selection (`drawnCaretScript`). Resolved here because the page cannot
-    /// see the app's accent: asked for the system's selection colour, it got
-    /// the system blue, where WebKit's own selection had been Lamp's accent.
-    struct SelectionColors: Equatable {
-        var active: String
-        var inactive: String
-
-        init(appearance: NSAppearance) {
-            active = TipTapEditorView.cssRGBA(for: .selectedTextBackgroundColor, in: appearance)
-            inactive = TipTapEditorView.cssRGBA(for: .unemphasizedSelectedTextBackgroundColor, in: appearance)
-        }
-    }
-
-    func setSelectionColors(_ colors: SelectionColors) {
-        shownSelectionColors = colors
-        guard isReady else {
-            pendingSelectionColors = colors
-            return
-        }
-        guard appliedSelectionColors != colors else { return }
-        appliedSelectionColors = colors
-        evaluate(
-            "document.documentElement.style.setProperty('--lamp-selection', \(Self.javascriptString(colors.active)));"
-                + "document.documentElement.style.setProperty('--lamp-selection-inactive', \(Self.javascriptString(colors.inactive)))"
-        )
-    }
-
     /// Sets the writing in the face the host reads it in. Only the writing
     /// page's own stylesheet (`writingPageStyleScript`) gives the class a
     /// meaning, so a compact note editor is never restyled by it.
@@ -1410,30 +1356,29 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         """
     }
 
-    /// Whether the page draws its own caret and selection. Off, WebKit's are
-    /// shown, as they were before.
-    static let drawsCaretAndSelection = true
+    /// Whether the page draws its own caret. Off, WebKit's is shown, as it
+    /// was before.
+    static let drawsCaret = true
 
-    /// The caret and the selection, drawn the height of their letters.
+    /// The caret, drawn the height of its letters.
     ///
-    /// WebKit draws both the height of the line box, the leading with it, so
-    /// at the writing's 1.7 spacing the caret ran down into the gap below its
-    /// line and a selection filled the gaps between lines; the review marks,
-    /// a span's background, sit on the letters alone, and the two disagreed
-    /// beside each other (owner, 2026-11-25). The caret is a bar placed from
-    /// the collapsed selection's own rectangle, which WebKit gives at the
+    /// WebKit draws its caret the height of the line box, the leading with
+    /// it, so at the writing's 1.7 spacing it ran down into the gap below its
+    /// line, where the review marks, a span's background, sit on the letters
+    /// alone (owner, 2026-11-25). This caret is a bar placed from the
+    /// collapsed selection's own rectangle, which WebKit gives at the
     /// letters' height, once a frame at most and by transform, blinking by
-    /// animation; the selection is a CSS Custom Highlight, which paints the
-    /// letters' height too and changes nothing in the document. Measured in
-    /// the writing page: 18 µs for the caret and 3.4 µs for a selection, at
-    /// most once a frame, against about 700 µs a keystroke costs the page.
+    /// animation. Measured in the writing page: 18 µs an update, at most once
+    /// a frame, against about 700 µs a keystroke costs the page, and none
+    /// while idle.
     ///
     /// WebKit's caret is kept wherever this one could be wrong: beside right
     /// to left letters, where which side of a boundary it stands is WebKit's
     /// to judge; in an empty block, or anywhere the rectangle is not one;
-    /// and while an input method composes. A selection made while the page
-    /// is not focused stays drawn, a little paler, as the system's would
-    /// not: the chats send it with a message, so it should be seen.
+    /// while an input method composes; and where it would leave a box that
+    /// clips it. The selection is WebKit's: drawing it as the system does
+    /// needed a box a line, and the edge cases (tables, empty paragraphs,
+    /// the footnote popover) outweighed the gain (owner, 2026-11-25).
     static let drawnCaretScript = #"""
     (function () {
       if (window.__lampDrawnCaret) return;
@@ -1443,13 +1388,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
       style.id = 'lamp-drawn-caret';
       style.textContent = [
         'html.lamp-drawn-caret .ProseMirror[contenteditable="true"] { caret-color: transparent !important; }',
-        'html.lamp-drawn-selection .ProseMirror ::selection, html.lamp-drawn-selection .ProseMirror::selection { background: transparent; }',
-        // Behind the text and above the page's ground, as the system draws
-        // a selection: the words keep their colour over it, and a quote's
-        // or a review mark's tint lies over it a little.
-        '#lamp-selection { position: fixed; left: 0; top: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: -1; }',
-        '#lamp-selection > div { position: absolute; left: 0; top: 0; display: none; background: var(--lamp-selection, -apple-system-selected-text-background); }',
-        'html.lamp-selection-inactive #lamp-selection > div { background: var(--lamp-selection-inactive, -apple-system-unemphasized-selected-text-background); }',
         '#lamp-caret { position: fixed; left: 0; top: 0; width: 2px; height: 0; border-radius: 1px; background: var(--accent-color, #007aff); pointer-events: none; z-index: 2147483000; display: none; will-change: transform; }'
       ].join('\n');
       html.appendChild(style);
@@ -1507,12 +1445,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         var focused = !!root && document.hasFocus() && document.activeElement === root;
         if (root && resized && !root.__lampWatched) { root.__lampWatched = true; resized.observe(root); }
 
-        // The selection, as the system draws one; not while ProseMirror
-        // hides the text selection itself, as it does with a picture or a
-        // block selected whole.
-        drawSelection(range, root);
-        html.classList.toggle('lamp-selection-inactive', !focused);
-
         // The caret, where it can be measured with certainty; elsewhere WebKit's.
         var rect = null;
         if (focused && range.collapsed && root.isContentEditable && !composing) {
@@ -1550,171 +1482,6 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
           html.classList.toggle('lamp-drawn-caret', false);
         }
       }
-
-      // A block's lines, by its first letters: where the first line's
-      // letters stand, how tall they are, and the pitch from line to line.
-      // Taken from the block rather than the caret, which in a run of
-      // another face (inline code, a superscript) has letters of its own.
-      function lineMetrics(block) {
-        var pitch = parseFloat(getComputedStyle(block).lineHeight);
-        if (!(pitch > 0)) return null;
-        var walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-        var first = walker.nextNode();
-        if (!first) return null;
-        var probe = document.createRange();
-        probe.setStart(first, 0);
-        probe.collapse(true);
-        var rect = probe.getClientRects()[0];
-        return rect ? { top: rect.top, height: rect.height, pitch: pitch } : null;
-      }
-
-      function lineOf(metrics, rect) {
-        return Math.round((rect.top + rect.height / 2 - (metrics.top + metrics.height / 2)) / metrics.pitch);
-      }
-
-          // The selection, drawn as the system draws one: a box for each line,
-          // from just above its tallest letters to the same place on the next
-          // line, so the space under a line is its own (owner, 2026-11-25,
-          // after Pages). WebKit's selection and highlights are both set by the
-          // font's box, which in a face with room for accents, New York's,
-          // stands well above the letters. Lines in the middle run margin to
-          // margin, and the space between paragraphs is filled. The boxes lie
-          // behind the text.
-          var TEXTBLOCKS = 'p, h1, h2, h3, h4, h5, h6, pre';
-          var layer = null;
-          var boxes = [];
-          var boxesShown = 0;
-          var inks = {};
-          var measure = null;
-
-          // From the top of a block's font box to just above its tallest
-          // letters, measured once a face and size.
-          function inkOffset(block) {
-            var style = getComputedStyle(block);
-            var font = style.fontStyle + ' ' + style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
-            if (inks[font] !== undefined) return inks[font];
-            if (!measure) measure = document.createElement('canvas').getContext('2d');
-            measure.font = font;
-            var metrics = measure.measureText('bdfhklt');
-            var offset = Math.max(0, metrics.fontBoundingBoxAscent - metrics.actualBoundingBoxAscent - 1);
-            inks[font] = offset;
-            return offset;
-          }
-
-          function textBlockOf(node) {
-            var element = node.nodeType === 1 ? node : node.parentElement;
-            return element && element.closest(TEXTBLOCKS);
-          }
-
-          // Each selected line as the system would box it, or null where this
-          // cannot be sure of the lines, and WebKit's selection is shown instead.
-          function selectedLines(range, root) {
-            var first = textBlockOf(range.startContainer);
-            var last = textBlockOf(range.endContainer);
-            if (!first || !last || !root.contains(first) || !root.contains(last)) return null;
-            // Not in the footnote's popover, whose own ground would cover a
-            // layer behind the page; WebKit's is shown there.
-            if (clipperOf(root)) return null;
-            // Right to left letters run their lines the other way.
-            if (rtl.test(range.toString())) return null;
-            var lines = [];
-            var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-              acceptNode: function (node) { return node.matches(TEXTBLOCKS) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP; }
-            });
-            walker.currentNode = first;
-            for (var block = first; block; block = block === last ? null : walker.nextNode()) {
-              if (getComputedStyle(block).direction === 'rtl') return null;
-              // A table's cells sit side by side, not one line after another;
-              // WebKit's selection is shown across one.
-              if (block.closest('td, th')) return null;
-              var metrics = lineMetrics(block);
-              // An empty paragraph has no letters to measure its line by.
-              if (!metrics) return null;
-              var part = document.createRange();
-              part.selectNodeContents(block);
-              if (block.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
-              if (block.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
-              var rects = part.getClientRects();
-              var byLine = {};
-              for (var i = 0; i < rects.length; i++) {
-                var rect = rects[i];
-                if (rect.height <= 0) continue;
-                var index = lineOf(metrics, rect);
-                var line = byLine[index] || (byLine[index] = { left: rect.left, right: rect.right });
-                line.left = Math.min(line.left, rect.left);
-                line.right = Math.max(line.right, rect.right);
-              }
-              var box = block.getBoundingClientRect();
-              var style = getComputedStyle(block);
-              var textLeft = box.left + parseFloat(style.paddingLeft || '0');
-              var textRight = box.right - parseFloat(style.paddingRight || '0');
-              var ink = inkOffset(block);
-              Object.keys(byLine).map(Number).sort(function (a, b) { return a - b; }).forEach(function (index) {
-                lines.push({
-                  top: metrics.top + index * metrics.pitch + ink,
-                  pitch: metrics.pitch,
-                  left: byLine[index].left,
-                  right: byLine[index].right,
-                  textLeft: textLeft,
-                  textRight: textRight
-                });
-              });
-            }
-            return lines.length ? lines : null;
-          }
-
-          function showBoxes(lines, root) {
-            var clipper = clipperOf(root);
-            var clip = clipper ? clipper.getBoundingClientRect() : null;
-            var shown = 0;
-            for (var i = 0; i < lines.length; i++) {
-              var line = lines[i];
-              var top = line.top;
-              var bottom = i + 1 < lines.length ? lines[i + 1].top : line.top + line.pitch;
-              var left = i === 0 ? line.left : line.textLeft;
-              var right = i === lines.length - 1 ? line.right : line.textRight;
-              // Within a box that clips the editor, as the text is.
-              if (clip) {
-                top = Math.max(top, clip.top);
-                bottom = Math.min(bottom, clip.bottom);
-              }
-              if (bottom - top < 0.5 || right - left < 0.5) continue;
-              if (!layer) {
-                if (!document.body) return 0;
-                layer = document.createElement('div');
-                layer.id = 'lamp-selection';
-                layer.setAttribute('aria-hidden', 'true');
-                document.body.appendChild(layer);
-              }
-              var element = boxes[shown];
-              if (!element) {
-                element = boxes[shown] = document.createElement('div');
-                layer.appendChild(element);
-              }
-              element.style.transform = 'translate(' + left + 'px,' + top + 'px)';
-              element.style.width = (right - left) + 'px';
-              element.style.height = (bottom - top) + 'px';
-              if (shown >= boxesShown) element.style.display = 'block';
-              shown++;
-            }
-            for (var j = shown; j < boxesShown; j++) boxes[j].style.display = 'none';
-            boxesShown = shown;
-            return shown;
-          }
-
-          function drawSelection(range, root) {
-            var lines = range && root && !range.collapsed && !root.classList.contains('ProseMirror-hideselection')
-              ? selectedLines(range, root)
-              : null;
-            if (lines) {
-              showBoxes(lines, root);
-            } else {
-              for (var j = 0; j < boxesShown; j++) boxes[j].style.display = 'none';
-              boxesShown = 0;
-            }
-            // WebKit's own is hidden only where this one is drawn.
-            html.classList.toggle('lamp-drawn-selection', !!lines);
-          }
 
       function soon() {
         if (!frame) frame = requestAnimationFrame(update);
@@ -2080,7 +1847,7 @@ final class TipTapEditorPool {
                 forMainFrameOnly: true
             ))
         }
-        if TipTapEditorCoordinator.drawsCaretAndSelection {
+        if TipTapEditorCoordinator.drawsCaret {
             configuration.userContentController.addUserScript(WKUserScript(
                 source: TipTapEditorCoordinator.drawnCaretScript,
                 injectionTime: .atDocumentStart,
