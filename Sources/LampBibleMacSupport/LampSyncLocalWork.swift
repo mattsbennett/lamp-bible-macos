@@ -40,8 +40,13 @@ public enum LampSyncLocalWork {
     /// where it is. Each value is a modification time in milliseconds, and
     /// means nothing on its own: only the set, against the set taken when the
     /// last pass started.
+    ///
+    /// `includingWorkspaceFiles` false where this Mac does not sync them
+    /// (`WorkspaceFilesSync`): an attached PDF, a skill edited, a chat
+    /// message would otherwise each start a pass with nothing to publish.
     public static func marks(
         inLibraryAt libraryRoot: URL,
+        includingWorkspaceFiles: Bool = true,
         fileManager: FileManager = .default
     ) -> [String: Int64] {
         let root = libraryRoot.standardizedFileURL
@@ -96,9 +101,11 @@ public enum LampSyncLocalWork {
 
         // The custom skills, which sync as one catalog for every workspace.
         // Walked, since a skill is a small folder of files somebody edits.
-        marks.merge(
-            walk(WorkspaceSkillStore.catalogDirectory(in: root), from: root, fileManager: fileManager)
-        ) { first, _ in first }
+        if includingWorkspaceFiles {
+            marks.merge(
+                walk(WorkspaceSkillStore.catalogDirectory(in: root), from: root, fileManager: fileManager)
+            ) { first, _ in first }
+        }
 
         // Each workspace's own files, by the same reading the export takes:
         // the documents a person wrote and the context they gathered. Not the
@@ -110,7 +117,8 @@ public enum LampSyncLocalWork {
             let files = (try? LampWorkspaceSync.workspaceFiles(
                 in: workspace, fileManager: fileManager
             )) ?? [:]
-            for (key, file) in files {
+            for (key, file) in files
+            where includingWorkspaceFiles || WorkspaceFileLedger.isDocumentKey(key) {
                 marks["\(LampWorkspaceSync.portableDirectoryName)/\(workspace.lastPathComponent)/\(key)"] =
                     file.modified
             }

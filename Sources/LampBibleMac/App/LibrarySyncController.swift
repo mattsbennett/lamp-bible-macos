@@ -96,6 +96,31 @@ final class LibrarySyncController: ObservableObject {
     init(defaults: UserDefaults = .standard, fileManager: FileManager = .default) {
         self.defaults = defaults
         self.fileManager = fileManager
+        // Decided once, here: on for a library this Mac has synced before.
+        _ = WorkspaceFilesSync.resolve(
+            in: defaults, hasCompletedAPass: defaults.object(forKey: "sync.lastCompleted") != nil
+        )
+    }
+
+    /// Whether this Mac syncs its writings' sources, agent chats, revision
+    /// history and custom skills (`WorkspaceFilesSync`, `decisions/0024`).
+    /// Turning it off is refused while sources are only on the server — they
+    /// would be stranded there with nothing here asking for them back.
+    var syncsWorkspaceFiles: Bool {
+        get { defaults.bool(forKey: WorkspaceFilesSync.key) }
+        set {
+            guard newValue != syncsWorkspaceFiles else { return }
+            guard newValue || !destinationIsLocked else {
+                errorMessage = """
+                    Some sources are only on the server. Download them before \
+                    turning off workspace sync, or they'd be left there.
+                    """
+                objectWillChange.send()
+                return
+            }
+            defaults.set(newValue, forKey: WorkspaceFilesSync.key)
+            objectWillChange.send()
+        }
     }
 
     /// Sources this Mac holds only on the server, as member paths — what the
@@ -446,6 +471,9 @@ final class LibrarySyncController: ObservableObject {
     private var passGate = false
     /// The account the running pass's store was built with.
     private var accountOfThisPass = ""
+    /// The workspace setting as the running pass started: switched part way
+    /// through, a pass would gather one way and plan the other.
+    private var syncsWorkspaceFilesThisPass = true
 
     private func passAndItsAftermath(library: LampLibrary) async -> Bool {
         let finished = await runSyncPass(library: library)
@@ -498,7 +526,9 @@ final class LibrarySyncController: ObservableObject {
     /// A folder also has no identity Lamp controls, and locking to one cost
     /// three review rounds (owner's decision, `decisions/0022`).
     private func carryOutOffloads(library: LampLibrary) async {
-        guard provider == .webDAV else {
+        // And only while this Mac syncs its sources at all: off, the server's
+        // copies are not this Mac's to rely on (`decisions/0024`).
+        guard provider == .webDAV, syncsWorkspaceFilesThisPass else {
             await withdrawRequestsOffAWebDAVServer(library: library)
             return
         }
@@ -537,9 +567,12 @@ final class LibrarySyncController: ObservableObject {
             for path in requested {
                 try? await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
             }
+            let why = provider == .webDAV
+                ? "sources go back to the server only while workspace sync is on"
+                : "sources go back only to a WebDAV server"
             offloadRefusals[workspace.standardizedFileURL.path] = requested.count == 1
-                ? "“\(requested[0])” stays on this Mac: sources go back only to a WebDAV server."
-                : "\(requested.count) sources stay on this Mac: sources go back only to a WebDAV server."
+                ? "“\(requested[0])” stays on this Mac: \(why)."
+                : "\(requested.count) sources stay on this Mac: \(why)."
         }
     }
 
@@ -902,9 +935,12 @@ final class LibrarySyncController: ObservableObject {
         guard let personal = try? await library.personalChangeStamp() else { return nil }
         let libraryRoot = library.rootURL
         let fileManager = self.fileManager
+        let workspaceFiles = syncsWorkspaceFiles
         // Off the main thread, which this controller otherwise holds.
         let files = await Task.detached {
-            LampSyncLocalWork.marks(inLibraryAt: libraryRoot, fileManager: fileManager)
+            LampSyncLocalWork.marks(
+                inLibraryAt: libraryRoot, includingWorkspaceFiles: workspaceFiles, fileManager: fileManager
+            )
         }.value
         var settings: [String: Any] = [:]
         for key in LampPortableSettingsCodec.syncedKeys {
@@ -1190,6 +1226,7 @@ final class LibrarySyncController: ObservableObject {
         isSyncing = true
         // A folder has no account; a WebDAV pass sets its own below.
         accountOfThisPass = ""
+        syncsWorkspaceFilesThisPass = syncsWorkspaceFiles
         Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -1667,6 +1704,12 @@ extension LibrarySyncController {
             },
             records: &records,
             mergingVersion: { bundle, version in try bundle.merge(version: version.bundle) },
+            // Off, the Mac-only part of the workspaces is what the phone has
+            // always treated it as: nothing uploaded, fetched, tombstoned or
+            // reaped, and what is on the server left as it is (`decisions/0024`).
+            plannedKinds: { [workspaceFiles = syncsWorkspaceFilesThisPass] kind in
+                kind != .workspaceFile || workspaceFiles
+            },
             receiving: { snapshot in
                 let bundle = snapshot.bundle
                 manifest = bundle.manifest
@@ -1959,10 +2002,12 @@ extension LibrarySyncController {
         let libraryRoot = library.rootURL
         let fileManager = self.fileManager
         let digests = digestCache(forLibraryAt: libraryRoot)
+        let workspaceFiles = syncsWorkspaceFilesThisPass
         let described = try await Task.detached {
             let workspaces = try await LampSyncLocalFiles.workspaceFiles(
                 inLibraryAt: libraryRoot,
                 stagingIn: exports,
+                includingWorkspaceFiles: workspaceFiles,
                 fileManager: fileManager
             )
             return LampSyncLocalFiles.describe(
@@ -1995,9 +2040,9 @@ extension LibrarySyncController {
         // one. Absence is not a fact about intent, and this is the fourth
         // place tonight that has had to be said
         // (`lamp-bible-core/Documentation/decisions/0016`, `0017`, `0018`).
-        let offloaded = await LampWorkspaceSync.offloadedSources(
-            inLibraryAt: library.rootURL, fileManager: fileManager
-        )
+        let offloaded = syncsWorkspaceFilesThisPass
+            ? await LampWorkspaceSync.offloadedSources(inLibraryAt: library.rootURL, fileManager: fileManager)
+            : []
         if !offloaded.isEmpty {
             let members = Set(manifest.members.lazy.map(\.path))
             result.gathered.withheld.formUnion(offloaded.intersection(members))
@@ -2055,10 +2100,12 @@ extension LibrarySyncController {
         // with nothing here, it would be planned as a download on every pass
         // (`decisions/0023`). Once; the file is written only when something
         // is added.
-        let toolOutput = try await LampSyncRemovedModules.queueToolOutput(
-            amongMembers: manifest.members.map { (path: $0.path, presentSince: $0.presentSince) },
-            inLibraryAt: library.rootURL, fileManager: fileManager
-        )
+        let toolOutput = syncsWorkspaceFilesThisPass
+            ? try await LampSyncRemovedModules.queueToolOutput(
+                amongMembers: manifest.members.map { (path: $0.path, presentSince: $0.presentSince) },
+                inLibraryAt: library.rootURL, fileManager: fileManager
+            )
+            : []
         if !toolOutput.isEmpty {
             Self.log.info("Queued \(toolOutput.count, privacy: .public) tool-output file(s) for removal from the server")
         }
@@ -2204,9 +2251,9 @@ extension LibrarySyncController {
         // Sources carry when they were attached here, so a replacement put
         // at a path another Mac deleted supersedes that deletion rather than
         // being taken for the copy it deleted.
-        let sourceTimes = await LampWorkspaceSync.sourceAttachmentTimes(
-            inLibraryAt: library.rootURL, fileManager: fileManager
-        )
+        let sourceTimes = syncsWorkspaceFilesThisPass
+            ? await LampWorkspaceSync.sourceAttachmentTimes(inLibraryAt: library.rootURL, fileManager: fileManager)
+            : [:]
         result.gathered.savedAt = LampSyncSavedAt.paths(
             notesLastSaved: LampSyncSavedAt.lastSaved(.note, in: personal),
             writingsLastSaved: writings.compactMap(\.lastModified).max(),
@@ -2231,6 +2278,8 @@ extension LibrarySyncController {
         let unlisted = await LampSyncLocalFiles.revisionsOfUnlistedMembers(
             manifest.members
                 .filter { !($0.kind?.isListed ?? true) && !withheld.contains($0.path) }
+                // A kind this Mac does not sync costs no listing either.
+                .filter { $0.kind != .workspaceFile || syncsWorkspaceFilesThisPass }
                 .map(\.path),
             from: store
         )

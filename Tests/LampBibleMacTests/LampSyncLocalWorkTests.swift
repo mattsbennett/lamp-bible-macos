@@ -67,6 +67,20 @@ struct LampSyncLocalWorkTests {
         LampSyncLocalWork.marks(inLibraryAt: root, fileManager: fileManager)
     }
 
+    /// With workspace sync off, an attached source or an edited skill is no
+    /// work to publish — only the writing's documents are (`decisions/0024`).
+    @Test func withWorkspaceSyncOffOnlyDocumentsAreWork() throws {
+        let root = try makeLibrary()
+        defer { try? fileManager.removeItem(at: root) }
+        let on = LampSyncLocalWork.marks(inLibraryAt: root, includingWorkspaceFiles: true, fileManager: fileManager)
+        let off = LampSyncLocalWork.marks(inLibraryAt: root, includingWorkspaceFiles: false, fileManager: fileManager)
+        #expect(on.keys.contains { $0.hasSuffix("Context/isaiah.md") })
+        #expect(on.keys.contains { $0.contains("write-a-devotional") })
+        #expect(!off.keys.contains { $0.hasSuffix("Context/isaiah.md") })
+        #expect(!off.keys.contains { $0.contains("write-a-devotional") })
+        #expect(off.keys.contains { $0.hasSuffix("Documents/notes.md") }, "documents still are")
+    }
+
     // MARK: - Modules
 
     /// The user's own report: a plan deleted here, and nothing to say so.

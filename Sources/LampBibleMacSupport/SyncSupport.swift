@@ -1890,6 +1890,7 @@ struct WorkspaceFileLedger: Codable, Equatable {
     }
 
     static func isContextKey(_ key: String) -> Bool { key.hasPrefix("Context/") }
+    static func isDocumentKey(_ key: String) -> Bool { key.hasPrefix("Documents/") }
 
     /// Whether a source arrived here recently enough to be left alone.
     ///

@@ -2095,12 +2095,15 @@ struct DevotionalAgentWorkspaceView: View {
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    // WebDAV only (`decisions/0022`).
-                    .disabled(syncController.provider != .webDAV)
+                    // WebDAV only (`decisions/0022`), and only while this
+                    // Mac syncs its sources (`decisions/0024`).
+                    .disabled(syncController.provider != .webDAV || !syncController.syncsWorkspaceFiles)
                     .help(
-                        syncController.provider == .webDAV
-                            ? "Free the space here after the next sync, keeping this source on the server"
-                            : "Sources can be put back only on a WebDAV server"
+                        syncController.provider != .webDAV
+                            ? "Sources can be put back only on a WebDAV server"
+                            : !syncController.syncsWorkspaceFiles
+                            ? "Turn on workspace sync in Settings to put sources back on the server"
+                            : "Free the space here after the next sync, keeping this source on the server"
                     )
                 }
             }

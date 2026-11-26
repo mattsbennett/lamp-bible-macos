@@ -1210,8 +1210,9 @@ private struct ReaderSettingsView: View {
                             }
                         }
                         // WebDAV only (`decisions/0022`): a sync folder is on
-                        // this Mac's disk, so there is no space to win.
-                        .disabled(syncController.provider != .webDAV)
+                        // this Mac's disk, so there is no space to win. And
+                        // only while sources sync at all (`decisions/0024`).
+                        .disabled(syncController.provider != .webDAV || !syncController.syncsWorkspaceFiles)
                         Text(
                             syncController.provider == .webDAV
                                 ? """
@@ -1233,7 +1234,35 @@ private struct ReaderSettingsView: View {
                         .foregroundStyle(.secondary)
                         .tint(Color.lampAccentMuted)
                             .disabled(syncController.provider == .off)
-                        Text("Includes companion writing files, agent context, custom workspace skills, and revision history. Provider credentials and generated agent configuration stay on this Mac.")
+                        Toggle(
+                            "Sync writing workspaces from this Mac",
+                            isOn: Binding(
+                                get: { syncController.syncsWorkspaceFiles },
+                                set: { on in
+                                    syncController.syncsWorkspaceFiles = on
+                                    // Sync happens by itself: turning this on
+                                    // starts the pass that brings them.
+                                    if on, syncController.syncsWorkspaceFiles {
+                                        Task { _ = await syncController.syncAsked(library: model.library) }
+                                    }
+                                }
+                            )
+                        )
+                        .disabled(syncController.provider == .off
+                            || (syncController.syncsWorkspaceFiles && syncController.destinationIsLocked))
+                        .help(
+                            syncController.syncsWorkspaceFiles && syncController.destinationIsLocked
+                                ? "Download the sources that are only on the server first."
+                                : "Sources, agent chats, revision history and custom skills"
+                        )
+                        Text("""
+                            A writing's sources, agent chats, revision history and custom \
+                            skills: most of what a library holds, and only a Mac uses them. \
+                            The files beside a writing and its review marks always sync. \
+                            Turning this on downloads every source already on the server. \
+                            Provider credentials and generated agent configuration stay on \
+                            this Mac.
+                            """)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if syncController.provider == .off, syncController.hasRememberedDetails {

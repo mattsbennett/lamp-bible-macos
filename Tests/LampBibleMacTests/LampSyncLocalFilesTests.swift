@@ -274,6 +274,36 @@ struct LampSyncLocalFilesTests {
         #expect(!paths.contains { $0.contains("/node_modules/") || $0.contains("/__pycache__/") })
     }
 
+    /// With workspace sync off, the gather offers a writing's documents and
+    /// nothing else of its workspace.
+    @Test func withWorkspaceSyncOffOnlyDocumentsAreGathered() async throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let scratch = library.appendingPathComponent("scratch", isDirectory: true)
+        try write("# Outline", at: "AgentWorkspaces/Writing/talk-123/outline.md", in: library)
+        try write("a fact", at: "AgentWorkspaces/Writing/talk-123/context/fact.md", in: library)
+
+        let found = try await LampSyncLocalFiles.workspaceFiles(
+            inLibraryAt: library, stagingIn: scratch, includingWorkspaceFiles: false
+        )
+        #expect(found.map(\.kind) == [.writingDocument])
+        #expect(found.first?.path == "Workspaces/Writing/talk-123/Documents/outline.md")
+    }
+
+    /// A library this Mac has synced before keeps syncing its workspaces;
+    /// a new one starts without, and the choice, once made, is kept.
+    @Test func workspaceSyncDefaultsByWhetherThisMacHasSyncedBefore() throws {
+        let suite = "lamp-workspace-sync-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(!WorkspaceFilesSync.resolve(in: defaults, hasCompletedAPass: false))
+        #expect(!WorkspaceFilesSync.resolve(in: defaults, hasCompletedAPass: true), "decided once")
+        defaults.removeObject(forKey: WorkspaceFilesSync.key)
+        #expect(WorkspaceFilesSync.resolve(in: defaults, hasCompletedAPass: true))
+        defaults.set(false, forKey: WorkspaceFilesSync.key)
+        #expect(!WorkspaceFilesSync.resolve(in: defaults, hasCompletedAPass: true), "the reader's choice stands")
+    }
+
     /// A book's pictures are not inside its module: `media_json` holds only
     /// their metadata, so these files are the library's only copy. Gathered
     /// from every root the reader looks in, in its order, so what is

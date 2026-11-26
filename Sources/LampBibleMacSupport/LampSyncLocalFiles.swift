@@ -309,10 +309,15 @@ extension LampSyncLocalFiles {
     /// by hand.
     /// On `WritingWorkspaceFiles`: this exports the live library into the
     /// scratch directory, so it reads workspaces a pane may be writing.
+    ///
+    /// `includingWorkspaceFiles` false where this Mac does not sync them
+    /// (`WorkspaceFilesSync`): the export still runs, for the documents and
+    /// for what it records of them, and only documents are offered.
     @WritingWorkspaceFiles
     public static func workspaceFiles(
         inLibraryAt libraryRoot: URL,
         stagingIn scratch: URL,
+        includingWorkspaceFiles: Bool = true,
         fileManager: FileManager = .default
     ) throws -> [Candidate] {
         try fileManager.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -323,7 +328,7 @@ extension LampSyncLocalFiles {
         )
         return record.placed.compactMap { path, url, isFixedAtItsPath in
             switch LampSyncFolderLayout.kind(of: path) {
-            case .workspaceFile:
+            case .workspaceFile where includingWorkspaceFiles:
                 return Candidate(
                     path: path, kind: .workspaceFile, url: url,
                     isFixedAtItsPath: isFixedAtItsPath

@@ -708,3 +708,26 @@ extension WorkspaceSourceOffload {
     }
 }
 
+
+/// Whether this Mac syncs the Mac-only part of a writing's workspaces: its
+/// sources, agent chats, revision history and custom skills — everything
+/// under a workspace but the writing's documents, which always sync because
+/// the phone has them (`decisions/0024`).
+///
+/// Kept on this Mac alone, like the offload setting and its lock: it governs
+/// what this machine publishes, and a synced value would let one Mac switch
+/// another's off. Off for a new library; on for one this Mac has already
+/// synced, decided once and then the reader's.
+public enum WorkspaceFilesSync {
+    public static let key = "sync.workspaceFiles"
+
+    /// The stored choice, deciding it first where there is none: on where
+    /// this Mac has completed a pass before — everything it has synced so far
+    /// included these — and off for a library that never has.
+    public static func resolve(in defaults: UserDefaults, hasCompletedAPass: Bool) -> Bool {
+        if defaults.object(forKey: key) == nil {
+            defaults.set(hasCompletedAPass, forKey: key)
+        }
+        return defaults.bool(forKey: key)
+    }
+}
