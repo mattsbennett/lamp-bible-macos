@@ -155,10 +155,7 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     /// this Mac it has work to publish, and rewriting it on every pass is how
     /// a Mac once synced every six seconds. Returns what was added.
     ///
-    /// Not one this Mac has offloaded or asked back: the server's copy may be
-    /// the only one, and reaping it would leave the writer's working tree
-    /// short of a file. It is cleaned up once it is here again. And dated
-    /// past the member's own write, however this Mac's clock reads: a
+    /// Dated past the member's own write, however this Mac's clock reads: a
     /// deletion dated before the write it means to remove loses to it, and
     /// the file would be fetched instead of removed.
     ///
@@ -172,35 +169,14 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         at date: Date = Date(),
         fileManager: FileManager = .default
     ) throws -> [String] {
-        let root = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
-        var acted: [String: [String: WorkspaceFileLedger.SourceAct]?] = [:]
-        // Acts on files that are here again: a download of tool output lands
-        // where no gather looks, so nothing else would ever answer them.
-        var landed: [String: [String]] = [:]
+        // Offloaded or not: tool output is not a source, and nothing under
+        // it is kept for an act. None is gathered or offloaded any more, and
+        // keeping one an older build had offloaded cost two review rounds a
+        // check that could delete the wrong copy (`decisions/0023`).
         let toolOutput = members.filter { member in
-            guard let file = LampWritingWorkspaceLayout.contextFile(ofPath: member.path),
-                  LampWritingWorkspaceLayout.isToolOutput(relativePath: file.relativePath)
-            else { return false }
-            let workspace = root.appendingPathComponent(file.folder, isDirectory: true)
-            if acted[file.folder] == nil {
-                acted[file.folder] = .some(WorkspaceFileLedger.loadIfReadable(in: workspace)?.acts)
-            }
-            // A ledger that will not read cannot say; leave the file.
-            guard let acts = acted[file.folder] ?? nil else { return false }
-            let key = WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(file.relativePath))
-            guard let act = acts[key], act == .offloaded || act == .wanted else { return true }
-            // Away from this Mac, the server's copy may be the only one; here
-            // again, it is not, and the act is done with.
-            guard LampWorkspaceSync.isHere(file.relativePath, inContextOf: workspace, fileManager: fileManager)
-            else { return false }
-            landed[file.folder, default: []].append(key)
-            return true
-        }
-        for (folder, keys) in landed {
-            let workspace = root.appendingPathComponent(folder, isDirectory: true)
-            guard var ledger = WorkspaceFileLedger.loadIfReadable(in: workspace) else { continue }
-            for key in keys { ledger.forgetAct(key) }
-            try ledger.save(in: workspace)
+            LampWritingWorkspaceLayout.contextFile(ofPath: member.path).map {
+                LampWritingWorkspaceLayout.isToolOutput(relativePath: $0.relativePath)
+            } ?? false
         }
         guard !toolOutput.isEmpty else { return [] }
         let now = Int64(date.timeIntervalSince1970 * 1_000)

@@ -1269,10 +1269,11 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(swept == ["deck-build/build.js"])
     }
 
-    /// Tool output this Mac has offloaded is not cleaned up: the server's
-    /// copy may be the only one. And a cleanup is dated past the member's own
-    /// write, so a clock behind the uploader's cannot make it lose to it.
-    @Test func toolOutputCleanupSparesOffloadsAndPostdatesTheWrite() async throws {
+    /// Tool output is cleaned up whatever this Mac had done to it: nothing
+    /// under a tool's folder is kept for an offload mark. And a cleanup is
+    /// dated past the member's own write, so a clock behind the uploader's
+    /// cannot make it lose to it.
+    @Test func toolOutputIsCleanedUpWhateverItsMarkAndPostdatesTheWrite() async throws {
         let macs = try Macs(devotional: devotional)
         defer { macs.remove() }
         let workspaceURL = workspace(macs.a)
@@ -1290,16 +1291,8 @@ struct WorkspaceFileDeletionSyncTests {
         let added = try await LampSyncRemovedModules.queueToolOutput(
             amongMembers: [(away, 1), (here, future)], inLibraryAt: macs.a
         )
-        #expect(added == [here])
+        #expect(added == [away, here])
         #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[here] == future + 1)
-
-        // Downloaded since: here again, its act is done with and it is
-        // cleaned up like the rest.
-        try write("lib", to: workspaceURL.appendingPathComponent("context/deck/node_modules/away.js"), at: 0)
-        let again = try await LampSyncRemovedModules.queueToolOutput(amongMembers: [(away, 1)], inLibraryAt: macs.a)
-        #expect(again == [away])
-        #expect(await LampWorkspaceSync.offloadedSourceNames(in: workspaceURL).isEmpty)
-        #expect(await LampWorkspaceSync.sourcesNotHere(in: workspaceURL).isEmpty)
     }
 
     /// Removing a tool's folder itself queues nothing and walks nothing.

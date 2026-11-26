@@ -573,7 +573,10 @@ final class LibrarySyncController: ObservableObject {
             var withdrawn: [String] = []
             var stuck: [String] = []
             for path in requested {
-                guard !mayOffload else { return }
+                // Stop cancelling once offloads are allowed again — but say
+                // what was already done below, rather than leave a request
+                // gone unannounced.
+                guard !mayOffload else { break }
                 do {
                     try await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
                     withdrawn.append(path)
@@ -596,6 +599,7 @@ final class LibrarySyncController: ObservableObject {
                     ? "“\(first)” stays on this Mac: \(why)."
                     : "\(withdrawn.count) sources stay on this Mac: \(why)."
             }
+            if mayOffload { return }
         }
     }
 
@@ -1453,10 +1457,12 @@ extension LibrarySyncController {
         //
         // And a pass asked for while the move ran — turning workspace sync
         // on, say, which promises the downloads — is run then too, as an
-        // ordinary pass runs one queued behind it.
+        // ordinary pass runs one queued behind it. Only once the library has
+        // moved: a move refused leaves its own error to act on, which a pass
+        // against the unmoved archive would replace with a vaguer one.
         defer {
             Task { [weak self] in
-                guard let self else { return }
+                guard let self, self.moveOffer == nil else { return }
                 let asked = LampSyncRequest.takePending()
                 let requested = await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL)
                 guard asked || !requested.isEmpty else { return }
