@@ -52,9 +52,24 @@ public enum LampVideoPreparation {
         /// A few frames across the video, as JPEG, for whoever made it to
         /// look at.
         public var samples: [(seconds: Double, jpeg: Data)]
-        /// For a loop: its last frame, and how far it is from its first, 0
-        /// for the same picture to 1 for opposite ones.
-        public var seam: (lastFrame: Data, difference: Double)?
+        /// For a loop: where it closes.
+        public var seam: Seam?
+    }
+
+    /// Where a loop closes: its last frame, and how far that is from its
+    /// first.
+    public struct Seam: Sendable {
+        public var lastFrame: Data
+        /// When the last frame is shown, in seconds.
+        public var lastAt: Double
+        /// How far the last frame is from the first: the mean difference of
+        /// their colours, 0 for the same picture to 1 for opposite ones.
+        public var difference: Double
+        /// Whether the last frame is the first again: the loop then shows
+        /// that picture twice running, a stutter. Judged against the step
+        /// from the frame before it, so a slow or still loop, whose every
+        /// step is small, is not taken for one.
+        public var repeatsFirst: Bool
     }
 
     public enum PreparationError: LocalizedError, Equatable {
@@ -198,13 +213,22 @@ public enum LampVideoPreparation {
             let time = seconds * fraction
             samples.append((time, try jpeg(try await frame(at: time), largestSide: 640, quality: 0.8)))
         }
-        var seam: (lastFrame: Data, difference: Double)?
-        if purpose == .loop, let lastShown = try await lastFrameTime(of: asset) {
+        var seam: Seam?
+        if purpose == .loop, let times = try await finalFrameTimes(of: asset) {
             // The frame shown last, found by its own time rather than worked
             // out from the frame rate, so nothing rests on how frames are
             // spaced.
-            let last = try await frame(at: lastShown)
-            seam = (try jpeg(last, largestSide: 640, quality: 0.8), difference(between: first, and: last))
+            let last = try await frame(at: times.last)
+            let toFirst = difference(between: first, and: last)
+            var repeatsFirst = false
+            if let beforeLast = times.beforeLast {
+                let step = difference(between: try await frame(at: beforeLast), and: last)
+                repeatsFirst = repeatsFirstFrame(seam: toFirst, lastStep: step)
+            }
+            seam = Seam(
+                lastFrame: try jpeg(last, largestSide: 640, quality: 0.8), lastAt: times.last.seconds,
+                difference: toFirst, repeatsFirst: repeatsFirst
+            )
         }
 
         try Task.checkCancellation()
@@ -348,11 +372,26 @@ public enum LampVideoPreparation {
         return String(cString: buffer)
     }
 
+    /// Whether a loop's last frame is its first again: nearly the same
+    /// picture, and much nearer than the step before it, so a slow or still
+    /// loop is not taken for one, nor a real jump after a sharp last step.
+    /// A loop holding its first picture over several last frames is not
+    /// caught: its last step is nothing.
+    nonisolated static func repeatsFirstFrame(seam: Double, lastStep: Double) -> Bool {
+        lastStep > 0.001 && seam < 0.01 && seam < lastStep * 0.2
+    }
+
     /// When the last frame of `asset` is shown, from its own samples: the
     /// latest sample time less the earliest, since the samples are timed on
     /// the track's own line, which starts later than the video does where
     /// frames are reordered (by two frames, for H.264 with B-frames).
     static func lastFrameTime(of asset: AVURLAsset) async throws -> CMTime? {
+        try await finalFrameTimes(of: asset)?.last
+    }
+
+    /// When the last two frames of `asset` are shown, from its own samples,
+    /// as `lastFrameTime` finds the last.
+    static func finalFrameTimes(of asset: AVURLAsset) async throws -> (beforeLast: CMTime?, last: CMTime)? {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { return nil }
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
@@ -361,15 +400,21 @@ public enum LampVideoPreparation {
         guard reader.startReading() else { return nil }
         var first: CMTime?
         var last: CMTime?
+        var beforeLast: CMTime?
         while let sample = output.copyNextSampleBuffer() {
             guard CMSampleBufferGetNumSamples(sample) > 0 else { continue }
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
             guard time.isValid else { continue }
             if first.map({ time < $0 }) ?? true { first = time }
-            if last.map({ time > $0 }) ?? true { last = time }
+            if last.map({ time > $0 }) ?? true {
+                beforeLast = last
+                last = time
+            } else if time != last, beforeLast.map({ time > $0 }) ?? true {
+                beforeLast = time
+            }
         }
         guard let first, let last else { return nil }
-        return CMTimeSubtract(last, first)
+        return (beforeLast.map { CMTimeSubtract($0, first) }, CMTimeSubtract(last, first))
     }
 
     /// `image` as a JPEG, its longer side at most `largestSide` and never

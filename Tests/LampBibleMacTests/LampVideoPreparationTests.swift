@@ -332,6 +332,21 @@ struct LampVideoPreparationTests {
         let jumps = try #require(try await prepare("jumping.mp4", in: root).seam)
         #expect(closes.difference <= LampVideoPreparation.seamThreshold, "closing loop: \(closes.difference)")
         #expect(jumps.difference > LampVideoPreparation.seamThreshold, "jumping loop: \(jumps.difference)")
+        #expect(!closes.repeatsFirst && !jumps.repeatsFirst)
+    }
+
+    @Test func aLoopWhoseLastFrameIsItsFirstAgainIsSaidToStutter() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Red to blue, and then red again as the last frame: the frame the
+        // loop starts on, shown twice running.
+        try await makeVideo(at: root.appendingPathComponent("twice.mp4"), frames: 24, colour: { index in
+            let away = index == 23 ? 0 : UInt8(index * 255 / 22)
+            return (255 - away, 0, away)
+        })
+        let seam = try #require(try await prepare("twice.mp4", in: root).seam)
+        #expect(seam.repeatsFirst, "seam \(seam.difference)")
+        #expect(abs(seam.lastAt - 23.0 / 12) < 0.01, "last frame at \(seam.lastAt)")
     }
 
     @Test func aSeeThroughVideoIsSaidToBeLaidOnBlack() async throws {
@@ -568,6 +583,14 @@ struct LampVideoPreparationTests {
         let clip = try await prepare(source.lastPathComponent, in: root, as: .clip)
         let sound = try #require(try await AVURLAsset(url: clip.videoURL).loadTracks(withMediaType: .audio).first)
         #expect(abs(try await sound.load(.preferredVolume) - 0.25) < 0.01)
+    }
+
+    @Test func aRepeatIsNearlyTheSamePictureAfterARealStep() {
+        #expect(LampVideoPreparation.repeatsFirstFrame(seam: 0.0002, lastStep: 0.02))
+        // A real jump after a sharp last step is a jump, not a repeat.
+        #expect(!LampVideoPreparation.repeatsFirstFrame(seam: 0.15, lastStep: 1.0))
+        // A slow or still loop, whose every step is small.
+        #expect(!LampVideoPreparation.repeatsFirstFrame(seam: 0.0001, lastStep: 0.0005))
     }
 
     @Test func aNameIsMadeOfWhatIsSafeInOne() {

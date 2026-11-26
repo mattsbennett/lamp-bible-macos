@@ -511,17 +511,32 @@ public actor LampMCPToolHandler {
                     + "To have it over something else, make it over that."
             )
         }
+        // Which time each picture below is, in the order they come, so the
+        // pictures can be told apart without their captions.
+        var frames: [Value] = prepared.samples.map { .object(["at": .double(Self.seconds($0.seconds))]) }
         if let seam = prepared.seam {
+            frames.append(.object(["at": .double(Self.seconds(seam.lastAt)), "is": .string("the last frame")]))
             let closes = seam.difference <= LampVideoPreparation.seamThreshold
+            let note: String
+            if seam.repeatsFirst {
+                note = "The last frame is the first again, so the loop shows that picture twice running: a stutter. "
+                    + "End one frame before the start: the frame after the last should be the first, not a copy of it."
+            } else if closes {
+                note = "The last frame is close to the first, so the loop runs on without a jump."
+            } else {
+                note = "The last frame is far from the first, so the loop jumps each time it starts again. "
+                    + "Make the end lead back into the beginning."
+            }
             report["loopSeam"] = .object([
-                "difference": .double((seam.difference * 1_000).rounded() / 1_000),
-                "closes": .bool(closes),
-                "note": .string(closes
-                    ? "The last frame is close to the first, so the loop runs on without a jump."
-                    : "The last frame is far from the first, so the loop jumps each time it starts again. "
-                        + "Make the end lead back into the beginning."),
+                "difference": .double((seam.difference * 10_000).rounded() / 10_000),
+                "scale": .string("The mean difference of the first and last frames' colours: 0 the same picture, "
+                    + "1 opposite ones. Up to \(LampVideoPreparation.seamThreshold) reads as closing."),
+                "closes": .bool(closes && !seam.repeatsFirst),
+                "repeatsFirstFrame": .bool(seam.repeatsFirst),
+                "note": .string(note),
             ])
         }
+        report["frames"] = .array(frames)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         var content: [Tool.Content] = [
@@ -532,10 +547,17 @@ public actor LampMCPToolHandler {
             content.append(.image(data: sample.jpeg.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
         }
         if let seam = prepared.seam {
-            content.append(.text(text: "The last frame, which the first follows", annotations: nil, _meta: nil))
+            content.append(.text(
+                text: String(format: "The last frame, at %.2f s, which the first follows", seam.lastAt), annotations: nil, _meta: nil
+            ))
             content.append(.image(data: seam.lastFrame.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
         }
         return CallTool.Result(content: content, structuredContent: .object(report), isError: false)
+    }
+
+    /// Seconds to two places, as a report gives a time.
+    private static func seconds(_ value: Double) -> Double {
+        (value * 100).rounded() / 100
     }
 
     /// Replaces a writing's draft, if the writer has not moved it underneath.

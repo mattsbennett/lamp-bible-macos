@@ -716,7 +716,8 @@ the new video: after every render, write the names it returned into the deck.
 
 When a page is not enough, make the video with anything you have or can
 install, with the writer's leave: Blender, run without its window
-(`/Applications/Blender.app/Contents/MacOS/Blender -b scene.blend -P build.py`),
+(`/Applications/Blender.app/Contents/MacOS/Blender -b -P build.py` for a scene
+the script builds, with `scene.blend` after `-b` to start from a saved one),
 Manim, Remotion, a Swift program drawing with Metal, SceneKit or RealityKit, a
 browser, ffmpeg. Lamp ships none of them and asks nothing of how the video was
 made.
@@ -731,14 +732,20 @@ made.
   its still, and writes both into `Assets`, named after the video and what it
   holds, such as `Assets/tabernacle-1a2b3c4d.mp4` and `.jpg`. Use them as an
   animation's are, and write the names into the deck again after every
-  prepare: they change whenever the video does.
+  prepare: they change whenever the video does. A tiny source can come out
+  a little larger than it went in; that is the price of one format every
+  device plays.
 - **It must hold its own pictures.** A movie that refers to media in other
   files is refused, and so is a file outside the workspace. Something
   see-through is laid on black, and the answer says so: make it over the
   background you want.
-- **Look at what comes back:** frames from across the video, and for a loop
-  its last frame and how far that is from its first. A loop that jumps where
-  it starts again needs an end that leads back into its beginning.
+- **Look at what comes back:** frames from across the video, each with its
+  time, and for a loop its last frame and how far that is from its first. A
+  loop that jumps where it starts again needs an end that leads back into its
+  beginning. **End one frame short of the start:** for a full turn over
+  frames 1 to 96, turn so that frame 97 would be frame 1, and render 1 to 96.
+  A last frame that is the first again shows that picture twice, a stutter,
+  and Lamp says so.
 - The rules for an animation hold: words on the slide, not in the video; quiet
   colours behind words; a reconstruction said to be one.
 
