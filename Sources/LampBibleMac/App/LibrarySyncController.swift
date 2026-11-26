@@ -1,4 +1,5 @@
 import AppKit
+import LocalAuthentication
 #if canImport(LampBibleMacSupport)
 import LampBibleMacSupport
 #endif
@@ -346,6 +347,13 @@ final class LibrarySyncController: ObservableObject {
         try? SyncSecretStore.setPassword("")
         errorMessage = nil
         objectWillChange.send()
+    }
+
+    /// Whether the keychain holds a WebDAV password, asked without reading
+    /// it: false only when there is none, nil when the keychain will not
+    /// say. Call it away from the main actor.
+    nonisolated static func webDAVPasswordIsStored() -> Bool? {
+        SyncSecretStore.passwordIsStored
     }
 
     func updateWebDAVPassword(_ password: String) -> Bool {
@@ -2587,6 +2595,28 @@ private enum LibrarySyncError: LocalizedError {
 private enum SyncSecretStore {
     private static let service = "com.neus.Lamp-Bible.macOS.sync"
     private static let account = "webdav-password"
+
+    /// Whether the item is there, asked of its attributes alone and with
+    /// no prompt allowed: a settings pane opening must neither ask for the
+    /// keychain nor wait on one. Reading the password itself could do both,
+    /// and a refused read looked the same as no password (Codex review).
+    /// Nil when the keychain will not say, locked or refused.
+    static var passwordIsStored: Bool? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        switch SecItemCopyMatching(query as CFDictionary, nil) {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: return nil
+        }
+    }
 
     static var password: String? {
         let query: [String: Any] = [

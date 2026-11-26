@@ -424,6 +424,13 @@ private struct ReaderSettingsView: View {
     @State private var webDAVEndpoint = ""
     @State private var webDAVUsername = ""
     @State private var webDAVPassword = ""
+    /// Whether the keychain holds a WebDAV password, asked as the pane opens
+    /// and again once the details are forgotten; nil until it answers, or
+    /// when it will not. Only a plain no reads "Not set".
+    @State private var webDAVPasswordIsSaved: Bool?
+    /// Counts what changes that answer — a save, a forget, a newer ask — so
+    /// an answer that arrives after one of them is dropped (Codex review).
+    @State private var webDAVPasswordAsks = 0
     @State private var isForgettingSyncDetails = false
 
     /// The languages Read Aloud has a voice for: English, which quizzes and
@@ -1189,17 +1196,33 @@ private struct ReaderSettingsView: View {
                             TextField("Username", text: $webDAVUsername)
                                 .onChange(of: webDAVUsername) { _, value in syncController.username = value }
                                 .disabled(syncController.destinationIsLocked)
+                            // A field like the two above it, its dots saying a
+                            // password is kept. Titled "New password" inside the
+                            // row, the field's title was drawn as a second label
+                            // and the field itself, borderless and empty, could
+                            // not be seen, so its button sat disabled beside
+                            // nothing (owner, 2026-11-26). Typing shows Save;
+                            // Return and Sync Now save too.
                             LabeledContent("Password") {
                                 HStack {
-                                    SecureField("New password", text: $webDAVPassword)
-                                        .frame(minWidth: 180)
-                                        .help("Leave blank to keep the password already saved in Keychain")
-                                    Button("Update Password") {
-                                        if syncController.updateWebDAVPassword(webDAVPassword) {
-                                            webDAVPassword = ""
-                                        }
+                                    SecureField(
+                                        "Password",
+                                        text: $webDAVPassword,
+                                        prompt: Text(webDAVPasswordIsSaved == false ? "Not set" : "••••••••")
+                                    )
+                                    .labelsHidden()
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(minWidth: 180)
+                                    .onSubmit(saveWebDAVPassword)
+                                    .help(webDAVPasswordIsSaved == false
+                                        ? "The WebDAV password, kept in Keychain"
+                                        : "Saved in Keychain. Type a new password to replace it.")
+                                    if !webDAVPassword.isEmpty {
+                                        // Small, so the row keeps its height
+                                        // as the button comes and goes.
+                                        Button("Save", action: saveWebDAVPassword)
+                                            .controlSize(.small)
                                     }
-                                    .disabled(webDAVPassword.isEmpty)
                                 }
                             }
                         }
@@ -1298,6 +1321,7 @@ private struct ReaderSettingsView: View {
                                 webDAVEndpoint = ""
                                 webDAVUsername = ""
                                 webDAVPassword = ""
+                                Task { await askWhetherWebDAVPasswordIsSaved() }
                             }
                             Button("Cancel", role: .cancel) {}
                         } message: {
@@ -1309,6 +1333,7 @@ private struct ReaderSettingsView: View {
                                     if !webDAVPassword.isEmpty {
                                         guard syncController.updateWebDAVPassword(webDAVPassword) else { return }
                                         webDAVPassword = ""
+                                        webDAVPasswordWasSaved()
                                     }
                                     await syncController.sync(library: model.library)
                                     model.refresh()
@@ -1381,12 +1406,41 @@ private struct ReaderSettingsView: View {
             webDAVEndpoint = syncController.endpoint
             webDAVUsername = syncController.username
         }
+        .task { await askWhetherWebDAVPasswordIsSaved() }
         // A conflict outlives the run that found it, so the pane has to ask
         // rather than wait to be told.
         .task { await syncController.refreshConflicts(library: model.library) }
         // And whether anything is held only on the server, which locks where
         // sync can point — read on opening rather than left to the next pass.
         .task { await syncController.refreshSourcesOnlyOnTheServer(library: model.library) }
+    }
+
+    /// Asks the keychain, off the main actor, whether a WebDAV password is
+    /// kept.
+    private func askWhetherWebDAVPasswordIsSaved() async {
+        webDAVPasswordAsks += 1
+        let ask = webDAVPasswordAsks
+        let stored = await Task.detached(priority: .userInitiated) {
+            LibrarySyncController.webDAVPasswordIsStored()
+        }.value
+        guard ask == webDAVPasswordAsks else { return }
+        webDAVPasswordIsSaved = stored
+    }
+
+    /// A password just kept: the row says so, and any answer still on its
+    /// way is out of date.
+    private func webDAVPasswordWasSaved() {
+        webDAVPasswordAsks += 1
+        webDAVPasswordIsSaved = true
+    }
+
+    /// Keeps the typed WebDAV password in the keychain, and empties the
+    /// field once it is kept.
+    private func saveWebDAVPassword() {
+        guard !webDAVPassword.isEmpty,
+              syncController.updateWebDAVPassword(webDAVPassword) else { return }
+        webDAVPassword = ""
+        webDAVPasswordWasSaved()
     }
 
     private var appVersion: String {
