@@ -137,11 +137,12 @@ struct LampVideoPreparationTests {
     }
 
     private func prepare(
-        _ path: String, in root: URL, as purpose: LampVideoPreparation.Purpose = .loop,
+        _ path: String, in root: URL, as purpose: LampVideoPreparation.Purpose = .loop, stillAt: Double? = nil,
         largestFileBytes: Int64? = nil, reducedShorterSide: Int = 1_080
     ) async throws -> LampVideoPreparation.Result {
         try await LampVideoPreparation.prepare(
-            path, in: root, as: purpose, largestFileBytes: largestFileBytes, reducedShorterSide: reducedShorterSide
+            path, in: root, as: purpose, stillAt: stillAt,
+            largestFileBytes: largestFileBytes, reducedShorterSide: reducedShorterSide
         )
     }
 
@@ -222,8 +223,14 @@ struct LampVideoPreparationTests {
         let clip = try await prepare(source.lastPathComponent, in: root, as: .clip)
         #expect(!(try await AVURLAsset(url: clip.videoURL).loadTracks(withMediaType: .audio)).isEmpty)
         #expect(clip.seam == nil)
+        #expect(clip.sourceHasSound && clip.keptSound)
         let loop = try await prepare(source.lastPathComponent, in: root)
         #expect((try await AVURLAsset(url: loop.videoURL).loadTracks(withMediaType: .audio)).isEmpty)
+        // Said: a loop drops what sound it had.
+        #expect(loop.sourceHasSound && !loop.keptSound)
+        // And a clip with none says so.
+        let soundless = try await prepare("talk.mp4", in: root, as: .clip)
+        #expect(!soundless.sourceHasSound && !soundless.keptSound)
     }
 
     @Test func aSourceOutsideTheWorkspaceThroughALinkOrNotAVideoIsRefused() async throws {
@@ -591,6 +598,38 @@ struct LampVideoPreparationTests {
         #expect(!LampVideoPreparation.repeatsFirstFrame(seam: 0.15, lastStep: 1.0))
         // A slow or still loop, whose every step is small.
         #expect(!LampVideoPreparation.repeatsFirstFrame(seam: 0.0001, lastStep: 0.0005))
+    }
+
+    @Test func aClipsFramesEndWithTheOneItHoldsAndTheStillCanBeChosen() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Blue for the first half second, yellow after.
+        try await makeVideo(at: root.appendingPathComponent("turn.mp4"), colour: { $0 < 6 ? (0, 0, 255) : (255, 255, 0) })
+        let clip = try await prepare("turn.mp4", in: root, as: .clip, stillAt: 0.75)
+        #expect(clip.samples.count == 5)
+        #expect(abs((clip.samples.last?.seconds ?? 0) - 11.0 / 12) < 0.01, "last sample at \(clip.samples.last?.seconds ?? -1)")
+        #expect(abs(clip.stillAt - 0.75) < 0.001)
+        let rep = try #require(NSBitmapImageRep(data: Data(contentsOf: clip.stillURL)))
+        let middle = try #require(rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        #expect(middle.redComponent > 0.8 && middle.blueComponent < 0.3, "the still is not the yellow half: \(middle)")
+        // A loop's frames stay four, its last frame being in its seam.
+        #expect(try await prepare("turn.mp4", in: root).samples.count == 4)
+    }
+
+    @Test func earlierCopiesOfTheSameVideoAreNamed() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("scene.mp4")
+        try await makeVideo(at: source, colour: { _ in (255, 0, 0) })
+        let first = try await prepare("scene.mp4", in: root)
+        #expect(first.earlierCopies.isEmpty)
+        // Another video's files are not this one's copies.
+        try await makeVideo(at: root.appendingPathComponent("scenery.mp4"))
+        _ = try await prepare("scenery.mp4", in: root)
+        try FileManager.default.removeItem(at: source)
+        try await makeVideo(at: source, colour: { _ in (0, 255, 0) })
+        let second = try await prepare("scene.mp4", in: root)
+        #expect(second.earlierCopies == [first.stillURL.lastPathComponent, first.videoURL.lastPathComponent].sorted())
     }
 
     @Test func aNameIsMadeOfWhatIsSafeInOne() {

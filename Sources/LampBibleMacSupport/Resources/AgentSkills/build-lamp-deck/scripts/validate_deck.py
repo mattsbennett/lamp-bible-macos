@@ -880,7 +880,10 @@ def clip_warnings_and_errors(clip, kind, has_video, block_path):
     if end is not None and not (math.isfinite(end) and end > 0):
         errors.append(f"{block_path}.clip: a clip's end is seconds from its beginning, more than 0")
     if start is not None and end is not None and math.isfinite(start) and math.isfinite(end) and end <= start:
-        errors.append(f"{block_path}.clip: a clip's end comes after its start")
+        errors.append(f"{block_path}.clip: a clip's end must come after its start")
+    starts = clip.get("starts")
+    if isinstance(starts, str) and starts not in ("click", "arrival"):
+        warnings.append(f"{block_path}.clip: Lamp starts a clip on click or on arrival; '{starts}' is read as click")
     if kind != "image":
         warnings.append(f"{block_path}.clip: only a picture can carry a clip; this one is not played")
     elif has_video:

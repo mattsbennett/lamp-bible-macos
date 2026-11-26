@@ -239,8 +239,10 @@ public actor LampMCPToolHandler {
             return try result(try writingChanges(arguments))
 
         case "validate_deck":
+            // In a writing's workspace, the deck stands there, and its
+            // files are looked for beside it.
             return try result(LampDeckTools.validate(
-                deckJSON: try deckJSON(arguments)
+                deckJSON: try deckJSON(arguments), workspace: workspaceURL
             ))
 
         case "build_deck":
@@ -371,7 +373,8 @@ public actor LampMCPToolHandler {
             manuscript: arguments["manuscript"]?.stringValue,
             libraryRoot: libraryRootURL,
             slideNumbers: slides?.isEmpty == true ? nil : slides,
-            width: Double(arguments["width"]?.intValue ?? 1_600)
+            width: Double(arguments["width"]?.intValue ?? 1_600),
+            workspace: workspaceURL
         )
         var content: [Tool.Content] = [
             .text(
@@ -485,7 +488,11 @@ public actor LampMCPToolHandler {
         case "clip": purpose = .clip
         default: throw LampMCPToolError.invalidArgument("as", "loop or clip")
         }
-        let prepared = try await LampVideoPreparation.prepare(path, in: workspaceURL, as: purpose)
+        let stillAt = arguments["still_at"].flatMap { value -> Double? in
+            if case .double(let seconds) = value { return seconds }
+            return value.intValue.map(Double.init)
+        }
+        let prepared = try await LampVideoPreparation.prepare(path, in: workspaceURL, as: purpose, stillAt: stillAt)
         // Named as the deck names them, inside the workspace's Assets.
         let video = "\(LampVideoPreparation.assetsFolder)/\(prepared.videoURL.lastPathComponent)"
         let still = "\(LampVideoPreparation.assetsFolder)/\(prepared.stillURL.lastPathComponent)"
@@ -505,6 +512,23 @@ public actor LampMCPToolHandler {
                     + " Look at the frames before using it."
             ),
         ]
+        report["stillAt"] = .double(Self.seconds(prepared.stillAt))
+        // Sound: what came in, what was kept, and anything to know about it.
+        var sound: [String: Value] = ["inSource": .bool(prepared.sourceHasSound), "kept": .bool(prepared.keptSound)]
+        if purpose == .clip, !prepared.sourceHasSound {
+            sound["note"] = .string("This clip has no sound. If it should, put the sound in the video (AAC in the MP4) and prepare it again.")
+        } else if purpose == .loop, prepared.sourceHasSound {
+            sound["note"] = .string("A loop plays silently behind a slide, so its sound was left out. Prepare it as a clip to keep the sound.")
+        }
+        report["sound"] = .object(sound)
+        if !prepared.earlierCopies.isEmpty {
+            report["earlierCopies"] = .array(prepared.earlierCopies.map { .string("\(LampVideoPreparation.assetsFolder)/\($0)") })
+            report["earlierCopiesNote"] = .string(
+                "Files in Assets named as this video's are, from an earlier prepare of it or of another video "
+                    + "with the same name. Lamp leaves them, since a deck may name them; delete those that came "
+                    + "from this video and that no deck names."
+            )
+        }
         if prepared.flattenedTransparency {
             report["transparency"] = .string(
                 "The video was see-through, which a slide's video cannot be, so it was laid on black. "
@@ -513,7 +537,12 @@ public actor LampMCPToolHandler {
         }
         // Which time each picture below is, in the order they come, so the
         // pictures can be told apart without their captions.
-        var frames: [Value] = prepared.samples.map { .object(["at": .double(Self.seconds($0.seconds))]) }
+        var frames: [Value] = prepared.samples.enumerated().map { index, sample in
+            // A clip's frames end with the one it holds when it ends.
+            purpose == .clip && index == prepared.samples.count - 1 && prepared.samples.count > 4
+                ? .object(["at": .double(Self.seconds(sample.seconds)), "is": .string("the last frame, held when the clip ends")])
+                : .object(["at": .double(Self.seconds(sample.seconds))])
+        }
         if let seam = prepared.seam {
             frames.append(.object(["at": .double(Self.seconds(seam.lastAt)), "is": .string("the last frame")]))
             let closes = seam.difference <= LampVideoPreparation.seamThreshold

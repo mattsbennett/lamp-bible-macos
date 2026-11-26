@@ -610,8 +610,12 @@ same `tint`, drifting if it drifts.
   and Lamp warns.
 - **Size:** a deck's files travel with it to every device it syncs to, so keep
   a background loop short. Slide Studio refuses one over 100 MB.
-- **One a slide:** a slide plays one video, the picture behind it's or else the
-  first. Any other is shown as its still, and Lamp warns.
+- **One a slide:** a slide plays one video: the picture behind the slide's
+  words, or else its first picture. Any other is shown as its still, and Lamp
+  warns.
+- Choose quiet footage whose colours stay near the still's: water, clouds,
+  candlelight. Words are set once, for the still, and cannot follow a video
+  that turns from dark to light.
 
 ### A clip the talk stops to watch: `clip`
 
@@ -638,8 +642,8 @@ picture, a clip is content the talk pauses for.
 - **Keep `assetPath`** as the still: shown before it plays, in thumbnails and
   PDFs, and by older versions of Lamp. For a streamed clip, download the site's
   thumbnail as the still (Slide Studio does this for you).
-- **One a slide:** the picture behind it's, else the first. A picture with a
-  clip plays the clip, not its `video`.
+- **One a slide:** the picture behind the slide's words, or else its first
+  picture. A picture with a clip plays the clip, not its `video`.
 - Choose a clip that earns the time it takes, trim it to what the talk needs,
   and say in the notes what to listen for.
 
@@ -735,6 +739,20 @@ made.
   prepare: they change whenever the video does. A tiny source can come out
   a little larger than it went in; that is the price of one format every
   device plays.
+- **Sound:** a clip keeps the video's sound, which belongs in the file as AAC;
+  a loop is silent. The answer says what sound came in and what was kept, and
+  says so when a clip has none or a loop's was left out.
+- **The still** is the first frame unless `"still_at"` names a time: for a
+  clip, choose the frame that shows what it is. A clip's frames end with the
+  one it holds when it ends, which the room looks at while the talk goes on.
+- **Earlier versions stay** in `Assets`, since a deck may still name them; the
+  answer lists files named as this video's are, to delete those that came
+  from it and that no deck names.
+- **In Blender 5.3**, set the output's media type to video
+  (`image_settings.media_type = 'VIDEO'`) before choosing `FFMPEG`, and for a
+  clip's sound set the audio codec to AAC. Saving a `.blend` writes a
+  thumbnail outside the workspace, which a sandbox refuses: build the scene in
+  the script and render it, or turn file previews off.
 - **It must hold its own pictures.** A movie that refers to media in other
   files is refused, and so is a file outside the workspace. Something
   see-through is laid on black, and the answer says so: make it over the
@@ -744,14 +762,12 @@ made.
   loop that jumps where it starts again needs an end that leads back into its
   beginning. **End one frame short of the start:** for a full turn over
   frames 1 to 96, turn so that frame 97 would be frame 1, and render 1 to 96.
-  A last frame that is the first again shows that picture twice, a stutter,
-  and Lamp says so.
+  A last frame that is the first again shows that picture twice, a stutter.
+  Lamp says so when the frames before it move visibly; in very slow motion a
+  repeated frame differs from the first about as much as compression does,
+  and cannot be told, so count the frames.
 - The rules for an animation hold: words on the slide, not in the video; quiet
   colours behind words; a reconstruction said to be one.
-
-- Choose quiet footage whose colours stay near the still's: water, clouds,
-  candlelight. Words are set once, for the still, and cannot follow a video
-  that turns from dark to light.
 
 ## Charts
 

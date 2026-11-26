@@ -219,6 +219,20 @@ enum LampDeckPreview {
                 notes.append("A \(slide.layout.rawValue) slide does not draw this slide's "
                     + "\(ignored.kind.rawValue) content.")
             }
+            // A file the slide names that is not there: drawn as a
+            // placeholder, or shown still, so a problem of this slide's, not
+            // only a line in the deck's warnings.
+            let present = { (path: String) in resolve(.init(kind: .image, assetPath: path)) != nil }
+            for block in slide.blocks where block.kind == .image {
+                if let assetPath = block.assetPath, LampPresentationDeckValidator.isSafeAssetPath(assetPath),
+                   !present(assetPath) {
+                    notes.append("No file at '\(assetPath)', so a placeholder was drawn in its place.")
+                }
+                for movie in [block.video, block.clip?.assetPath].compactMap({ $0 })
+                where LampPresentationDeckValidator.isSafeAssetPath(movie) && !present(movie) {
+                    notes.append("No file at '\(movie)', so the picture is shown still.")
+                }
+            }
             notes.append(contentsOf: await scriptureNotes(for: slide, libraryRoot: libraryRoot))
             notes.append(contentsOf: notesProblems[slide.id] ?? [])
             reports.append(SlideReport(

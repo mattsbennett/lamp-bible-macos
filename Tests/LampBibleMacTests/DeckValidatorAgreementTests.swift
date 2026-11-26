@@ -20,12 +20,23 @@ struct DeckValidatorAgreementTests {
     /// Warning locations only: the two phrase their advice differently, and
     /// holding them to identical prose would be a test of wording, not rules.
     private func pythonWarningPaths(for deck: LampPresentationDeck) throws -> Set<String> {
+        try pythonWarningPaths(forJSON: try JSONEncoder().encode(deck))
+    }
+
+    private func pythonWarningPaths(forJSON json: Data) throws -> Set<String> {
+        Set(try pythonWarnings(forJSON: json).compactMap { line in
+            line.split(separator: ":").first.map(String.init)
+        })
+    }
+
+    /// The script's warnings, each `<path>: <message>`.
+    private func pythonWarnings(forJSON json: Data) throws -> [String] {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let deckURL = directory.appendingPathComponent("presentation.lampdeck")
-        try JSONEncoder().encode(deck).write(to: deckURL)
+        try json.write(to: deckURL)
 
         let process = Process()
         let pipe = Pipe()
@@ -38,14 +49,10 @@ struct DeckValidatorAgreementTests {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        return Set(
-            String(decoding: data, as: UTF8.self)
-                .split(whereSeparator: \.isNewline)
-                .filter { $0.hasPrefix("WARNING ") }
-                .compactMap { line in
-                    line.dropFirst("WARNING ".count).split(separator: ":").first.map(String.init)
-                }
-        )
+        return String(decoding: data, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .filter { $0.hasPrefix("WARNING ") }
+            .map { String($0.dropFirst("WARNING ".count)) }
     }
 
     private func swiftWarningPaths(for deck: LampPresentationDeck) -> Set<String> {
@@ -56,6 +63,32 @@ struct DeckValidatorAgreementTests {
                 .filter { $0.severity == .warning }
                 .map(\.path)
         )
+    }
+
+    /// A way of starting a clip this app does not know, which only a deck's
+    /// text can carry: both validators say how it is read.
+    @Test func bothValidatorsSayAnUnknownStartIsReadAsAClick() throws {
+        let json = #"""
+        {"schemaVersion":1,"id":"60910124-99b3-48ca-9310-11c63ed118c0","title":"D","aspectRatio":"widescreen",
+         "theme":{"id":"lamp-dark","accentColor":"#F59E0B","backgroundColor":"#111827","foregroundColor":"#F9FAFB","typeface":"system-serif"},
+         "source":{"id":"60910124-99b3-48ca-9310-11c63ed118c1","kind":"devotional"},
+         "slides":[{"id":"3b184129-31c5-48c8-962e-fe79e2862cc8","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd64","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "clip":{"source":"Assets/a.mp4","starts":"sometimes"}}]}]}
+        """#
+        let deck = try LampPresentationDeckStore.decodeUnvalidated(Data(json.utf8))
+        let fromPython = try pythonWarningPaths(forJSON: Data(json.utf8))
+        let fromSwift = swiftWarningPaths(for: deck)
+        #expect(fromPython == fromSwift, "python said \(fromPython.sorted()), swift said \(fromSwift.sorted())")
+        #expect(fromSwift.contains("slides[0].blocks[0].clip"))
+        // And each says it, not only something at the same place.
+        #expect(try pythonWarnings(forJSON: Data(json.utf8)).contains { $0.contains("'sometimes' is read as click") })
+        #expect(LampPresentationDeckValidator.validate(deck).contains { $0.message.contains("'sometimes' is read as click") })
+        // A starts left empty is no way of starting at all, to either.
+        let empty = json.replacingOccurrences(of: #""starts":"sometimes""#, with: #""starts":null"#)
+        #expect(try !pythonWarnings(forJSON: Data(empty.utf8)).contains { $0.contains("is read as click") })
+        let emptyDeck = try LampPresentationDeckStore.decodeUnvalidated(Data(empty.utf8))
+        #expect(!LampPresentationDeckValidator.validate(emptyDeck).contains { $0.message.contains("is read as click") })
     }
 
     @Test(arguments: [

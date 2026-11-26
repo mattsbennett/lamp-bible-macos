@@ -57,7 +57,9 @@ public enum LampDeckTools {
     /// holds their wording to the script's, and it could not: `keyNotFound`
     /// knows the key is absent but not what belonged there, which is why the
     /// script can say "expected a string" and this cannot.
-    public static func validate(deckJSON: Data) -> ValidationReport {
+    /// With `workspace`, the files the deck names are looked for there, as
+    /// beside the deck, reached as `LampWorkspaceFiles` reaches a file.
+    public static func validate(deckJSON: Data, workspace: URL? = nil) -> ValidationReport {
         let deck: LampPresentationDeck
         do {
             deck = try LampPresentationDeckStore.decodeUnvalidated(deckJSON)
@@ -71,7 +73,9 @@ public enum LampDeckTools {
                 slideCount: nil
             )
         }
-        let issues = LampPresentationDeckValidator.validate(deck)
+        let issues = workspace.map { folder in
+            LampPresentationDeckValidator.validate(deck) { LampWorkspaceFiles.exists($0, in: folder) }
+        } ?? LampPresentationDeckValidator.validate(deck)
         let errors = issues.filter { $0.severity == .error }
         return ValidationReport(
             valid: errors.isEmpty,
@@ -221,16 +225,30 @@ public enum LampDeckTools {
     /// the validator and obvious in a picture. An app that can display an
     /// image gets to see them without a folder to write them into.
     @MainActor
+    ///
+    /// With `workspace`, the deck is drawn as if it stood there: the files it
+    /// names are brought beside it from the workspace first
+    /// (`LampWorkspaceFiles.bringIn`). Without, it is drawn alone, and every
+    /// file it names reads as missing.
     public static func render(
         deckJSON: Data,
         manuscript: String?,
         libraryRoot: URL?,
         slideNumbers: [Int]?,
-        width: Double
+        width: Double,
+        workspace: URL? = nil
     ) async throws -> RenderResult {
         try await inScratchDirectory { scratch in
-            let deckURL = scratch.appendingPathComponent("presentation.lampdeck")
+            // The deck and the files it names in a folder of their own, so a
+            // file the deck names cannot meet the pictures drawn beside it.
+            let deckFolder = scratch.appendingPathComponent("deck", isDirectory: true)
+            try FileManager.default.createDirectory(at: deckFolder, withIntermediateDirectories: true)
+            let deckURL = deckFolder.appendingPathComponent("presentation.lampdeck")
             try deckJSON.write(to: deckURL)
+            if let workspace, let deck = try? LampPresentationDeckStore.decodeUnvalidated(deckJSON) {
+                let named = LampWorkspaceFiles.paths(in: deck)
+                LampWorkspaceFiles.bringIn(pictures: named.pictures, movies: named.movies, from: workspace, into: deckFolder)
+            }
             let manuscriptURL = try manuscript.map { text -> URL in
                 let url = scratch.appendingPathComponent("draft.md")
                 try Data(text.utf8).write(to: url)

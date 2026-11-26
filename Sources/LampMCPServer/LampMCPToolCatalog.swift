@@ -445,6 +445,10 @@ public enum LampMCPToolCatalog {
                 "properties": .object([
                     "video": string("The video, relative to the workspace, such as .lamp-renders/tabernacle.mp4."),
                     "as": string("loop, a picture's silent moving background (the default), or clip, played once with its sound."),
+                    "still_at": .object([
+                        "type": .string("number"),
+                        "description": .string("Seconds into the video to take the still from. Defaults to the first frame; for a clip, choose the frame that best shows what it is."),
+                    ]),
                 ]),
                 "additionalProperties": .bool(false),
                 "required": .array([.string("video")]),
