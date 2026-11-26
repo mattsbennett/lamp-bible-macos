@@ -552,7 +552,15 @@ public struct SourceRow: Equatable, Sendable, Identifiable {
     public let state: State
     public let byteCount: Int?
 
-    public var id: String { state == .blockedByAFolder ? relativePath + "\u{0}blocked" : relativePath }
+    /// A source drawn beside a folder at its own path shares the folder's
+    /// path, so its row carries a mark of its own.
+    public var id: String {
+        switch state {
+        case .blockedByAFolder: relativePath + "\u{0}blocked"
+        case .noLongerOnTheServer: relativePath + "\u{0}gone"
+        default: relativePath
+        }
+    }
     public var isHere: Bool {
         switch state {
         case .here, .leaving, .folder: true
@@ -639,7 +647,9 @@ extension WorkspaceSourceOffload {
             }
         }
         for (path, act) in notHere where act != .leaving {
-            if unaccounted.contains(path), !shown.contains(path) {
+            // Beside a folder at its path too: its Remove from List is the
+            // only way the row, and the lock it holds, go.
+            if unaccounted.contains(path) {
                 rows.append(SourceRow(relativePath: path, state: .noLongerOnTheServer))
             } else if folders.contains(path) || obstructed.contains(path) {
                 rows.append(SourceRow(relativePath: path, state: .blockedByAFolder))
@@ -652,7 +662,7 @@ extension WorkspaceSourceOffload {
         return rows.sorted {
             let order = $0.relativePath.localizedStandardCompare($1.relativePath)
             return order == .orderedSame
-                ? $1.state == .blockedByAFolder
+                ? ($1.state == .blockedByAFolder || $1.state == .noLongerOnTheServer)
                 : order == .orderedAscending
         }
     }

@@ -1233,8 +1233,17 @@ final class AgentRemoteHost: ObservableObject {
                 )
                 : LampAgentRemoteWritingRevision.hostIsBehind(host: saved, device: revision)
         }
-        if behind(fetching: true), let pull { await pull() }
-        if behind(fetching: false) {
+        // After a pull, a copy still not the phone's — older, or of the same
+        // second holding something else — is refused too: the pull may have
+        // been queued behind offloads and not run yet, and a turn on this
+        // copy would save its result over the phone's edit. Retryable; the
+        // next ask finds the pass done.
+        var pulled = false
+        if behind(fetching: true), let pull {
+            await pull()
+            pulled = true
+        }
+        if behind(fetching: false) || (pulled && behind(fetching: true)) {
             send(.failed(
                 LampAgentRemoteFailure.writingBehind,
                 "This Mac doesn't have your latest edits to this writing yet.",

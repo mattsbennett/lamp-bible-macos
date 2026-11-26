@@ -797,6 +797,15 @@ struct WorkspaceSourceOffloadGatheringTests {
         )
         #expect(rows.map(\.state) == [.noLongerOnTheServer, .onTheServer])
         #expect(rows[0].removalWaitsForDownload, "Remove, which would delete, is not how it goes")
+
+        // Beside a folder at its own path, still with its own row.
+        let beside = WorkspaceSourceOffload.rows(
+            onDisk: [.init(name: "gone.pdf", isDirectory: true, byteCount: nil)],
+            notHere: ["gone.pdf": .offloaded],
+            unaccounted: ["gone.pdf"]
+        )
+        #expect(beside.map(\.state) == [.folder(holdsSourcesNotHere: true), .noLongerOnTheServer])
+        #expect(Set(beside.map(\.id)).count == 2)
     }
 
     @Test func anonymousIsNotAnEmptyUsername() {

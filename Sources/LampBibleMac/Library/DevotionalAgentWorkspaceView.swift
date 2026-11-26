@@ -788,7 +788,9 @@ enum DevotionalAgentWorkspaceStore {
         // missing.
         let rows = WorkspaceSourceOffload.rows(inWorkspaceAt: workspace)
         let here = rows.filter(\.isHere).map(\.relativePath)
-        let offloaded = rows.filter { !$0.isHere }.map(\.relativePath)
+        // Not one the server no longer names: there is no Download for it,
+        // and the agent would send the reader looking for one.
+        let offloaded = rows.filter { !$0.isHere && $0.state != .noLongerOnTheServer }.map(\.relativePath)
         let instructions = instructions(
             contextFiles: here,
             offloadedSources: offloaded,
@@ -2025,10 +2027,10 @@ struct DevotionalAgentWorkspaceView: View {
             } else if file.isBlocked {
                 // On the server, hidden by a folder at its path: no download
                 // can land until the folder moves.
-                Text("Move the folder to download")
+                Text("Something is in its place")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                    .help("A folder with this name is where this source would come back. Move or rename the folder, then download the source.")
+                    .help("A folder, a link, or a file where one of its folders should be is where this source would come back. Move it aside in Finder, then download the source.")
             } else if file.isOffloaded {
                 Text("On the server")
                     .font(.caption2)
