@@ -1356,6 +1356,177 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         """
     }
 
+    /// Whether the page draws its own caret and selection. Off, WebKit's are
+    /// shown, as they were before.
+    static let drawsCaretAndSelection = true
+
+    /// The caret and the selection, drawn the height of their letters.
+    ///
+    /// WebKit draws both the height of the line box, the leading with it, so
+    /// at the writing's 1.7 spacing the caret ran down into the gap below its
+    /// line and a selection filled the gaps between lines; the review marks,
+    /// a span's background, sit on the letters alone, and the two disagreed
+    /// beside each other (owner, 2026-11-25). The caret is a bar placed from
+    /// the collapsed selection's own rectangle, which WebKit gives at the
+    /// letters' height, once a frame at most and by transform, blinking by
+    /// animation; the selection is a CSS Custom Highlight, which paints the
+    /// letters' height too and changes nothing in the document. Measured in
+    /// the writing page: 18 µs for the caret and 3.4 µs for a selection, at
+    /// most once a frame, against about 700 µs a keystroke costs the page.
+    ///
+    /// WebKit's caret is kept wherever this one could be wrong: beside right
+    /// to left letters, where which side of a boundary it stands is WebKit's
+    /// to judge; in an empty block, or anywhere the rectangle is not one;
+    /// and while an input method composes. A selection made while the page
+    /// is not focused stays drawn, a little paler, as the system's would
+    /// not: the chats send it with a message, so it should be seen.
+    static let drawnCaretScript = #"""
+    (function () {
+      if (window.__lampDrawnCaret) return;
+      window.__lampDrawnCaret = true;
+      var html = document.documentElement;
+      var highlights = !!(window.CSS && CSS.highlights && window.Highlight);
+      var style = document.createElement('style');
+      style.id = 'lamp-drawn-caret';
+      style.textContent = [
+        'html.lamp-drawn-caret .ProseMirror[contenteditable="true"] { caret-color: transparent !important; }',
+        'html.lamp-drawn-selection .ProseMirror ::selection, html.lamp-drawn-selection .ProseMirror::selection { background: transparent; }',
+        '::highlight(lamp-selection) { background-color: -apple-system-selected-text-background; }',
+        'html.lamp-selection-inactive ::highlight(lamp-selection) { background-color: color-mix(in srgb, -apple-system-selected-text-background 55%, transparent); }',
+        '#lamp-caret { position: fixed; left: 0; top: 0; width: 2px; height: 0; border-radius: 1px; background: var(--accent-color, #007aff); pointer-events: none; z-index: 2147483000; display: none; will-change: transform; }'
+      ].join('\n');
+      html.appendChild(style);
+
+      var selection = highlights ? new Highlight() : null;
+      if (selection) CSS.highlights.set('lamp-selection', selection);
+      var caret = null;
+      var blink = null;
+      var frame = 0;
+      var composing = false;
+      var shown = { x: NaN, y: NaN, h: NaN };
+      var barVisible = false;
+      // Text moved under a caret that did not: a picture loading above it, or
+      // the writing changed from outside. Each editor is watched once it first
+      // holds the selection.
+      var resized = window.ResizeObserver ? new ResizeObserver(function () { soon(); }) : null;
+      // Right to left letters, where a caret's side of a boundary is WebKit's to
+      // judge: Hebrew, Arabic and the like.
+      var rtl = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+
+      // The nearest box that clips the editor, found once per editor: the
+      // footnote popover's scrolling body, or none for the page itself.
+      function clipperOf(root) {
+        if (root.__lampClipper !== undefined) return root.__lampClipper;
+        var clipper = null;
+        for (var el = root; el && el !== document.body && el !== html; el = el.parentElement) {
+          var overflow = getComputedStyle(el).overflowY;
+          if (overflow !== 'visible') { clipper = el; break; }
+        }
+        root.__lampClipper = clipper;
+        return clipper;
+      }
+
+      function rootOf(node) {
+        var element = node && (node.nodeType === 1 ? node : node.parentElement);
+        return element ? element.closest('.ProseMirror') : null;
+      }
+
+      function caretElement() {
+        if (caret || !document.body) return caret;
+        caret = document.createElement('div');
+        caret.id = 'lamp-caret';
+        caret.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(caret);
+        blink = caret.animate(
+          [{ opacity: 1 }, { opacity: 1, offset: 0.5 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }],
+          { duration: 1000, iterations: Infinity }
+        );
+        return caret;
+      }
+
+      function update() {
+        frame = 0;
+        var current = document.getSelection();
+        var range = current && current.rangeCount ? current.getRangeAt(0) : null;
+        var root = range ? rootOf(range.commonAncestorContainer) : null;
+        var focused = !!root && document.hasFocus() && document.activeElement === root;
+        if (root && resized && !root.__lampWatched) { root.__lampWatched = true; resized.observe(root); }
+
+        // The selection, drawn the height of its letters.
+        if (selection) {
+          if (selection.size) selection.clear();
+          // Not while ProseMirror hides the text selection itself, as it
+          // does with a picture or a block selected whole.
+          if (root && !range.collapsed && !root.classList.contains('ProseMirror-hideselection')) {
+            selection.add(range.cloneRange());
+          }
+          html.classList.toggle('lamp-drawn-selection', !!root);
+          html.classList.toggle('lamp-selection-inactive', !focused);
+        }
+
+        // The caret, where it can be measured with certainty; elsewhere WebKit's.
+        var rect = null;
+        if (focused && range.collapsed && root.isContentEditable && !composing) {
+          var node = range.startContainer;
+          var near = node.nodeType === 3
+            ? node.data.slice(Math.max(0, range.startOffset - 1), range.startOffset + 1)
+            : '';
+          if (node.nodeType === 3 && !rtl.test(near)) {
+            var rects = range.getClientRects();
+            if (rects.length === 1 && rects[0].height > 0) rect = rects[0];
+            // Scrolled out of a box that clips it, WebKit's caret is clipped
+            // with the text; this one would float over whatever is there.
+            var clipper = rect && clipperOf(root);
+            if (clipper) {
+              var box = clipper.getBoundingClientRect();
+              if (rect.top < box.top || rect.bottom > box.bottom || rect.left < box.left - 1 || rect.right > box.right + 1) rect = null;
+            }
+          }
+        }
+        var bar = rect ? caretElement() : caret;
+        if (rect && bar) {
+          var x = rect.left - 1, y = rect.top, h = rect.height;
+          if (x !== shown.x || y !== shown.y || h !== shown.h) {
+            bar.style.height = h + 'px';
+            bar.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+            shown = { x: x, y: y, h: h };
+            // Solid while it moves, as the system's is while typing.
+            if (blink) blink.currentTime = 0;
+          }
+          if (!barVisible) { bar.style.display = 'block'; barVisible = true; }
+          html.classList.toggle('lamp-drawn-caret', true);
+        } else {
+          if (bar && barVisible) { bar.style.display = 'none'; barVisible = false; }
+          shown = { x: NaN, y: NaN, h: NaN };
+          html.classList.toggle('lamp-drawn-caret', false);
+        }
+      }
+
+      function soon() {
+        if (!frame) frame = requestAnimationFrame(update);
+      }
+
+      document.addEventListener('selectionchange', soon);
+      document.addEventListener('input', soon, true);
+      document.addEventListener('focusin', soon, true);
+      document.addEventListener('focusout', soon, true);
+      document.addEventListener('scroll', soon, true);
+      document.addEventListener('compositionstart', function () { composing = true; soon(); }, true);
+      document.addEventListener('compositionend', function () { composing = false; soon(); }, true);
+      window.addEventListener('focus', soon);
+      window.addEventListener('blur', soon);
+      window.addEventListener('resize', soon);
+      // The text size and the typeface are set on the root element, as a
+      // property and a class, and move every line without resizing the
+      // editor. Watched there alone, which typing never touches.
+      // This script's own classes are set there too, so each is changed
+      // only by toggle with a force, which writes nothing when nothing
+      // changes: add and remove write the attribute every time, and every
+      // update would have scheduled the next.
+      new MutationObserver(soon).observe(html, { attributes: true, attributeFilter: ['style', 'class'] });
+    })();
+    """#
+
     /// Reports the first frame the page actually produces.
     ///
     /// Two nested animation frames is the reliable "we have painted" signal: the
@@ -1691,6 +1862,13 @@ final class TipTapEditorPool {
             // editor keeps the bundle's own layout.
             configuration.userContentController.addUserScript(WKUserScript(
                 source: TipTapEditorCoordinator.writingPageStyleScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+        }
+        if TipTapEditorCoordinator.drawsCaretAndSelection {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: TipTapEditorCoordinator.drawnCaretScript,
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             ))

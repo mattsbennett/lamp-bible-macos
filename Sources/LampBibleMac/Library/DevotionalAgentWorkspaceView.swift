@@ -1167,8 +1167,21 @@ struct DevotionalAgentWorkspaceView: View {
     let draftMarkdown: String
     let contextDocument: String
     /// What the editor beside this has open and selected, which each message
-    /// is sent with.
+    /// is sent with, less a selection the writer dismissed (`sentFocus`).
     let editorFocus: WritingEditorFocus
+    /// A focus whose selection the writer asked to send without, until the
+    /// selection changes.
+    @State private var dismissedFocus: WritingEditorFocus?
+
+    /// The editor's focus as the agent is told it: without its selection
+    /// where the writer dismissed it from the chat.
+    private var sentFocus: WritingEditorFocus {
+        guard editorFocus.selectedText != nil, editorFocus == dismissedFocus else { return editorFocus }
+        var focus = editorFocus
+        focus.selectedText = nil
+        focus.selectedLines = nil
+        return focus
+    }
     /// What of the writing is still marked for the writer to read, as the
     /// editor draws it (`WritingReviewSession.agentNote`): kept beside the
     /// focus in `.lamp/editor.md`, so a Terminal session is told it with
@@ -1442,11 +1455,20 @@ struct DevotionalAgentWorkspaceView: View {
         .onChange(of: agentAccessPolicy) { _, policy in
             synchronizeAccessPolicy(policy)
         }
+        .onChange(of: dismissedFocus) { _, _ in
+            writeEditorFocus(sentFocus, reviewNote: reviewNote)
+        }
         .onChange(of: editorFocus) { _, focus in
-            writeEditorFocus(focus, reviewNote: reviewNote)
+            // A dismissal lasts until the selection changes: selected again
+            // later, the same words are sent again.
+            if focus != dismissedFocus, dismissedFocus != nil {
+                dismissedFocus = nil
+                return
+            }
+            writeEditorFocus(sentFocus, reviewNote: reviewNote)
         }
         .onChange(of: reviewNote) { _, note in
-            writeEditorFocus(editorFocus, reviewNote: note)
+            writeEditorFocus(sentFocus, reviewNote: note)
         }
         // The note is there exactly while marks are on: turned on or off
         // with the workspace open, its instructions say so too.
@@ -1458,7 +1480,7 @@ struct DevotionalAgentWorkspaceView: View {
         // pane opened, and either can move while it waits on the owner,
         // with nowhere to write it yet.
         .onChange(of: workspaceURL) { _, _ in
-            writeEditorFocus(editorFocus, reviewNote: reviewNote)
+            writeEditorFocus(sentFocus, reviewNote: reviewNote)
             // And the instructions again: marks turned on or off after the
             // preparation wrote them, with no workspace yet to refresh.
             refreshInstructions()
@@ -1819,7 +1841,7 @@ struct DevotionalAgentWorkspaceView: View {
                 NativeAgentChatView(
                     provider: selectedProvider,
                     workspace: workspaceURL,
-                    preparePrompt: { [editorFocus, libraryRootURL, devotionalID] message in
+                    preparePrompt: { [sentFocus, libraryRootURL, devotionalID] message in
                         // The marks file read off the main actor, since
                         // another writer can hold its lock for as long as a
                         // long draft takes, and that should not hold up a
@@ -1866,7 +1888,7 @@ struct DevotionalAgentWorkspaceView: View {
                             ].compactMap { $0 }.joined(separator: "\n")
                         }.value
                         return WritingChatTurns.prompt(
-                            for: message, focus: editorFocus, note: note.isEmpty ? nil : note
+                            for: message, focus: sentFocus, note: note.isEmpty ? nil : note
                         )
                     },
                     onRunningChanged: { chatIsReplying = $0 },
@@ -1891,6 +1913,10 @@ struct DevotionalAgentWorkspaceView: View {
                     }
                 )
                 .workspaceTitle(devotionalTitle)
+                .attachment(
+                    sentFocus.selectedText.map { ChatAttachment(place: editorFocus.documentName, text: $0) },
+                    dismiss: { dismissedFocus = editorFocus }
+                )
                 .turnNotifications(title: notificationTitle, route: .writing(devotionalID))
                 .identityShownByHost()
                 .onConnectionChanged { state in providerConnection = state }

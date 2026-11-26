@@ -44,6 +44,11 @@ struct ReaderChatSidebarView: View {
     @ObservedObject var reader: ReaderWorkspace
 
     @State private var isChoosingChat = false
+    /// A selection the reader asked to send without, until another is made.
+    @State private var dismissedSelection: ReaderSelectedPassage?
+    /// Bumped as the reader's selection changes: the selection is the text
+    /// view's store's, not the reader's, so this view would not hear of it.
+    @State private var selectionChanges = 0
     /// Whether the setup under the header row is open. Folded to begin with,
     /// as the writing assistant's is: the conversation leads, and who
     /// answers and with what is one row that opens on a click.
@@ -179,11 +184,25 @@ struct ReaderChatSidebarView: View {
 
     private var context: ReaderChatContext? { capture()?.context(notes: []) }
 
+    /// The reader's selection as it is now, dismissed or not.
+    private var currentSelection: ReaderSelectedPassage? {
+        _ = selectionChanges
+        return reader.textSelection.current
+    }
+
+    /// The text selected in the reader that the next message goes with: the
+    /// selection, unless the reader dismissed it.
+    private var attachedSelection: ReaderSelectedPassage? {
+        _ = selectionChanges
+        guard let passage = reader.textSelection.current, passage != dismissedSelection else { return nil }
+        return passage
+    }
+
     private func capture() -> ReaderChatTurns.Capture? {
         guard let book = reader.selectedBook,
               let translation = libraryModel.translations.first(where: { $0.id == reader.selectedTranslationID })
         else { return nil }
-        let selection = reader.textSelection.current.map { passage in
+        let selection = attachedSelection.map { passage in
             ReaderChatContext.Selection(
                 text: passage.text,
                 reference: passage.reference,
@@ -329,6 +348,12 @@ struct ReaderChatSidebarView: View {
                     forkFromTurn: forkFromTurn,
                     startWritingFromTurn: { offerWriting(upTo: $0) }
                 )
+                .attachment(
+                    attachedSelection.map { passage in
+                        ChatAttachment(place: passage.reference, text: passage.text)
+                    },
+                    dismiss: { dismissedSelection = reader.textSelection.current }
+                )
                 // The setup row names the provider and whether it is
                 // connected, so the chat's own header does not say it again.
                 .identityShownByHost()
@@ -339,6 +364,14 @@ struct ReaderChatSidebarView: View {
                     title: ["Reader Chat", capture()?.reference].compactMap { $0 }.joined(separator: " \u{00B7} "),
                     route: .readerChat(chatID)
                 )
+                // Heard before the change is made; the bump redraws after it,
+                // when the store holds the new selection.
+                .onReceive(reader.textSelection.objectWillChange) { _ in selectionChanges &+= 1 }
+                // A dismissal lasts until the selection changes: selected
+                // again later, the same words are sent again.
+                .onChange(of: currentSelection) { _, selection in
+                    if selection != dismissedSelection { dismissedSelection = nil }
+                }
                 .id("\(provider.rawValue)|\(workspace.path)")
             } else if let preparationError {
                 ContentUnavailableView {
@@ -512,6 +545,7 @@ struct ReaderChatSidebarView: View {
                 .font(.subheadline)
                 ReaderChatAttachmentsLine(
                     selection: reader.textSelection,
+                    dismissed: dismissedSelection,
                     selectedVerse: capture.selectedVerse,
                     personalStudy: capture.sharesPersonalStudy
                         ? .shared(
@@ -1006,12 +1040,19 @@ private struct ReaderChatAttachmentsLine: View {
     }
 
     @ObservedObject var selection: ReaderTextSelectionStore
+    /// A selection the reader asked to send without, which is not sent.
+    let dismissed: ReaderSelectedPassage?
     let selectedVerse: String?
+
+    private var sent: ReaderSelectedPassage? {
+        guard let passage = selection.current, passage != dismissed else { return nil }
+        return passage
+    }
     let personalStudy: PersonalStudy
 
     private var parts: [String] {
         var parts: [String] = []
-        if let passage = selection.current {
+        if let passage = sent {
             parts.append("Selection: \(passage.reference)")
         } else if let selectedVerse {
             parts.append(selectedVerse)
@@ -1039,7 +1080,7 @@ private struct ReaderChatAttachmentsLine: View {
         case .shared:
             help += ", and your own notes and highlights in the chapter."
         }
-        if let passage = selection.current {
+        if let passage = sent {
             help += "\n\nSelected: “\(passage.text.prefix(300))\(passage.text.count > 300 ? "…" : "")”"
         }
         return help

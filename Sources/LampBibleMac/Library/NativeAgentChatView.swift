@@ -1212,6 +1212,68 @@ private extension String {
     }
 }
 
+/// Text a message will be sent with: where it is from, and its words.
+struct ChatAttachment: Equatable {
+    /// Where it was selected: "Genesis 1:1", "Main Prose".
+    var place: String
+    var text: String
+}
+
+/// The selection the next message goes with, over the message field. The
+/// chats were sent it all along, but the only word of it was a line behind
+/// the reader chat's setup row, and none in the writing chat, so a reader
+/// who clicked into the chat and saw the page's highlight fade took it to
+/// be gone (owner, 2026-11-25).
+private struct ChatAttachmentChip: View {
+    let attachment: ChatAttachment
+    let dismiss: (() -> Void)?
+
+    /// The words on one line, as far as they fit.
+    private var excerpt: String {
+        attachment.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "text.quote")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            // Kept before the words, but cut in the middle where a long file
+            // name would push the button out of a narrow pane.
+            Text(attachment.place)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(1)
+            Text("\u{201C}\(excerpt)\u{201D}")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            if let dismiss {
+                Button("Send Without the Selection", systemImage: "xmark.circle.fill", action: dismiss)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Send the next message without the selection")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.lampCardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.lampCardStroke)
+        }
+        .help("Sent with your next message: \(attachment.place), \u{201C}\(attachment.text.prefix(300))\(attachment.text.count > 300 ? "\u{2026}" : "")\u{201D}")
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sent with your next message: \(attachment.place)")
+    }
+}
+
 private struct NativeAgentChatInputView: View {
     @Binding var message: String
     let placeholder: String
@@ -2912,6 +2974,10 @@ struct NativeAgentChatView: View {
     /// connection, so this header keeps only its buttons, and only when it
     /// has one to offer.
     private var hostNamesIdentity = false
+    /// What the next message is sent with beside its words, shown over the
+    /// field; see `attachment(_:dismiss:)`.
+    private var attachment: ChatAttachment?
+    private var dismissAttachment: (() -> Void)?
 
     @StateObject private var model: NativeAgentChatModel
     @State private var draft = ""
@@ -3140,22 +3206,27 @@ struct NativeAgentChatView: View {
             )
             ZStack {
                 ChatView(messages: $model.messages, scrollToBottom: $scrollToBottom) {
-                    NativeAgentChatInputView(
-                        message: $draft,
-                        placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
-                    ) { prompt in
-                        // While a reply is arriving the message waits its
-                        // turn rather than being refused. A thought that
-                        // arrives mid-answer usually arrives *because* of
-                        // the answer, and making the reader hold it until
-                        // the reply lands is how a question gets lost.
-                        if model.isRunning {
-                            model.enqueue(prompt)
-                            return true
+                    VStack(spacing: 0) {
+                        if let attachment {
+                            ChatAttachmentChip(attachment: attachment, dismiss: dismissAttachment)
                         }
-                        return startSending(prompt)
+                        NativeAgentChatInputView(
+                            message: $draft,
+                            placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
+                        ) { prompt in
+                            // While a reply is arriving the message waits its
+                            // turn rather than being refused. A thought that
+                            // arrives mid-answer usually arrives *because* of
+                            // the answer, and making the reader hold it until
+                            // the reply lands is how a question gets lost.
+                            if model.isRunning {
+                                model.enqueue(prompt)
+                                return true
+                            }
+                            return startSending(prompt)
+                        }
+                        .disabled(!canSend || isPreparing || connectionState != .connected)
                     }
-                    .disabled(!canSend || isPreparing || connectionState != .connected)
                 }
                 // SwiftyChat gives every message its own right-click menu,
                 // which hides the one selected text would have.
@@ -3369,6 +3440,17 @@ struct NativeAgentChatView: View {
     func workspaceTitle(_ title: String?) -> NativeAgentChatView {
         var copy = self
         copy.workspaceTitle = title
+        return copy
+    }
+
+    /// Shows what the next message will be sent with, the text selected in
+    /// the reader or the writing, over the field it is written in, with a
+    /// button to send without it. The host decides what is sent: dismissing
+    /// asks it to leave the selection out.
+    func attachment(_ attachment: ChatAttachment?, dismiss: (() -> Void)?) -> NativeAgentChatView {
+        var copy = self
+        copy.attachment = attachment
+        copy.dismissAttachment = dismiss
         return copy
     }
 
