@@ -719,8 +719,14 @@ public enum LampWorkspaceSync {
         writingFolder: WritingFolder = .backup,
         installID: String = LampInstallIdentity.current(),
         recording record: WorkspaceExportRecord? = nil,
+        includingWorkspaceFiles: Bool = true,
         fileManager: FileManager = .default
     ) throws {
+        // `includingWorkspaceFiles` false where this Mac does not sync them
+        // (`decisions/0024`): only the documents, and the bookkeeping of
+        // their deletions, are exported — nothing else is read or staged, so
+        // an unreadable skill or chat cannot stop the documents' pass.
+        //
         // A record and a backup are different jobs and cannot be done at
         // once: a backup must hold every byte in its own layout, while a
         // record deliberately leaves most files where they are, and the
@@ -733,7 +739,7 @@ public enum LampWorkspaceSync {
         let portableRoot = backupRoot
             .appendingPathComponent(portableDirectoryName, isDirectory: true)
         let catalogRoot = WorkspaceSkillStore.catalogDirectory(in: libraryRoot)
-        for skill in try childDirectoriesIfPresent(of: catalogRoot, fileManager: fileManager)
+        for skill in includingWorkspaceFiles ? try childDirectoriesIfPresent(of: catalogRoot, fileManager: fileManager) : []
         where WorkspaceSkillStore.isValidSkillName(skill.lastPathComponent)
             && !bundledSkillNames.contains(skill.lastPathComponent.lowercased()) {
             try copyTree(
@@ -787,6 +793,7 @@ public enum LampWorkspaceSync {
                 )
             }
 
+            if includingWorkspaceFiles {
             try copyTree(
                 from: workspace.appendingPathComponent("context", isDirectory: true),
                 to: portableWorkspace.appendingPathComponent("Context", isDirectory: true),
@@ -841,6 +848,7 @@ public enum LampWorkspaceSync {
                 into: record,
                 fileManager: fileManager
             )
+            }
 
             // A ledger that is there and will not read is left exactly as it
             // is: it may hold the last offload, and the lock on where sync
@@ -857,7 +865,7 @@ public enum LampWorkspaceSync {
                 .mapValues(\.modified))
             try recordDocumentDeletions(deleted, inWorkspace: workspace, libraryRoot: libraryRoot, fileManager: fileManager)
             if readable != nil { try fileLedger.save(in: workspace) }
-            if !fileLedger.isEmpty {
+            if includingWorkspaceFiles, !fileLedger.isEmpty {
                 // Possibly all that's left of the workspace to send. Written,
                 // not placed: these bytes exist nowhere else.
                 let published = Self.path(

@@ -1244,6 +1244,14 @@ private struct ReaderSettingsView: View {
                                     // starts the pass that brings them.
                                     if on, syncController.syncsWorkspaceFiles {
                                         Task { _ = await syncController.syncAsked(library: model.library) }
+                                    } else if !on, !syncController.syncsWorkspaceFiles {
+                                        // A request still waiting is withdrawn
+                                        // now, with or without a server.
+                                        Task {
+                                            await syncController.withdrawRequestsOffAWebDAVServer(
+                                                library: model.library
+                                            )
+                                        }
                                     }
                                 }
                             )

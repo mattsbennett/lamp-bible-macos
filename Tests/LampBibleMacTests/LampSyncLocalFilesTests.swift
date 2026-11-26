@@ -282,6 +282,12 @@ struct LampSyncLocalFilesTests {
         let scratch = library.appendingPathComponent("scratch", isDirectory: true)
         try write("# Outline", at: "AgentWorkspaces/Writing/talk-123/outline.md", in: library)
         try write("a fact", at: "AgentWorkspaces/Writing/talk-123/context/fact.md", in: library)
+        // A skill that cannot be read: off, nothing of the kind is touched,
+        // so it cannot stop the documents' pass.
+        try write("secret", at: "AgentSkills/locked/SKILL.md", in: library)
+        let locked = library.appendingPathComponent("AgentSkills/locked/SKILL.md")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
 
         let found = try await LampSyncLocalFiles.workspaceFiles(
             inLibraryAt: library, stagingIn: scratch, includingWorkspaceFiles: false

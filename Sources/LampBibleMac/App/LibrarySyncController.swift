@@ -528,7 +528,7 @@ final class LibrarySyncController: ObservableObject {
     private func carryOutOffloads(library: LampLibrary) async {
         // And only while this Mac syncs its sources at all: off, the server's
         // copies are not this Mac's to rely on (`decisions/0024`).
-        guard provider == .webDAV, syncsWorkspaceFilesThisPass else {
+        guard provider == .webDAV, syncsWorkspaceFilesThisPass, syncsWorkspaceFiles else {
             await withdrawRequestsOffAWebDAVServer(library: library)
             return
         }
@@ -562,7 +562,7 @@ final class LibrarySyncController: ObservableObject {
     /// Under a sync folder nothing is offloaded, so a request made under
     /// WebDAV that is still waiting is withdrawn and said, rather than left
     /// promising a sync that will never carry it out.
-    private func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
+    func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL) {
             for path in requested {
                 try? await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
@@ -754,7 +754,10 @@ final class LibrarySyncController: ObservableObject {
     /// large source can take longer to read than a look lives, and the read
     /// is the proof.
     func isStillTheLook(_ observation: ServerObservation) -> Bool {
-        guard let last = lastObservation, last.isTheSameLook(as: observation),
+        // And workspace sync still on: switched off since the run began,
+        // nothing more goes (`decisions/0024`).
+        guard syncsWorkspaceFiles,
+              let last = lastObservation, last.isTheSameLook(as: observation),
               currentSource == observation.source
         else { return false }
         let account = provider == .webDAV
@@ -1226,7 +1229,6 @@ final class LibrarySyncController: ObservableObject {
         isSyncing = true
         // A folder has no account; a WebDAV pass sets its own below.
         accountOfThisPass = ""
-        syncsWorkspaceFilesThisPass = syncsWorkspaceFiles
         Self.log.notice("Sync pass started (\(self.provider.rawValue, privacy: .public))")
         errorMessage = nil
         statusMessage = "Preparing sync…"
@@ -1595,6 +1597,10 @@ extension LibrarySyncController {
         preferenceSource: String,
         workspace: URL
     ) async throws {
+        // Read here, where every pass — an ordinary one, or the one a Move or
+        // Join runs — starts: read earlier, a change made before accepting
+        // a Move would not reach the pass that followed it.
+        syncsWorkspaceFilesThisPass = syncsWorkspaceFiles
         statusMessage = "Syncing…"
         var records = LampSyncFileRecords.load(
             fromLibraryAt: library.rootURL, fileManager: fileManager

@@ -324,7 +324,7 @@ extension LampSyncLocalFiles {
         let record = LampWorkspaceSync.WorkspaceExportRecord()
         try LampWorkspaceSync.exportPortableWorkspaces(
             from: libraryRoot, to: scratch, writingFolder: .perFile,
-            recording: record, fileManager: fileManager
+            recording: record, includingWorkspaceFiles: includingWorkspaceFiles, fileManager: fileManager
         )
         return record.placed.compactMap { path, url, isFixedAtItsPath in
             switch LampSyncFolderLayout.kind(of: path) {
