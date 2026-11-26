@@ -790,6 +790,7 @@ public enum LampWorkspaceSync {
             try copyTree(
                 from: workspace.appendingPathComponent("context", isDirectory: true),
                 to: portableWorkspace.appendingPathComponent("Context", isDirectory: true),
+                skippingToolFolders: true,
                 recordingUnder: backupRoot,
                 into: record,
                 fileManager: fileManager
@@ -1243,6 +1244,7 @@ public enum LampWorkspaceSync {
         from source: URL,
         to destination: URL,
         allowedExtensions: Set<String>? = nil,
+        skippingToolFolders: Bool = false,
         recordingUnder root: URL? = nil,
         into record: WorkspaceExportRecord? = nil,
         staging: Bool = false,
@@ -1252,14 +1254,21 @@ public enum LampWorkspaceSync {
               let enumerator = fileManager.enumerator(
                 at: source,
                 includingPropertiesForKeys: [
-                    .contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey,
+                    .contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey,
                 ],
                 options: [.skipsHiddenFiles]
               ) else { return }
         let prefix = source.standardizedFileURL.path + "/"
         for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey])
             if values.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            // A tool's output — `node_modules` and the like — is not a
+            // source and is not published (`decisions/0023`).
+            if skippingToolFolders, values.isDirectory == true,
+               LampWritingWorkspaceLayout.toolFolders.contains(url.lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
             }
@@ -1583,13 +1592,19 @@ public enum LampWorkspaceSync {
         guard isSafeDirectory(context),
               let enumerator = fileManager.enumerator(
                 at: context,
-                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles]
               ) else { return files }
         let prefix = context.standardizedFileURL.path + "/"
         for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey])
             if values.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            // Not a source, so not in the ledger either (`decisions/0023`).
+            if values.isDirectory == true,
+               LampWritingWorkspaceLayout.toolFolders.contains(url.lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
             }

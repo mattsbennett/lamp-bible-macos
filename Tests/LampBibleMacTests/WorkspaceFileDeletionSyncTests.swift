@@ -1229,6 +1229,62 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(await LampWorkspaceSync.unaccountedSourceNames(in: workspaceURL).isEmpty)
     }
 
+    /// A tool's output already on the server is queued for removal once,
+    /// as a reader's removal would be, and the queue is written only when
+    /// something is added — its date is the "work to publish" signal.
+    @Test func toolOutputOnTheServerIsQueuedOnce() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let folder = workspace(macs.a).lastPathComponent
+        let lib = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck-build/node_modules/a/index.js")
+        let own = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck-build/build.js")
+
+        let added = try LampSyncRemovedModules.queueToolOutput(amongMembers: [lib, own], inLibraryAt: macs.a)
+        #expect(added == [lib])
+        let queue = LampSyncRemovedModules.url(inLibraryAt: macs.a)
+        let written = try FileManager.default.attributesOfItem(atPath: queue.path)[.modificationDate] as? Date
+        Thread.sleep(forTimeInterval: 1.1)
+
+        #expect(try LampSyncRemovedModules.queueToolOutput(amongMembers: [lib, own], inLibraryAt: macs.a).isEmpty)
+        #expect(try FileManager.default.attributesOfItem(atPath: queue.path)[.modificationDate] as? Date == written,
+                "not written again")
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys.sorted() == [lib])
+    }
+
+    /// Neither the ledger nor the offload sweep walks into a tool's folder:
+    /// its files are not sources, and are thousands of them.
+    @Test func neitherTheLedgerNorTheSweepWalksIntoAtoolsFolder() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let deck = workspaceURL.appendingPathComponent("context/deck-build", isDirectory: true)
+        try write("build", to: deck.appendingPathComponent("build.js"), at: 0)
+        try write("lib", to: deck.appendingPathComponent("node_modules/a/index.js"), at: 0)
+
+        let ledgerKeys = try LampWorkspaceSync.workspaceFiles(in: workspaceURL, fileManager: .default).keys
+        #expect(ledgerKeys.contains(WorkspaceFileLedger.contextKey("deck-build/build.js")))
+        #expect(!ledgerKeys.contains { $0.contains("node_modules") })
+        let swept = await WorkspaceSourceOffload.contextRelativePaths(in: workspaceURL)
+        #expect(swept == ["deck-build/build.js"])
+    }
+
+    /// Removing a folder queues the writer's own files in it, not the tool's
+    /// output, which was never published.
+    @Test func removingAfolderQueuesNoneOfItsToolOutput() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let deck = workspaceURL.appendingPathComponent("context/deck-build", isDirectory: true)
+        try write("build", to: deck.appendingPathComponent("build.js"), at: 0)
+        try write("lib", to: deck.appendingPathComponent("node_modules/a/index.js"), at: 0)
+
+        try await WorkspaceContextFileStore.removeContextItem(at: deck, from: workspaceURL, libraryRootURL: macs.a)
+
+        let folder = workspaceURL.lastPathComponent
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys.sorted()
+            == [try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck-build/build.js")])
+    }
+
     /// A read the server refuses costs nothing from the run's allowance, so
     /// one that fails every time cannot hold back the sources behind it.
     @Test func afailedReadCostsNothingFromTheAllowance() async throws {

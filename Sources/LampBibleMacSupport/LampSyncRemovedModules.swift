@@ -119,6 +119,37 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
         return true
     }
 
+    /// Queues for removal every member that is a tool's output under a
+    /// writing's sources (`LampWritingWorkspaceLayout.isToolOutput`) and is
+    /// not queued yet, as a reader's removal of it would be. Such files are
+    /// no longer gathered (`decisions/0023`), and a member left on the server
+    /// with nothing here would be planned as a download on every pass.
+    ///
+    /// Written only when something was added: this file's date is what tells
+    /// this Mac it has work to publish, and rewriting it on every pass is how
+    /// a Mac once synced every six seconds. Returns what was added.
+    @discardableResult
+    public static func queueToolOutput(
+        amongMembers members: some Sequence<String>,
+        inLibraryAt libraryRoot: URL,
+        at date: Date = Date(),
+        fileManager: FileManager = .default
+    ) throws -> [String] {
+        let toolOutput = members.filter { path in
+            LampWritingWorkspaceLayout.contextFile(ofPath: path).map {
+                LampWritingWorkspaceLayout.isToolOutput(relativePath: $0.relativePath)
+            } ?? false
+        }
+        guard !toolOutput.isEmpty else { return [] }
+        var records = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
+        let fresh = toolOutput.filter { records.removedAt[$0] == nil }.sorted()
+        guard !fresh.isEmpty else { return [] }
+        let time = Int64(date.timeIntervalSince1970 * 1_000)
+        for path in fresh { records.record(path, at: time) }
+        try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
+        return fresh
+    }
+
     /// Records a module's removal, at the path it is published under.
     @discardableResult
     public static func record(

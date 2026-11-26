@@ -2049,6 +2049,18 @@ extension LibrarySyncController {
         let heldDocuments = Set((try? LampWritingDocumentStore(
             rootURL: LampWritingWorkspace.root(libraryRootURL: library.rootURL, fileManager: fileManager)
         ).held().keys).map(Array.init) ?? [])
+        // A tool's output under a writing's sources — `node_modules` and the
+        // like — is no longer gathered, and a copy already on the server is
+        // removed from it, queued as a reader's removal would be: left there
+        // with nothing here, it would be planned as a download on every pass
+        // (`decisions/0023`). Once; the file is written only when something
+        // is added.
+        let toolOutput = try LampSyncRemovedModules.queueToolOutput(
+            amongMembers: manifest.members.map(\.path), inLibraryAt: library.rootURL, fileManager: fileManager
+        )
+        if !toolOutput.isEmpty {
+            Self.log.info("Queued \(toolOutput.count, privacy: .public) tool-output file(s) for removal from the server")
+        }
         let removals = LampSyncRemovedModules.load(fromLibraryAt: library.rootURL, fileManager: fileManager).removedAt
         // Sources too, now that one can be deleted. A reader who removes a
         // source and attaches another at the same name before the next pass
@@ -2234,6 +2246,11 @@ extension LibrarySyncController {
             deleted: Set(manifest.tombstones.map(\.path))
         )
         result.gathered.extraListing.merge(unlisted) { _, listed in listed }
+        // What a pass costs, in the terms that drive it: what this Mac
+        // offers, what the server counts, and what had to be listed for it.
+        // One line a pass, to compare before and after a change like
+        // `decisions/0023`'s.
+        Self.log.notice("Gathered \(result.gathered.local.count, privacy: .public) local, \(manifest.members.count, privacy: .public) members, \(unlisted.count, privacy: .public) listed by folder")
         return result
     }
 

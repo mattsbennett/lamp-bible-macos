@@ -511,7 +511,11 @@ public enum WorkspaceContextFileStore {
             let path = url.standardizedFileURL.path
             guard path.hasPrefix(prefix) else { return nil }
             let relative = String(path.dropFirst(prefix.count))
-            return relative.isEmpty ? nil : WorkspaceFileLedger.contextKey(relative)
+            // A tool's output was never published (`decisions/0023`); its
+            // removal is not news for the server.
+            guard !relative.isEmpty, !LampWritingWorkspaceLayout.isToolOutput(relativePath: relative)
+            else { return nil }
+            return WorkspaceFileLedger.contextKey(relative)
         }
         let values = try? item.resourceValues(forKeys: [
             .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,

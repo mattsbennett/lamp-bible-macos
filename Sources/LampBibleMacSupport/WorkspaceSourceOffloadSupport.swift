@@ -306,14 +306,21 @@ extension WorkspaceSourceOffload {
         let context = workspace.appendingPathComponent("context", isDirectory: true)
         let prefix = context.standardizedFileURL.path + "/"
         guard let enumerator = fileManager.enumerator(
-            at: context, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+            at: context, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey]
         ) else { return [] }
         var paths: [String] = []
         for case let file as URL in enumerator {
             guard let values = try? file.resourceValues(forKeys: [
-                .isRegularFileKey, .isSymbolicLinkKey,
-            ]), values.isRegularFile == true, values.isSymbolicLink != true
-            else { continue }
+                .isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey,
+            ]) else { continue }
+            // A tool's output is not a source (`decisions/0023`), and a
+            // `node_modules` is thousands of files to walk past every sweep.
+            if values.isDirectory == true, values.isSymbolicLink != true,
+               LampWritingWorkspaceLayout.toolFolders.contains(file.lastPathComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
             let path = file.standardizedFileURL.path
             guard path.hasPrefix(prefix) else { continue }
             let relative = String(path.dropFirst(prefix.count))

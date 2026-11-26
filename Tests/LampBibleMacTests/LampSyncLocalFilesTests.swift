@@ -256,6 +256,24 @@ struct LampSyncLocalFilesTests {
         )
     }
 
+    /// A tool's output under a writing's sources is not gathered: the
+    /// writer's own files beside it are (`decisions/0023`).
+    @Test func atoolsOutputIsNotGatheredButTheFilesBesideItAre() async throws {
+        let library = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: library) }
+        let scratch = library.appendingPathComponent("scratch", isDirectory: true)
+        try write("build", at: "AgentWorkspaces/Writing/talk-123/context/deck-build/build.js", in: library)
+        try write("{}", at: "AgentWorkspaces/Writing/talk-123/context/deck-build/package.json", in: library)
+        try write("lib", at: "AgentWorkspaces/Writing/talk-123/context/deck-build/node_modules/a/index.js", in: library)
+        try write("pyc", at: "AgentWorkspaces/Writing/talk-123/context/tool/__pycache__/m.pyc", in: library)
+
+        let found = try await LampSyncLocalFiles.workspaceFiles(inLibraryAt: library, stagingIn: scratch)
+        let paths = Set(found.map(\.path))
+        #expect(paths.contains("Workspaces/Writing/talk-123/Context/deck-build/build.js"))
+        #expect(paths.contains("Workspaces/Writing/talk-123/Context/deck-build/package.json"))
+        #expect(!paths.contains { $0.contains("/node_modules/") || $0.contains("/__pycache__/") })
+    }
+
     /// A book's pictures are not inside its module: `media_json` holds only
     /// their metadata, so these files are the library's only copy. Gathered
     /// from every root the reader looks in, in its order, so what is
