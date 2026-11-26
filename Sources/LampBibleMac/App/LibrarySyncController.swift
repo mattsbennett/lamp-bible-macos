@@ -569,11 +569,9 @@ final class LibrarySyncController: ObservableObject {
     /// such — that request still stands.
     func withdrawRequestsOffAWebDAVServer(library: LampLibrary) async {
         var mayOffload: Bool { provider == .webDAV && syncsWorkspaceFiles }
-        // Why, as it is now, before anything awaits: said afterwards, a
-        // provider switched meanwhile would give the wrong reason.
-        let why = provider == .webDAV
-            ? "sources go back to the server only while workspace sync is on"
-            : "sources go back only to a WebDAV server"
+        // Why, taken with each cancellation, as the settings stood when it
+        // acted: a provider switched part way gives the reason it had then.
+        var why = ""
         for (workspace, requested) in await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL) {
             var withdrawn: [String] = []
             var stuck: [String] = []
@@ -582,6 +580,9 @@ final class LibrarySyncController: ObservableObject {
                 // what was already done below, rather than leave a request
                 // gone unannounced.
                 guard !mayOffload else { break }
+                why = provider == .webDAV
+                    ? "sources go back to the server only while workspace sync is on"
+                    : "sources go back only to a WebDAV server"
                 do {
                     try await WorkspaceContextFileStore.cancelOffload(relativePath: path, in: workspace)
                     withdrawn.append(path)
@@ -1457,21 +1458,16 @@ extension LibrarySyncController {
         // offloads that come after a pass do not run after it. Any the reader
         // has asked for get a pass of their own once the move is done.
         //
-        // And a pass asked for while the move ran — turning workspace sync
-        // on, say, which promises the downloads — is run then too, as an
-        // ordinary pass runs one queued behind it. Not after a move refused
-        // before anything was written — a stale archive, or one with entries
-        // it cannot place: that leaves its own error to act on, which a pass
-        // against the unmoved archive would replace with a vaguer one. After
-        // anything else, a write the server took and did not confirm
-        // included, it runs.
-        var refusedBeforeWriting = false
+        // Only that. A pass asked for while the move ran — turning workspace
+        // sync on, say — waits for the next one: chasing it from here met a
+        // server that has not yet shown the moved library, and a refusal
+        // whose own error it would replace, three review rounds running, for
+        // a one-time move (`decisions/0024`).
         defer {
-            Task { [weak self, refusedBeforeWriting] in
-                guard let self, !refusedBeforeWriting else { return }
-                let asked = LampSyncRequest.takePending()
-                let requested = await LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL)
-                guard asked || !requested.isEmpty else { return }
+            Task { [weak self] in
+                guard let self,
+                      await !LampWorkspaceSync.requestedOffloads(inLibraryAt: library.rootURL).isEmpty
+                else { return }
                 _ = await self.sync(library: library)
             }
         }
@@ -1521,7 +1517,6 @@ extension LibrarySyncController {
             // rather than a refusal halfway through.
             let unplaceable = LampSyncLibraryMigration.unplaceableEntries(in: archive)
             guard unplaceable.isEmpty else {
-                refusedBeforeWriting = true
                 errorMessage = "Sync cannot place these, so the library was left as it is: "
                     + unplaceable.prefix(5).joined(separator: ", ")
                 return false
@@ -1547,7 +1542,6 @@ extension LibrarySyncController {
             return true
         } catch {
             print("[LibrarySync] move failed: \(error)")
-            if case LibrarySyncError.libraryMovedOn = error { refusedBeforeWriting = true }
             errorMessage = LampSyncErrorText.sentence(for: error)
             return false
         }
