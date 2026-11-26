@@ -522,16 +522,26 @@ public enum WorkspaceContextFileStore {
         ])
         if values?.isSymbolicLink == true { return [] }
         if values?.isRegularFile == true { return key(item).map { [$0] } ?? [] }
+        // A tool's folder itself, or one inside what is removed, is not
+        // walked at all: a `node_modules` is thousands of files, and none of
+        // them was published.
         guard values?.isDirectory == true,
+              !LampWritingWorkspaceLayout.toolFolders.contains(item.lastPathComponent),
               let enumerator = fileManager.enumerator(
-                at: item, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                at: item, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey]
               )
         else { return [] }
         var keys: [String] = []
         for case let file as URL in enumerator {
             guard let child = try? file.resourceValues(forKeys: [
-                .isRegularFileKey, .isSymbolicLinkKey,
-            ]), child.isRegularFile == true, child.isSymbolicLink != true,
+                .isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey,
+            ]) else { continue }
+            if child.isDirectory == true, child.isSymbolicLink != true,
+               LampWritingWorkspaceLayout.toolFolders.contains(file.lastPathComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard child.isRegularFile == true, child.isSymbolicLink != true,
                   let k = key(file)
             else { continue }
             keys.append(k)

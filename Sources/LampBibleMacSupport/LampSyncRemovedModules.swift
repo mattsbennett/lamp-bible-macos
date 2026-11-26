@@ -128,26 +128,50 @@ public struct LampSyncRemovedModules: Codable, Equatable, Sendable {
     /// Written only when something was added: this file's date is what tells
     /// this Mac it has work to publish, and rewriting it on every pass is how
     /// a Mac once synced every six seconds. Returns what was added.
+    ///
+    /// Not one this Mac has offloaded or asked back: the server's copy may be
+    /// the only one, and reaping it would leave the writer's working tree
+    /// short of a file. It is cleaned up once it is here again. And dated
+    /// past the member's own write, however this Mac's clock reads: a
+    /// deletion dated before the write it means to remove loses to it, and
+    /// the file would be fetched instead of removed.
+    ///
+    /// On `WritingWorkspaceFiles`, as the reader's own removals are queued,
+    /// so neither overwrites the other's entry.
     @discardableResult
+    @WritingWorkspaceFiles
     public static func queueToolOutput(
-        amongMembers members: some Sequence<String>,
+        amongMembers members: [(path: String, presentSince: Int64?)],
         inLibraryAt libraryRoot: URL,
         at date: Date = Date(),
         fileManager: FileManager = .default
     ) throws -> [String] {
-        let toolOutput = members.filter { path in
-            LampWritingWorkspaceLayout.contextFile(ofPath: path).map {
-                LampWritingWorkspaceLayout.isToolOutput(relativePath: $0.relativePath)
-            } ?? false
+        let root = LampWritingWorkspace.root(libraryRootURL: libraryRoot, fileManager: fileManager)
+        var acted: [String: [String: WorkspaceFileLedger.SourceAct]?] = [:]
+        let toolOutput = members.filter { member in
+            guard let file = LampWritingWorkspaceLayout.contextFile(ofPath: member.path),
+                  LampWritingWorkspaceLayout.isToolOutput(relativePath: file.relativePath)
+            else { return false }
+            if acted[file.folder] == nil {
+                acted[file.folder] = .some(WorkspaceFileLedger.loadIfReadable(
+                    in: root.appendingPathComponent(file.folder, isDirectory: true)
+                )?.acts)
+            }
+            // A ledger that will not read cannot say; leave the file.
+            guard let acts = acted[file.folder] ?? nil else { return false }
+            let act = acts[WorkspaceFileLedger.normalized(WorkspaceFileLedger.contextKey(file.relativePath))]
+            return act != .offloaded && act != .wanted
         }
         guard !toolOutput.isEmpty else { return [] }
         var records = load(fromLibraryAt: libraryRoot, fileManager: fileManager)
-        let fresh = toolOutput.filter { records.removedAt[$0] == nil }.sorted()
+        let fresh = toolOutput.filter { records.removedAt[$0.path] == nil }.sorted { $0.path < $1.path }
         guard !fresh.isEmpty else { return [] }
-        let time = Int64(date.timeIntervalSince1970 * 1_000)
-        for path in fresh { records.record(path, at: time) }
+        let now = Int64(date.timeIntervalSince1970 * 1_000)
+        for member in fresh {
+            records.record(member.path, at: max(now, (member.presentSince ?? .min) &+ 1))
+        }
         try records.save(toLibraryAt: libraryRoot, fileManager: fileManager)
-        return fresh
+        return fresh.map(\.path)
     }
 
     /// Records a module's removal, at the path it is published under.

@@ -1239,13 +1239,14 @@ struct WorkspaceFileDeletionSyncTests {
         let lib = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck-build/node_modules/a/index.js")
         let own = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck-build/build.js")
 
-        let added = try LampSyncRemovedModules.queueToolOutput(amongMembers: [lib, own], inLibraryAt: macs.a)
+        let members: [(path: String, presentSince: Int64?)] = [(lib, 1), (own, 1)]
+        let added = try await LampSyncRemovedModules.queueToolOutput(amongMembers: members, inLibraryAt: macs.a)
         #expect(added == [lib])
         let queue = LampSyncRemovedModules.url(inLibraryAt: macs.a)
         let written = try FileManager.default.attributesOfItem(atPath: queue.path)[.modificationDate] as? Date
         Thread.sleep(forTimeInterval: 1.1)
 
-        #expect(try LampSyncRemovedModules.queueToolOutput(amongMembers: [lib, own], inLibraryAt: macs.a).isEmpty)
+        #expect(try await LampSyncRemovedModules.queueToolOutput(amongMembers: members, inLibraryAt: macs.a).isEmpty)
         #expect(try FileManager.default.attributesOfItem(atPath: queue.path)[.modificationDate] as? Date == written,
                 "not written again")
         #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.keys.sorted() == [lib])
@@ -1266,6 +1267,43 @@ struct WorkspaceFileDeletionSyncTests {
         #expect(!ledgerKeys.contains { $0.contains("node_modules") })
         let swept = await WorkspaceSourceOffload.contextRelativePaths(in: workspaceURL)
         #expect(swept == ["deck-build/build.js"])
+    }
+
+    /// Tool output this Mac has offloaded is not cleaned up: the server's
+    /// copy may be the only one. And a cleanup is dated past the member's own
+    /// write, so a clock behind the uploader's cannot make it lose to it.
+    @Test func toolOutputCleanupSparesOffloadsAndPostdatesTheWrite() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        try FileManager.default.createDirectory(
+            at: workspaceURL.appendingPathComponent("context"), withIntermediateDirectories: true
+        )
+        var ledger = WorkspaceFileLedger()
+        ledger.noteOffloaded(WorkspaceFileLedger.contextKey("deck/node_modules/away.js"))
+        try await ledger.save(in: workspaceURL)
+        let folder = workspaceURL.lastPathComponent
+        let away = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck/node_modules/away.js")
+        let here = try LampWritingWorkspaceLayout.contextPath(folder: folder, relativePath: "deck/node_modules/here.js")
+        let future: Int64 = 4_102_444_800_000  // 2100, ahead of any clock here
+
+        let added = try await LampSyncRemovedModules.queueToolOutput(
+            amongMembers: [(away, 1), (here, future)], inLibraryAt: macs.a
+        )
+        #expect(added == [here])
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt[here] == future + 1)
+    }
+
+    /// Removing a tool's folder itself queues nothing and walks nothing.
+    @Test func removingAtoolsFolderQueuesNothing() async throws {
+        let macs = try Macs(devotional: devotional)
+        defer { macs.remove() }
+        let workspaceURL = workspace(macs.a)
+        let modules = workspaceURL.appendingPathComponent("context/node_modules", isDirectory: true)
+        try write("lib", to: modules.appendingPathComponent("a/index.js"), at: 0)
+        try await WorkspaceContextFileStore.removeContextItem(at: modules, from: workspaceURL, libraryRootURL: macs.a)
+        #expect(LampSyncRemovedModules.load(fromLibraryAt: macs.a).removedAt.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: modules.path))
     }
 
     /// Removing a folder queues the writer's own files in it, not the tool's

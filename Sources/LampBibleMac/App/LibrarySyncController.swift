@@ -2055,8 +2055,9 @@ extension LibrarySyncController {
         // with nothing here, it would be planned as a download on every pass
         // (`decisions/0023`). Once; the file is written only when something
         // is added.
-        let toolOutput = try LampSyncRemovedModules.queueToolOutput(
-            amongMembers: manifest.members.map(\.path), inLibraryAt: library.rootURL, fileManager: fileManager
+        let toolOutput = try await LampSyncRemovedModules.queueToolOutput(
+            amongMembers: manifest.members.map { (path: $0.path, presentSince: $0.presentSince) },
+            inLibraryAt: library.rootURL, fileManager: fileManager
         )
         if !toolOutput.isEmpty {
             Self.log.info("Queued \(toolOutput.count, privacy: .public) tool-output file(s) for removal from the server")
