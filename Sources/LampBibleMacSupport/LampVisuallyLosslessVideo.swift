@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreImage
 import Foundation
+import ImageIO
 import VideoToolbox
 
 /// Re-encodes a video in HEVC at a quality where nothing a viewer could see
@@ -38,12 +39,15 @@ public enum LampVisuallyLosslessVideo {
         /// A track it would read keeps its media in another file.
         case notSelfContained
         case failed(String)
+        /// A frame of a frames folder that can't be used, and why.
+        case badFrame(String)
 
         public var errorDescription: String? {
             switch self {
             case .noPictures: "The video has no pictures Lamp can read."
             case .notSelfContained: "The video keeps its pictures or sound in another file."
             case .failed(let message): "The video could not be saved: \(message)"
+            case .badFrame(let reason): reason
             }
         }
     }
@@ -287,6 +291,166 @@ public enum LampVisuallyLosslessVideo {
         // reported the first's size.
         let bytes = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
         return Result(bytes: bytes, width: width, height: height, seeThrough: seeThrough)
+    }
+}
+
+extension LampVisuallyLosslessVideo {
+    /// Writes the pictures at `frames`, in order, to `destination` as a
+    /// silent HEVC .mp4 at `framesPerSecond`, as `encode` writes a video:
+    /// the same quality, ten bits, its longer side at most `largestSide`,
+    /// a see-through picture laid on black. Every frame must be the first's
+    /// size; `frameName` names one in a refusal.
+    ///
+    /// The frames are read from files Lamp copied them to, never where the
+    /// agent wrote them. One encode runs at a time (`LampVideoEncodeGate`).
+    public static func encodeFrames(
+        _ frames: [URL],
+        framesPerSecond: Double,
+        to destination: URL,
+        largestSide: Int = largestPixels,
+        quality: Float = quality,
+        frameName: (Int) -> String = { "frame \($0 + 1)" }
+    ) async throws -> Result {
+        guard !frames.isEmpty else { throw EncodingError.noPictures }
+        let ticket = await LampVideoEncodeGate.acquire()
+        defer { ticket.release() }
+        try Task.checkCancellation()
+
+        func picture(_ index: Int) throws -> CGImage {
+            guard let source = CGImageSourceCreateWithURL(frames[index] as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+            else { throw EncodingError.badFrame("\(frameName(index)) is not a picture Lamp can read.") }
+            return image
+        }
+        let first = try picture(0)
+        let natural = CGSize(width: first.width, height: first.height)
+        let scale = min(1, Double(largestSide) / Double(max(natural.width, natural.height)))
+        let width = max(2, Int((Double(natural.width) * scale / 2).rounded()) * 2)
+        let height = max(2, Int((Double(natural.height) * scale / 2).rounded()) * 2)
+
+        try? FileManager.default.removeItem(at: destination)
+        let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+        let rate = max(1, Int(framesPerSecond.rounded()))
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.hevc,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
+            AVVideoCompressionPropertiesKey: [
+                AVVideoQualityKey: quality,
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String,
+                AVVideoAllowFrameReorderingKey: true,
+                AVVideoExpectedSourceFrameRateKey: framesPerSecond,
+                AVVideoMaxKeyFrameIntervalKey: rate * 2,
+            ] as [String: Any],
+        ])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+        ])
+        guard writer.canAdd(input) else { throw EncodingError.failed("HEVC is not available") }
+        writer.add(input)
+        guard writer.startWriting() else {
+            throw EncodingError.failed(writer.error?.localizedDescription ?? "it could not be written")
+        }
+        writer.startSession(atSourceTime: .zero)
+        func abandon(_ error: Error) -> Error {
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: destination)
+            return error
+        }
+
+        // Drawn as the video's own encode draws a picture: scaled by Core
+        // Image, in the video's colours, over black.
+        let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB) as Any])
+        let videoColours = CGColorSpace(name: CGColorSpace.itur_709)!
+        let timescale: CMTimeScale = 60_000
+        func time(_ index: Int) -> CMTime {
+            CMTime(value: CMTimeValue((Double(index) * Double(timescale) / framesPerSecond).rounded()), timescale: timescale)
+        }
+        var seeThrough = false
+        var pendingBuffer: CVPixelBuffer?
+        for index in frames.indices {
+            do {
+                try Task.checkCancellation()
+            } catch {
+                throw abandon(error)
+            }
+            try autoreleasepool {
+                let image: CGImage
+                do {
+                    image = index == 0 ? first : try picture(index)
+                } catch {
+                    throw abandon(error)
+                }
+                guard image.width == first.width, image.height == first.height else {
+                    throw abandon(EncodingError.badFrame(
+                        "\(frameName(index)) is \(image.width)×\(image.height), and the first frame \(first.width)×\(first.height): every frame must be the same size."
+                    ))
+                }
+                var drawn = CIImage(cgImage: image)
+                if !seeThrough, Self.mayBeSeeThrough(image), Self.isSeeThrough(drawn, in: context) { seeThrough = true }
+                let factor = CGFloat(width) / drawn.extent.width
+                if factor != 1 {
+                    drawn = drawn.applyingFilter("CILanczosScaleTransform", parameters: [
+                        kCIInputScaleKey: factor,
+                        kCIInputAspectRatioKey: (CGFloat(height) / drawn.extent.height) / factor,
+                    ])
+                }
+                let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+                drawn = drawn.cropped(to: bounds).composited(over: CIImage(color: .black).cropped(to: bounds))
+                guard let pool = adaptor.pixelBufferPool else { throw abandon(EncodingError.failed("its pictures could not be made")) }
+                var made: CVPixelBuffer?
+                guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let buffer = made else {
+                    throw abandon(EncodingError.failed("its pictures could not be made"))
+                }
+                CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+                CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+                CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+                context.render(drawn, to: buffer, bounds: bounds, colorSpace: videoColours)
+                pendingBuffer = buffer
+            }
+            while !input.isReadyForMoreMediaData {
+                if writer.status == .failed { break }
+                try? await Task.sleep(nanoseconds: 2_000_000)
+            }
+            guard let buffer = pendingBuffer, adaptor.append(buffer, withPresentationTime: time(index)) else {
+                throw abandon(EncodingError.failed(writer.error?.localizedDescription ?? "it could not be written"))
+            }
+            pendingBuffer = nil
+        }
+        input.markAsFinished()
+        writer.endSession(atSourceTime: time(frames.count))
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            try? FileManager.default.removeItem(at: destination)
+            throw EncodingError.failed(writer.error?.localizedDescription ?? "unknown")
+        }
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        return Result(bytes: bytes, width: width, height: height, seeThrough: seeThrough)
+    }
+
+    /// Whether a picture says it has an alpha channel at all.
+    static func mayBeSeeThrough(_ image: CGImage) -> Bool {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast: false
+        default: true
+        }
+    }
+
+    /// Whether any of a picture is less than opaque: its least alpha.
+    static func isSeeThrough(_ image: CIImage, in context: CIContext) -> Bool {
+        let least = image.applyingFilter("CIAreaMinimum", parameters: [kCIInputExtentKey: CIVector(cgRect: image.extent)])
+        var pixel = [UInt8](repeating: 255, count: 4)
+        context.render(least, toBitmap: &pixel, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
+        return pixel[3] < 255
     }
 }
 

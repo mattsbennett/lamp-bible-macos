@@ -82,8 +82,30 @@ public enum LampVideoPreparation {
         public var repeatsFirst: Bool
     }
 
+    /// What a video is made from: a video file, or a folder of numbered
+    /// frames, which is what every program can write.
+    public enum Source: Sendable, Equatable {
+        case video(String)
+        case frames(folder: String, framesPerSecond: Double)
+
+        var path: String {
+            switch self {
+            case .video(let path), .frames(let path, _): path
+            }
+        }
+    }
+
+    /// The frame rates a frames folder may be made at.
+    nonisolated public static let framesPerSecondRange: ClosedRange<Double> = 1...120
+    /// The most frames a folder may hold: ten minutes at 60 a second.
+    nonisolated public static let largestFrameCount = 36_000
+    /// The pictures a frame may be, by extension.
+    nonisolated public static let frameExtensions: Set<String> = ["png", "jpg", "jpeg", "tif", "tiff"]
+
     public enum PreparationError: LocalizedError, Equatable {
         case notInWorkspace(String)
+        /// A frames folder Lamp won't make a video from, and why.
+        case frames(String)
         case notAVideo(String)
         case couldNotSave(String)
         case tooLarge(bytes: Int64, limit: Int64, purpose: String, triedSmaller: Bool)
@@ -95,6 +117,8 @@ public enum LampVideoPreparation {
             switch self {
             case .notInWorkspace(let path):
                 "\(path) is not a file Lamp can reach inside this writing's workspace: name a file there, by a path with no links on the way."
+            case .frames(let reason):
+                reason
             case .notAVideo(let name):
                 "\(name) is not a video Lamp can read on its own: it must be a movie file that holds its own pictures and sound."
             case .couldNotSave(let reason):
@@ -155,6 +179,25 @@ public enum LampVideoPreparation {
         reducedShorterSide: Int = 1_080,
         beforePublish: (() -> Void)? = nil
     ) async throws -> Result {
+        try await prepare(
+            from: .video(relativePath), in: workspace, as: purpose, stillAt: stillAt,
+            largestFileBytes: largestFileBytes, reducedShorterSide: reducedShorterSide, beforePublish: beforePublish
+        )
+    }
+
+    /// `prepare`, from a video or from a folder of numbered frames. Frames
+    /// are copied as a video is, then encoded at the rate given, silent;
+    /// everything after the encode is the same.
+    public static func prepare(
+        from source: Source,
+        in workspace: URL,
+        as purpose: Purpose,
+        stillAt: Double? = nil,
+        largestFileBytes: Int64? = nil,
+        reducedShorterSide: Int = 1_080,
+        beforePublish: (() -> Void)? = nil
+    ) async throws -> Result {
+        let relativePath = source.path
         let limit = largestFileBytes ?? purpose.largestFileBytes
         let name = (relativePath as NSString).lastPathComponent
         // The workspace as the session names it, held for the whole call.
@@ -168,18 +211,39 @@ public enum LampVideoPreparation {
         defer { try? FileManager.default.removeItem(at: scratch) }
         // Off this actor, a large copy holding up no other call, and in this
         // task, so a call given up on stops it.
-        let source = try await snapshotAway(relativePath, from: workspaceHandle, into: scratch)
         let video = scratch.appendingPathComponent("video.mp4")
         let still = scratch.appendingPathComponent("still.jpg")
+        let copied: URL
+        var frames: (urls: [URL], names: [String], framesPerSecond: Double)?
+        switch source {
+        case .video:
+            copied = try await snapshotAway(relativePath, from: workspaceHandle, into: scratch)
+        case .frames(_, let framesPerSecond):
+            guard framesPerSecondRange.contains(framesPerSecond) else {
+                throw PreparationError.frames("A frame rate must be from 1 to 120 frames a second; \(framesPerSecond) was given.")
+            }
+            let taken = try await snapshotFramesAway(relativePath, from: workspaceHandle, into: scratch)
+            frames = (taken.urls, taken.names, framesPerSecond)
+            copied = scratch
+        }
+        func encode(largestSide: Int) async throws -> LampVisuallyLosslessVideo.Result {
+            if let frames {
+                return try await LampVisuallyLosslessVideo.encodeFrames(
+                    frames.urls, framesPerSecond: frames.framesPerSecond, to: video, largestSide: largestSide,
+                    frameName: { "\(relativePath)/\(frames.names[$0])" }
+                )
+            }
+            return try await LampVisuallyLosslessVideo.encode(
+                copied, to: video, keepingSound: purpose == .clip, largestSide: largestSide, requiringSelfContained: true
+            )
+        }
 
         let assetsHandle = try openAssets(in: workspaceHandle)
         defer { close(assetsHandle) }
 
         var made: LampVisuallyLosslessVideo.Result
         do {
-            made = try await LampVisuallyLosslessVideo.encode(
-                source, to: video, keepingSound: purpose == .clip, requiringSelfContained: true
-            )
+            made = try await encode(largestSide: LampVisuallyLosslessVideo.largestPixels)
         } catch {
             throw preparationError(for: error, name: name)
         }
@@ -192,9 +256,7 @@ public enum LampVideoPreparation {
            ) {
             try Task.checkCancellation()
             do {
-                made = try await LampVisuallyLosslessVideo.encode(
-                    source, to: video, keepingSound: purpose == .clip, largestSide: at1080p, requiringSelfContained: true
-                )
+                made = try await encode(largestSide: at1080p)
             } catch {
                 throw preparationError(for: error, name: name)
             }
@@ -237,7 +299,7 @@ public enum LampVideoPreparation {
         if purpose == .clip, let times = try await finalFrameTimes(of: asset) {
             samples.append((times.last.seconds, try jpeg(try await frame(at: times.last), largestSide: 640, quality: 0.8)))
         }
-        let sourceHasSound = await hasSound(source)
+        let sourceHasSound = frames == nil ? await hasSound(copied) : false
         let keptSound = await hasSound(video)
         var seam: Seam?
         if purpose == .loop, let times = try await finalFrameTimes(of: asset) {
@@ -332,6 +394,8 @@ public enum LampVideoPreparation {
             return PreparationError.notAVideo(name)
         case LampVisuallyLosslessVideo.EncodingError.failed(let reason):
             return PreparationError.couldNotSave(reason)
+        case LampVisuallyLosslessVideo.EncodingError.badFrame(let reason):
+            return PreparationError.frames(reason)
         case let error as NSError where error.domain == AVFoundationErrorDomain || error.domain == NSOSStatusErrorDomain:
             // Raised opening the file: it is not one AVFoundation reads.
             return PreparationError.notAVideo(name)
@@ -367,6 +431,93 @@ public enum LampVideoPreparation {
             throw PreparationError.couldNotSave(reason)
         }
         return scratch.appendingPathComponent(copyName)
+    }
+
+    /// The frames in the folder at `relativePath`, reached from the
+    /// workspace as a file is, each cloned or copied into `scratch` in
+    /// order, with their names as written. The folder must hold one run of
+    /// numbered pictures and nothing else but hidden files: `name0001.png`
+    /// to `name0240.png`, the digits counting up by one from wherever they
+    /// start, so a frame left out or written twice is said, not skipped.
+    nonisolated static func snapshotFrames(_ relativePath: String, from workspace: Int32, into scratch: URL) throws -> (urls: [URL], names: [String]) {
+        let folder: Int32
+        do {
+            folder = try LampWorkspaceFiles.openPlainFolder(relativePath, in: workspace)
+        } catch LampWorkspaceFiles.Refusal.workspaceUnreadable {
+            throw PreparationError.outputMoved
+        } catch {
+            throw PreparationError.notInWorkspace(relativePath)
+        }
+        defer { close(folder) }
+        let names = try LampWorkspaceFiles.names(in: folder)
+        // name, number, extension
+        var found: [(prefix: String, number: Int, digits: Int, ext: String, name: String)] = []
+        var strays: [String] = []
+        for name in names where !name.hasPrefix(".") {
+            let ext = (name as NSString).pathExtension
+            let base = (name as NSString).deletingPathExtension
+            let digits = base.reversed().prefix { $0.isASCII && $0.isNumber }.count
+            guard frameExtensions.contains(ext.lowercased()), digits > 0, digits <= 9,
+                  let number = Int(base.suffix(digits))
+            else {
+                strays.append(name)
+                continue
+            }
+            found.append((String(base.dropLast(digits)), number, digits, ext.lowercased(), name))
+        }
+        let runs = Set(found.map { "\($0.prefix)\u{0}\($0.ext)" })
+        guard strays.isEmpty, runs.count <= 1 else {
+            let shown = (strays + (runs.count > 1 ? found.map(\.name) : [])).sorted().prefix(3).joined(separator: ", ")
+            throw PreparationError.frames(
+                "\(relativePath) must hold one run of numbered frames (such as frame0001.png, frame0002.png, …) and nothing else; it also holds \(shown)."
+            )
+        }
+        guard found.count >= 2 else {
+            throw PreparationError.frames("\(relativePath) holds \(found.count) numbered frame\(found.count == 1 ? "" : "s"); a video needs at least two.")
+        }
+        guard found.count <= largestFrameCount else {
+            throw PreparationError.frames("\(relativePath) holds \(found.count) frames, more than Lamp's \(largestFrameCount).")
+        }
+        found.sort { $0.number < $1.number }
+        for (step, frame) in found.enumerated() {
+            let expected = found[0].number + step
+            guard frame.number == expected else {
+                if frame.number < expected {
+                    throw PreparationError.frames("Frame \(frame.number) is in \(relativePath) twice (\(found[step - 1].name) and \(frame.name)).")
+                }
+                throw PreparationError.frames("Frame \(expected) is missing from \(relativePath): the frames go from \(found[0].number) to \(found[found.count - 1].number) with no gaps.")
+            }
+        }
+        let into = scratch.appendingPathComponent("frames", isDirectory: true)
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        let intoHandle = open(into.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard intoHandle >= 0 else { throw PreparationError.couldNotSave("Lamp's working folder could not be opened.") }
+        defer { close(intoHandle) }
+        var urls: [URL] = []
+        for (index, frame) in found.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            let file = openat(folder, frame.name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            var status = stat()
+            guard file >= 0 else { throw PreparationError.notInWorkspace("\(relativePath)/\(frame.name)") }
+            defer { close(file) }
+            guard fstat(file, &status) == 0, status.st_mode & S_IFMT == S_IFREG else {
+                throw PreparationError.notInWorkspace("\(relativePath)/\(frame.name)")
+            }
+            let copyName = String(format: "%06d.%@", index, frame.ext)
+            do {
+                try LampWorkspaceFiles.copy(file, to: copyName, in: intoHandle)
+            } catch LampWorkspaceFiles.Refusal.noRoom {
+                throw PreparationError.couldNotSave("there is not room on this Mac for a working copy of the frames.")
+            } catch let LampWorkspaceFiles.Refusal.writeFailed(reason) {
+                throw PreparationError.couldNotSave(reason)
+            }
+            urls.append(into.appendingPathComponent(copyName))
+        }
+        return (urls, found.map(\.name))
+    }
+
+    nonisolated private static func snapshotFramesAway(_ relativePath: String, from workspace: Int32, into scratch: URL) async throws -> (urls: [URL], names: [String]) {
+        try snapshotFrames(relativePath, from: workspace, into: scratch)
     }
 
     /// `snapshot`, run off the main actor in the caller's task.
@@ -507,15 +658,57 @@ public enum LampWorkspaceFiles {
         case writeFailed(String)
     }
 
-    /// The plain file at `relativePath` under the open folder `workspace`,
-    /// open for reading. The caller closes it.
-    nonisolated public static func openPlainFile(_ relativePath: String, in workspace: Int32) throws -> Int32 {
+    /// A relative path's parts, split on the slash scalar as the kernel
+    /// splits it, refused with a NUL, a leading slash, an empty part, `.` or
+    /// `..`.
+    nonisolated static func parts(of relativePath: String) throws -> [String] {
         let scalars = relativePath.unicodeScalars
         let parts = scalars.split(separator: "/", omittingEmptySubsequences: false)
             .map { String(String.UnicodeScalarView($0)) }
         guard !scalars.contains("\0"), scalars.first != "/", !parts.isEmpty,
               parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
         else { throw Refusal.notReachable }
+        return parts
+    }
+
+    /// The folder at `relativePath` under the open folder `workspace`, each
+    /// step a folder opened without following a link. The caller closes it.
+    nonisolated public static func openPlainFolder(_ relativePath: String, in workspace: Int32) throws -> Int32 {
+        let parts = try parts(of: relativePath)
+        var folder = dup(workspace)
+        guard folder >= 0 else { throw Refusal.workspaceUnreadable }
+        for part in parts {
+            let next = openat(folder, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            close(folder)
+            guard next >= 0 else { throw Refusal.notReachable }
+            folder = next
+        }
+        return folder
+    }
+
+    /// The names in an open folder, `.` and `..` left out.
+    nonisolated public static func names(in folder: Int32) throws -> [String] {
+        let listing = dup(folder)
+        guard listing >= 0, let directory = fdopendir(listing) else {
+            if listing >= 0 { close(listing) }
+            throw Refusal.notReachable
+        }
+        defer { closedir(directory) }
+        rewinddir(directory)
+        var names: [String] = []
+        while let entry = readdir(directory) {
+            let name = withUnsafePointer(to: entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+            }
+            if name != ".", name != ".." { names.append(name) }
+        }
+        return names
+    }
+
+    /// The plain file at `relativePath` under the open folder `workspace`,
+    /// open for reading. The caller closes it.
+    nonisolated public static func openPlainFile(_ relativePath: String, in workspace: Int32) throws -> Int32 {
+        let parts = try parts(of: relativePath)
         var folder = dup(workspace)
         guard folder >= 0 else { throw Refusal.workspaceUnreadable }
         defer { close(folder) }

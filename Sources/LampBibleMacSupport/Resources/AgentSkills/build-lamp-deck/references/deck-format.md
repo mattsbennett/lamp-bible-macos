@@ -741,6 +741,13 @@ made.
   device plays. Both validators warn of a video a deck names that is over its
   limit or in a codec not every iPhone and iPad plays (AV1, ProRes, VP9):
   bring such a video in with `prepare_video`.
+- **Or bring in frames:** give `"frames"`, a folder of numbered pictures,
+  and `"fps"` instead of `"video"`: `{"frames": ".lamp-renders/tabernacle",
+  "fps": 30}`. The folder holds one run, `frame0001.png`, `frame0002.png` and
+  on (PNG, JPEG or TIFF, every one the same size), counting up by one with
+  no gaps, and nothing else but hidden files; Blender run from the
+  workspace with `-o .lamp-renders/tabernacle/frame#### -F PNG -a` writes
+  such a folder. Frames make a silent video, as a loop or a clip.
 - **Sound:** a clip keeps the video's sound, which belongs in the file as AAC;
   a loop is silent. The answer says what sound came in and what was kept, and
   says so when a clip has none or a loop's was left out.

@@ -437,13 +437,21 @@ public enum LampMCPToolCatalog {
             is silent; a clip keeps its sound. The names change whenever the \
             video does, so write them into the deck again after every prepare. \
             Returns frames from across it, and for a loop its last frame and \
-            how far that is from its first. Needs a session opened on a \
-            writing's workspace.
+            how far that is from its first. Instead of a video, give frames: a \
+            folder of numbered pictures (frame0001.png, frame0002.png, …; PNG, \
+            JPEG or TIFF, all one size, no gaps) and fps, as Blender, Manim or a \
+            program of your own writes them; frames make a silent video. Needs a \
+            session opened on a writing's workspace.
             """,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "video": string("The video, relative to the workspace, such as .lamp-renders/tabernacle.mp4."),
+                    "video": string("The video, relative to the workspace, such as .lamp-renders/tabernacle.mp4. Give this or frames."),
+                    "frames": string("A folder of numbered frames, relative to the workspace, such as .lamp-renders/tabernacle-frames, holding one run of pictures (frame0001.png, frame0002.png, …) and nothing else. Give this or video."),
+                    "fps": .object([
+                        "type": .string("number"),
+                        "description": .string("With frames: the frames a second, 1 to 120."),
+                    ]),
                     "as": string("loop, a picture's silent moving background (the default), or clip, played once with its sound."),
                     "still_at": .object([
                         "type": .string("number"),
@@ -451,7 +459,6 @@ public enum LampMCPToolCatalog {
                     ]),
                 ]),
                 "additionalProperties": .bool(false),
-                "required": .array([.string("video")]),
             ]),
             annotations: .init(
                 readOnlyHint: false,

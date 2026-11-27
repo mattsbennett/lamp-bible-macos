@@ -491,7 +491,21 @@ public actor LampMCPToolHandler {
     /// A video the agent made, brought in as a deck can carry it.
     private func prepareVideo(_ arguments: [String: Value]) async throws -> CallTool.Result {
         guard let workspaceURL else { throw LampMCPToolError.animationNeedsWorkspace }
-        let path = try requiredString("video", in: arguments)
+        // A video, or a folder of numbered frames with their rate: one.
+        let source: LampVideoPreparation.Source
+        switch (arguments["video"]?.stringValue, arguments["frames"]?.stringValue) {
+        case (let video?, nil):
+            source = .video(video)
+        case (nil, let folder?):
+            let fps = arguments["fps"].flatMap { value -> Double? in
+                if case .double(let rate) = value { return rate }
+                return value.intValue.map(Double.init)
+            }
+            guard let fps else { throw LampMCPToolError.missingArgument("fps") }
+            source = .frames(folder: folder, framesPerSecond: fps)
+        default:
+            throw LampMCPToolError.invalidArgument("video", "either video, a video file, or frames, a folder of numbered frames with fps, not both")
+        }
         let purpose: LampVideoPreparation.Purpose
         switch arguments["as"]?.stringValue ?? "loop" {
         case "loop": purpose = .loop
@@ -502,7 +516,8 @@ public actor LampMCPToolHandler {
             if case .double(let seconds) = value { return seconds }
             return value.intValue.map(Double.init)
         }
-        let prepared = try await LampVideoPreparation.prepare(path, in: workspaceURL, as: purpose, stillAt: stillAt)
+        let prepared = try await LampVideoPreparation.prepare(from: source, in: workspaceURL, as: purpose, stillAt: stillAt)
+        let fromFrames = if case .frames = source { true } else { false }
         // Named as the deck names them, inside the workspace's Assets.
         let video = "\(LampVideoPreparation.assetsFolder)/\(prepared.videoURL.lastPathComponent)"
         let still = "\(LampVideoPreparation.assetsFolder)/\(prepared.stillURL.lastPathComponent)"
@@ -525,7 +540,9 @@ public actor LampMCPToolHandler {
         report["stillAt"] = .double(Self.seconds(prepared.stillAt))
         // Sound: what came in, what was kept, and anything to know about it.
         var sound: [String: Value] = ["inSource": .bool(prepared.sourceHasSound), "kept": .bool(prepared.keptSound)]
-        if purpose == .clip, !prepared.sourceHasSound {
+        if purpose == .clip, fromFrames {
+            sound["note"] = .string("Frames carry no sound, so this clip is silent. For sound, make a video with the frames and the sound (AAC in the MP4), and prepare that.")
+        } else if purpose == .clip, !prepared.sourceHasSound {
             sound["note"] = .string("This clip has no sound. If it should, put the sound in the video (AAC in the MP4) and prepare it again.")
         } else if purpose == .loop, prepared.sourceHasSound {
             sound["note"] = .string("A loop plays silently behind a slide, so its sound was left out. Prepare it as a clip to keep the sound.")
