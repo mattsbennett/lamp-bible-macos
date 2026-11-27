@@ -554,12 +554,26 @@ public enum WorkspaceSkillStore {
     /// alone, a plain file, saying what `skillDocument` would make of its
     /// own name, description and instructions, so no other frontmatter (no
     /// hooks, no allowed tools) and no other file.
+    ///
+    /// Read by its own lines rather than `parseSkill`'s split, which a
+    /// `---` inside a description would cut short: frontmatter is exactly
+    /// the lines between a first `---` line and the next, and must be
+    /// exactly a `name:` and a `description:`.
     public static func isPlainSkill(_ directory: URL) -> Bool {
+        var info = stat()
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path), entries == ["SKILL.md"],
-              let skill = try? definition(in: directory),
-              let written = try? Data(contentsOf: directory.appendingPathComponent("SKILL.md"))
+              lstat(directory.appendingPathComponent("SKILL.md").path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              let written = try? Data(contentsOf: directory.appendingPathComponent("SKILL.md")),
+              let text = String(data: written, encoding: .utf8)
         else { return false }
-        return written == Data(skillDocument(name: skill.name, description: skill.description, instructions: skill.instructions).utf8)
+        let lines = text.components(separatedBy: "\n")
+        guard lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---"), close == 3,
+              lines[1] == "name: \(directory.lastPathComponent)", lines[2].hasPrefix("description: ")
+        else { return false }
+        let raw = String(lines[2].dropFirst("description: ".count))
+        let description = (try? JSONDecoder().decode(String.self, from: Data(raw.utf8))) ?? raw
+        let instructions = lines[(close + 1)...].joined(separator: "\n")
+        return written == Data(skillDocument(name: directory.lastPathComponent, description: description, instructions: instructions).utf8)
     }
 
     private static func definition(in directory: URL) throws -> WorkspaceSkillDefinition? {

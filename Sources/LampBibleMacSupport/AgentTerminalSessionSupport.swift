@@ -1176,19 +1176,22 @@ public enum AgentTerminalLaunchCheck {
                     visit(path)
                 }
             case S_IFREG:
-                guard let data = try? Data(contentsOf: url) else {
+                // Hashed in pieces, never read whole: a skill or plugin can
+                // hold a large file, and only a small one is shown or parsed.
+                guard let (fingerprint, head, size) = read(url) else {
                     found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be read"))
                     return
                 }
-                if let lamps = expected[relative], data == Data(lamps.utf8) { return }
-                if relative == ".claude/settings.local.json", let settings = claudeLocalSettings(data, baseline: baseline) {
-                    found += settings.map { Finding(path: relative, fingerprint: digest($0), detail: $0) }
+                if let lamps = expected[relative], size == lamps.utf8.count, head == Data(lamps.utf8) { return }
+                if relative == ".claude/settings.local.json", size <= Int64(settingsBytes),
+                   let settings = claudeLocalSettings(head, baseline: baseline) {
+                    found += settings.map { Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown) }
                     return
                 }
-                let text = data.count <= shownBytes ? String(data: data, encoding: .utf8) : nil
+                let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
                 found.append(Finding(
-                    path: relative, fingerprint: digest(data),
-                    detail: text ?? "\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)) of content"
+                    path: relative, fingerprint: fingerprint,
+                    detail: text ?? "\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) of content"
                 ))
             default:
                 found.append(Finding(path: relative, fingerprint: digest("special"), detail: "not a plain file or folder"))
@@ -1201,30 +1204,65 @@ public enum AgentTerminalLaunchCheck {
         return found
     }
 
+    /// What a file's bytes hash to, read in pieces, with up to the first
+    /// `settingsBytes` of them, and its size.
+    static func read(_ url: URL) -> (fingerprint: String, head: Data, size: Int64)? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var head = Data()
+        var size: Int64 = 0
+        while true {
+            // Nil at the end of the file, as well as empty; a thrown read is
+            // the failure.
+            let chunk: Data
+            do { chunk = try handle.read(upToCount: 1 << 20) ?? Data() } catch { return nil }
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+            if head.count < settingsBytes { head.append(chunk.prefix(settingsBytes - head.count)) }
+            size += Int64(chunk.count)
+        }
+        return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), head, size)
+    }
+
+    /// Claude's local settings larger than this are a finding whole.
+    static let settingsBytes = 1 << 20
+
     /// The findings in Claude's local settings: each setting Claude does not
     /// write there itself, with its value, and each allow rule or extra
     /// folder not there when the last Terminal session ended. Nil when the
     /// file is not a settings object, which is then a finding whole.
-    static func claudeLocalSettings(_ data: Data, baseline: [String]?) -> [String]? {
+    /// Each with what is shown and what is fingerprinted: the setting's key
+    /// and its value as typed JSON, so a string that reads as an object is
+    /// not the object.
+    static func claudeLocalSettings(_ data: Data, baseline: [String]?) -> [(shown: String, canonical: String)]? {
         guard let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
-        var found: [String] = []
+        var found: [(shown: String, canonical: String)] = []
         let harmless: Set<String> = ["permissions", "outputStyle", "enabledMcpjsonServers", "disabledMcpjsonServers", "enableAllProjectMcpServers"]
         for key in settings.keys.sorted() where !harmless.contains(key) {
-            found.append("the setting \(key): \(shown(settings[key] as Any))")
+            found.append(("the setting \(key): \(shown(settings[key] as Any))", "setting\u{0}\(key)\u{0}\(typed(settings[key] as Any))"))
         }
         if let permissions = settings["permissions"] {
             guard let permissions = permissions as? [String: Any] else {
-                return found + ["the setting permissions: \(shown(permissions))"]
+                return found + [("the setting permissions: \(shown(permissions))", "setting\u{0}permissions\u{0}\(typed(permissions))")]
             }
             for key in permissions.keys.sorted() where !["allow", "ask", "deny", "additionalDirectories"].contains(key) {
-                found.append("the permission setting \(key): \(shown(permissions[key] as Any))")
+                found.append(("the permission setting \(key): \(shown(permissions[key] as Any))",
+                              "permission\u{0}\(key)\u{0}\(typed(permissions[key] as Any))"))
             }
             let known = Set(baseline ?? [])
             for rule in grants(in: settings) where !known.contains(rule) {
-                found.append("added outside a Terminal session: \(rule)")
+                found.append(("added outside a Terminal session: \(rule)", "grant\u{0}\(rule)"))
             }
         }
         return found
+    }
+
+    /// A value as JSON with its type kept: a string stays a quoted string.
+    private static func typed(_ value: Any) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+        else { return "?" + String(describing: value) }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// The allow rules and extra folders in Claude's local settings, as

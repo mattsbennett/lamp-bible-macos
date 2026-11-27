@@ -174,4 +174,25 @@ struct AgentTerminalLaunchCheckTests {
         let found = AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle, baseline: [])
         #expect(found.contains { $0.path == ".opencode/shut" && $0.isIncomplete })
     }
+
+    /// A string that reads as an object is not the object: an answer for
+    /// one doesn't carry to the other.
+    @Test func aSettingIsFingerprintedByItsTypedValue() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(#"{"futureKey":"{\"a\":1}"}"#, ".claude/settings.local.json", in: root)
+        let asText = findings(root, server, bundle).first { $0.path == ".claude/settings.local.json" }
+        try write(#"{"futureKey":{"a":1}}"#, ".claude/settings.local.json", in: root)
+        let asObject = findings(root, server, bundle).first { $0.path == ".claude/settings.local.json" }
+        #expect(asText != nil && asObject != nil)
+        #expect(asText?.fingerprint != asObject?.fingerprint)
+    }
+
+    /// A plain skill whose description holds `---` is still Lamp's.
+    @Test func aPlainSkillWithDashesInItsDescriptionIsLamps() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("---\nname: notes\ndescription: \"Before --- after\"\n---\n\nTake notes.\n", ".claude/skills/notes/SKILL.md", in: root)
+        #expect(!findings(root, server, bundle).contains { $0.path.contains("notes") })
+    }
 }

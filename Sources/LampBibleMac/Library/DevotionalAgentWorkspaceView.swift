@@ -1489,8 +1489,14 @@ struct DevotionalAgentWorkspaceView: View {
             TerminalLaunchCheckSheet(check: check) {
                 terminalLaunchCheck = nil
             } open: {
-                if let workspaceURL { try? AgentTerminalLaunchCheck.approve(check.findings, for: workspaceURL) }
                 terminalLaunchCheck = nil
+                guard let workspaceURL else { return }
+                do {
+                    try AgentTerminalLaunchCheck.approve(check.findings, for: workspaceURL)
+                } catch {
+                    errorMessage = "Lamp couldn’t keep your answer, so it didn’t open the Terminal: \(error.localizedDescription)"
+                    return
+                }
                 // Checked again before it opens: what changed while this was
                 // up is asked about afresh.
                 Task { await launch(check.provider, checked: true) }
@@ -3076,12 +3082,23 @@ struct DevotionalAgentWorkspaceView: View {
         // What the writing's own settings would run on opening that Lamp did
         // not put there, put to the person first; see
         // `AgentTerminalLaunchCheck`.
-        // A Claude session being replaced by this launch saved its rules as
-        // it ran; they are its own, kept before the new launch is checked,
-        // since its exit is no longer heard once the launch changes.
-        if activeProvider == .claude {
+        // Not while an agent is at work in the writing: one could change the
+        // settings between the check and the Terminal reading them.
+        if KeptAgentChats.isBusy(in: workspaceURL) {
+            errorMessage = "A chat is replying in this writing. Open the Terminal when it has finished, so what it reads is what Lamp checked."
+            return
+        }
+        // A Claude session still running, being replaced by this launch,
+        // saved its rules as it ran; they are its own, kept before the new
+        // launch is checked, since its exit is no longer heard once the
+        // launch changes. Not one that has already exited: its rules were
+        // kept as it did, and what changed since is someone else's.
+        if activeProvider == .claude, terminalExitCode == nil {
             await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL)
         }
+        // The writing's context written first, so the check is the last
+        // thing before the Terminal starts.
+        try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         // Lamp's own files first, written again whole: whatever an agent put
         // in them goes without asking anyone. A writing they can't be written
         // into doesn't open.
@@ -3107,7 +3124,6 @@ struct DevotionalAgentWorkspaceView: View {
             return
         }
         _ = checked
-        try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         scheduleEditorSync(draftMarkdown)
         do {
             terminalCommand = try prepareTerminalLaunch(of: provider, in: workspaceURL)

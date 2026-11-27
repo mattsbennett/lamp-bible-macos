@@ -62,15 +62,20 @@ struct AgentChatModelTests {
         defer { try? FileManager.default.removeItem(at: workspace) }
         let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
         model.load()
-        model.showSending("Hello there")
+        let token = model.showSending("Hello there")
+        // Another pane's submission meanwhile doesn't take its place.
+        #expect(model.showSending("Another") == nil)
         #expect(model.sendingPlaceholder.count == 2)
         #expect(model.sendingPlaceholder.first?.text == "Hello there")
         #expect(model.messages.isEmpty)
         // A save meanwhile, as a reload or another pane makes, takes none of it.
         model.reloadIfChangedOnDisk()
         #expect(AgentChatTranscriptStore.load(providerID: providerID, in: workspace).messages.isEmpty)
+        // Only its own submission clears it.
+        model.clearSending(UUID())
+        #expect(model.sendingPlaceholder.count == 2)
         // Not sent after all, it goes.
-        model.clearSending()
+        model.clearSending(token)
         #expect(model.sendingPlaceholder.isEmpty)
     }
 

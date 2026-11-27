@@ -2491,18 +2491,32 @@ final class NativeAgentChatModel: ObservableObject {
     /// Send had not been pressed (owner, 2026-11-26). Kept out of `messages`,
     /// which the transcript is made from; `send` takes their places.
     @Published private(set) var sendingPlaceholder: [NativeAgentChatMessage] = []
+    /// Which submission the placeholder is: two panes can share this chat,
+    /// and each consumes or clears only its own.
+    private var placeholderToken: UUID?
 
-    func showSending(_ text: String) {
+    /// Shows `text` as being sent, and names it for `clearSending` and
+    /// `send`; nil when another submission already shows.
+    @discardableResult
+    func showSending(_ text: String) -> UUID? {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isRunning else { return }
+        guard !prompt.isEmpty, !isRunning, placeholderToken == nil else { return nil }
+        let token = UUID()
+        placeholderToken = token
+        defer { _ = token }
         sendingPlaceholder = [
             NativeAgentChatMessage(id: UUID(), user: person, messageKind: .custom(PersonMessageContent(text: prompt)), isSender: true, date: Date()),
             NativeAgentChatMessage(id: UUID(), user: agentUser, messageKind: .custom(AgentWaitingContent()), isSender: false, date: Date()),
         ]
+        return token
     }
 
     /// The message was not sent after all: it goes back where it came from.
-    func clearSending() { sendingPlaceholder = [] }
+    func clearSending(_ token: UUID?) {
+        guard let token, token == placeholderToken else { return }
+        placeholderToken = nil
+        sendingPlaceholder = []
+    }
 
     /// Whether the card's requests are a Codex or Antigravity turn's,
     /// answered over its protocol rather than through a hook's folder.
@@ -2642,7 +2656,8 @@ final class NativeAgentChatModel: ObservableObject {
         contextualPrompt: String,
         messageID: UUID? = nil,
         inConversation expected: UUID? = nil,
-        notifiesWhenDone: Bool = true
+        notifiesWhenDone: Bool = true,
+        placeholder: UUID? = nil
     ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // Nothing new starts once Lamp is quitting: a message queued behind
@@ -2690,8 +2705,12 @@ final class NativeAgentChatModel: ObservableObject {
         // What the pane showed while the message was being prepared is
         // replaced by the real thing, under the same identities, so the
         // bubbles stay where they are.
-        let shown = sendingPlaceholder
-        sendingPlaceholder = []
+        // Only this submission's: another pane's is left to it.
+        let shown = placeholder != nil && placeholder == placeholderToken ? sendingPlaceholder : []
+        if !shown.isEmpty {
+            placeholderToken = nil
+            sendingPlaceholder = []
+        }
         let userMessage = NativeAgentChatMessage(
             id: messageID ?? shown.first?.id ?? UUID(),
             user: person,
@@ -3883,7 +3902,7 @@ struct NativeAgentChatView: View {
         // and New Chat is allowed during that wait.
         let conversation = model.conversationID
         // Shown at once, while the prompt is prepared; see `sendingPlaceholder`.
-        model.showSending(prompt)
+        let placeholder = model.showSending(prompt)
         scrollToBottom = true
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
@@ -3896,9 +3915,10 @@ struct NativeAgentChatView: View {
                 isPreparing = false
                 let taken = await model.send(
                     prompt, contextualPrompt: contextualPrompt,
-                    messageID: queued, inConversation: conversation
+                    messageID: queued, inConversation: conversation,
+                    placeholder: placeholder
                 )
-                if !taken { model.clearSending() }
+                if !taken { model.clearSending(placeholder) }
                 // Taken means it is in the transcript, which is where the
                 // model takes it out of the queue. Refused — the pane was
                 // reopened and something else is running, or New Chat
@@ -3923,7 +3943,7 @@ struct NativeAgentChatView: View {
                 }
                 scrollToBottom = true
             } catch {
-                model.clearSending()
+                model.clearSending(placeholder)
                 submissionError = error.localizedDescription
                 // A queued message goes back to waiting, in its place,
                 // rather than into a draft field the reader may be typing
