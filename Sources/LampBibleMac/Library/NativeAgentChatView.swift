@@ -2262,6 +2262,7 @@ enum KeptAgentChats {
     @MainActor
     static func beginTurn(in workspace: URL) {
         turnsInHand[workspace.standardizedFileURL.path, default: 0] += 1
+        noteTurnBegun(in: workspace)
     }
 
     @MainActor
@@ -2271,64 +2272,20 @@ enum KeptAgentChats {
         turnsInHand[key] = count > 1 ? count - 1 : nil
     }
 
-    /// Writings whose Terminal is starting, each launch's hold until when:
-    /// no chat begins a turn there meanwhile, so the CLI reads the settings
-    /// Lamp checked (`decisions/0032`). Each launch owns its own, so one
-    /// launch giving up leaves another's.
-    private static var heldForTerminal: [String: [UUID: Date]] = [:]
+    /// How many turns each writing has begun, from any pane or the phone:
+    /// a Terminal launch reads it before its last check and again as it
+    /// hands the Terminal its command, and checks again if it moved, so no
+    /// chat's turn falls between the check and the hand-over (`decisions/0032`).
+    private static var turnsBegun: [String: Int] = [:]
 
-    /// Holds the writing for a launch, for up to `seconds` unless released.
     @MainActor
-    static func holdForTerminal(in workspace: URL, seconds: Double = 120) -> UUID {
-        let token = UUID()
-        // Infinite: until released, with no timer.
-        heldForTerminal[workspace.standardizedFileURL.path, default: [:]][token] =
-            seconds.isFinite ? Date().addingTimeInterval(seconds) : .distantFuture
-        releaseWhenDue(token, in: workspace)
-        return token
+    static func turnsBegun(in workspace: URL) -> Int {
+        turnsBegun[workspace.standardizedFileURL.path] ?? 0
     }
 
     @MainActor
-    static func extendTerminalHold(_ token: UUID, in workspace: URL, seconds: Double) {
-        let key = workspace.standardizedFileURL.path
-        guard heldForTerminal[key]?[token] != nil else { return }
-        heldForTerminal[key]?[token] = Date().addingTimeInterval(seconds)
-        releaseWhenDue(token, in: workspace)
-    }
-
-    /// Lets the hold go when its time is up, so what waited is told.
-    @MainActor
-    private static func releaseWhenDue(_ token: UUID, in workspace: URL) {
-        guard let due = heldForTerminal[workspace.standardizedFileURL.path]?[token], due != .distantFuture else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due.timeIntervalSinceNow) + 0.05) {
-            MainActor.assumeIsolated {
-                guard let now = heldForTerminal[workspace.standardizedFileURL.path]?[token], now <= Date() else { return }
-                releaseTerminalHold(token, in: workspace)
-            }
-        }
-    }
-
-    @MainActor
-    static func releaseTerminalHold(_ token: UUID, in workspace: URL) {
-        let key = workspace.standardizedFileURL.path
-        heldForTerminal[key]?[token] = nil
-        if heldForTerminal[key]?.isEmpty == true {
-            heldForTerminal[key] = nil
-            // The panes open on it send what waited.
-            NotificationCenter.default.post(name: terminalHoldEnded, object: key)
-        }
-    }
-
-    static let terminalHoldEnded = Notification.Name("LampTerminalHoldEnded")
-
-    @MainActor
-    static func terminalHoldEnds(in workspace: URL) -> Date? {
-        heldForTerminal[workspace.standardizedFileURL.path]?.values.filter { $0 > Date() }.max()
-    }
-
-    @MainActor
-    static func isHeldForTerminal(in workspace: URL) -> Bool {
-        terminalHoldEnds(in: workspace) != nil
+    static func noteTurnBegun(in workspace: URL) {
+        turnsBegun[workspace.standardizedFileURL.path, default: 0] += 1
     }
 
     /// A turn is being prepared or a reply is arriving on this workspace.
@@ -2771,10 +2728,7 @@ final class NativeAgentChatModel: ObservableObject {
         // Nothing new starts once Lamp is quitting: a message queued behind
         // the reply being stopped would otherwise go the moment it stopped,
         // as a run nobody is left to stop. Refused here, it stays queued.
-        // Nor while the writing's Terminal is starting, from any pane or the
-        // phone: its agent could change what the Terminal is about to read.
-        guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting,
-              !KeptAgentChats.isHeldForTerminal(in: workspace) else { return false }
+        guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting else { return false }
         // Turns from Terminal, another pane or another Mac may have arrived
         // while this prompt was being prepared, so the conversation is read
         // from disk **before** it is judged against the one the caller
@@ -2797,6 +2751,9 @@ final class NativeAgentChatModel: ObservableObject {
         notifiesThisRun = notifiesWhenDone
         lastTurnOutcome = nil
         isRunning = true
+        // Counted for a Terminal launch checking this writing; see
+        // `KeptAgentChats.turnsBegun`.
+        KeptAgentChats.noteTurnBegun(in: workspace)
         cancelRequested = false
         stoppedByLamp = nil
         // Before the work is scheduled: cleared inside the worker, a Stop
@@ -4031,14 +3988,6 @@ struct NativeAgentChatView: View {
         // A message the person sends is their word to carry on, so whatever
         // was held back after a failure goes after it.
         if queued == nil { model.releaseQueue() }
-        if KeptAgentChats.isHeldForTerminal(in: workspaceFolder) {
-            if let queued { model.releaseQueued(queued) } else {
-                submissionError = "The Terminal is starting in this writing. Send this again in a moment."
-            }
-            // Tried again when the hold ends (`terminalHoldEnded`), by the
-            // panes open then.
-            return false
-        }
         guard !isPreparing else {
             if let queued { model.releaseQueued(queued) }
             return false
@@ -4330,10 +4279,6 @@ struct NativeAgentChatView: View {
         .reportsVisibility(to: visibility)
         .onAppear { loadSavedPermissions() }
         .onChange(of: model.pendingApprovals.count) { _, _ in loadSavedPermissions() }
-        // What waited while the writing's Terminal started goes when it has.
-        .onReceive(NotificationCenter.default.publisher(for: KeptAgentChats.terminalHoldEnded)) { note in
-            if note.object as? String == workspaceFolder.standardizedFileURL.path { drainQueue() }
-        }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at

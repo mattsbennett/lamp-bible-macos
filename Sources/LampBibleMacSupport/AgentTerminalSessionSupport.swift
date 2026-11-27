@@ -429,9 +429,6 @@ public enum AgentTerminalLauncher {
         /// Lamp wrote its integration afresh — for OpenCode, the plugin, which
         /// OpenCode then installs again on load.
         public var integrationWrittenAfresh: Bool
-        /// Where this launch's CLI says it has started, for one that can
-        /// (Claude); nil for one that can't, whose hold ends by time.
-        public var readyMarker: URL?
         /// This launch's own folder of what it runs.
         public var launchFolder: URL
     }
@@ -485,9 +482,7 @@ public enum AgentTerminalLauncher {
         }
 
         let claudeSettings = terminalDirectory.appendingPathComponent("claude-settings.json")
-        // This launch's own, so an older one's start doesn't count for it.
-        let readyMarker = terminalDirectory.appendingPathComponent("ready-\(UUID().uuidString)")
-        try AgentTerminalLaunchPlanner.claudeSettings(readyMarker: readyMarker).write(to: claudeSettings, options: .atomic)
+        try AgentTerminalLaunchPlanner.claudeSettings().write(to: claudeSettings, options: .atomic)
         let integrationWrittenAfresh = provider == .openCode
             ? try installOpenCodePlugin(in: openCodeConfigDirectory)
             : false
@@ -502,8 +497,7 @@ public enum AgentTerminalLauncher {
             captureDirectory: AgentTerminalCaptureStore.captureDirectory(in: workspace),
             claudeSettingsFile: claudeSettings,
             openCodeConfigDirectory: openCodeConfigDirectory,
-            editorStateFile: editorStateFile,
-            readyMarker: readyMarker
+            editorStateFile: editorStateFile
         ))
         let script = terminalDirectory.appendingPathComponent("launch.sh")
         try AgentTerminalLaunchPlanner.shellScript(for: plan)
@@ -522,7 +516,6 @@ public enum AgentTerminalLauncher {
             resumedSessionID: resumeSessionID,
             carriesRecap: recapText != nil,
             integrationWrittenAfresh: integrationWrittenAfresh,
-            readyMarker: [.claude, .openCode].contains(provider) ? readyMarker : nil,
             launchFolder: terminalDirectory
         )
     }
@@ -688,9 +681,7 @@ public enum AgentTerminalLaunchPlanner {
         public var resumeSessionID: String?
         /// For Claude, the ID to give a new session so it is known from the start.
         public var newSessionID: String?
-        /// Where the CLI marks that it has started, for OpenCode, whose
-        /// plugin is told it in the environment (Claude's is in its settings).
-        public var readyMarker: URL?
+
         /// The earlier conversation, written out, when there is one to carry on
         /// but no session to resume.
         public var recapFile: URL?
@@ -712,8 +703,7 @@ public enum AgentTerminalLaunchPlanner {
             captureDirectory: URL,
             claudeSettingsFile: URL,
             openCodeConfigDirectory: URL,
-            editorStateFile: URL? = nil,
-            readyMarker: URL? = nil
+            editorStateFile: URL? = nil
         ) {
             self.provider = provider
             self.executable = executable
@@ -724,14 +714,12 @@ public enum AgentTerminalLaunchPlanner {
             self.captureDirectory = captureDirectory
             self.claudeSettingsFile = claudeSettingsFile
             self.openCodeConfigDirectory = openCodeConfigDirectory
-            self.readyMarker = readyMarker
             self.editorStateFile = editorStateFile
         }
     }
 
     public static let captureDirectoryVariable = "LAMP_CAPTURE_DIR"
     public static let editorStateVariable = "LAMP_EDITOR_STATE"
-    public static let readyMarkerVariable = "LAMP_READY_MARKER"
     static let noticeFormatName = "lamp-terminal-notice"
 
     public static func plan(_ request: Request) -> AgentTerminalLaunchPlan {
@@ -744,9 +732,6 @@ public enum AgentTerminalLaunchPlanner {
         )
         if let editorState = request.editorStateFile {
             plan.environment[editorStateVariable] = editorState.path
-        }
-        if request.provider == .openCode, let readyMarker = request.readyMarker {
-            plan.environment[readyMarkerVariable] = readyMarker.path
         }
         switch request.provider {
         case .claude:
@@ -839,20 +824,12 @@ public enum AgentTerminalLaunchPlanner {
 
     /// The settings file for Claude's capture hooks, and the context hook
     /// that hands over the editor's state with each message.
-    /// `readyMarker`: a file in Lamp's own folder the session touches as it
-    /// starts, once it has read its settings, which is how Lamp knows a
-    /// launch is ready (`decisions/0032`); never anything in the workspace,
-    /// which an agent could write.
-    public static func claudeSettings(readyMarker: URL? = nil) throws -> Data {
+    public static func claudeSettings() throws -> Data {
         let capture: [String: Any] = ["type": "command", "command": captureCommand(prefix: "claude")]
         let context: [String: Any] = ["type": "command", "command": contextCommand]
         var hooks = Dictionary(uniqueKeysWithValues: capturedEvents.map { event in
             (event, [["hooks": event == contextEvent ? [capture, context] : [capture]]])
         })
-        if let readyMarker {
-            let ready: [String: Any] = ["type": "command", "command": "/usr/bin/touch " + shellQuote(readyMarker.path)]
-            hooks["SessionStart"] = [["hooks": (hooks["SessionStart"]?.first?["hooks"] as? [[String: Any]] ?? []) + [ready]]]
-        }
         // What the assistant wrote, said by the assistant.
         //
         // The editor sees only that a file in the workspace changed, and
@@ -1007,11 +984,6 @@ public enum AgentTerminalOpenCodePlugin {
       }
       const unwrap = (response) => (response && "data" in response ? response.data : response)
       await record({ event: "loaded" })
-      // Started, and so settings read: Lamp's mark for this launch, in its
-      // own folder, which ends the writing's hold on its chats.
-      if (process.env.LAMP_READY_MARKER) {
-        try { await writeFile(process.env.LAMP_READY_MARKER, "") } catch {}
-      }
       return {
         event: async ({ event }) => {
           if (event?.type !== "session.idle") return

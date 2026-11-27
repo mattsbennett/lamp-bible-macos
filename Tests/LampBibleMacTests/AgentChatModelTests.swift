@@ -79,36 +79,20 @@ struct AgentChatModelTests {
         #expect(model.sendingPlaceholder.isEmpty)
     }
 
-    /// While the writing's Terminal starts, no chat begins a turn there,
-    /// from any pane or the phone (`decisions/0032`).
-    @Test func noTurnBeginsWhileTheTerminalStarts() async throws {
+    /// Every turn a writing begins is counted, from a pane or the phone, so
+    /// a Terminal launch can tell one began while it checked; nothing is
+    /// refused for it (`decisions/0032`).
+    @Test func eachTurnBegunIsCountedAndNoneIsRefused() throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }
-        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
-        model.load()
-        let first = KeptAgentChats.holdForTerminal(in: workspace)
-        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
-        #expect(await model.send("Hello", contextualPrompt: "Hello") == false)
-        #expect(model.messages.isEmpty && !model.isRunning)
-        // One held while Lamp checks has no end of its own.
-        let checking = KeptAgentChats.holdForTerminal(in: workspace, seconds: .infinity)
-        #expect(KeptAgentChats.terminalHoldEnds(in: workspace) == .distantFuture)
-        KeptAgentChats.releaseTerminalHold(checking, in: workspace)
-        // Two launches each own their hold: one let go leaves the other.
-        let second = KeptAgentChats.holdForTerminal(in: workspace)
-        KeptAgentChats.releaseTerminalHold(first, in: workspace)
-        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
-        KeptAgentChats.releaseTerminalHold(second, in: workspace)
-        #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
-        // And a hold ends by itself, telling the panes waiting on it.
-        let ended = NotificationCenter.default.notifications(named: KeptAgentChats.terminalHoldEnded)
-        _ = KeptAgentChats.holdForTerminal(in: workspace, seconds: 0.1)
-        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
-        for await note in ended {
-            #expect(note.object as? String == workspace.standardizedFileURL.path)
-            break
-        }
-        #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
+        let before = KeptAgentChats.turnsBegun(in: workspace)
+        KeptAgentChats.beginTurn(in: workspace)
+        #expect(KeptAgentChats.turnsBegun(in: workspace) == before + 1)
+        #expect(KeptAgentChats.isBusy(in: workspace))
+        KeptAgentChats.endTurn(in: workspace)
+        #expect(!KeptAgentChats.isBusy(in: workspace))
+        // Another writing's are its own.
+        #expect(KeptAgentChats.turnsBegun(in: workspace.appendingPathComponent("other")) == 0)
     }
 
     /// New Chat takes a message still being prepared with the conversation.

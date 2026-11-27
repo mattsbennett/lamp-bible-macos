@@ -231,17 +231,6 @@ struct AgentTerminalLaunchCheckTests {
         #expect(findings(root, server, bundle).contains { $0.path.contains("SKILL.md") && $0.path.contains("notes") })
     }
 
-    /// A Claude launch marks its start in Lamp's own folder, never the
-    /// workspace's, and the mark is this launch's.
-    @Test func aClaudeLaunchMarksItsStartInLampsFolder() throws {
-        let marker = URL(fileURLWithPath: "/Users/Reader/Library/Application Support/Lamp Bible/Terminal Launches/abc/ready-1")
-        let settings = try #require(try JSONSerialization.jsonObject(with: AgentTerminalLaunchPlanner.claudeSettings(readyMarker: marker)) as? [String: Any])
-        let start = try #require(((settings["hooks"] as? [String: Any])?["SessionStart"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
-        #expect(start.contains { ($0["command"] as? String)?.contains("touch '/Users/Reader/Library/Application Support/Lamp Bible/Terminal Launches/abc/ready-1'") == true })
-        // Still capturing as before.
-        #expect(start.count >= 2)
-    }
-
     /// A pipe among the settings can't be looked at, so no answer covers it.
     @Test func aSpecialFileIsIncomplete() throws {
         let (root, server, bundle) = try workspace()

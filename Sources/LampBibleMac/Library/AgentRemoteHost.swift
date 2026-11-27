@@ -1191,12 +1191,6 @@ final class AgentRemoteHost: ObservableObject {
         }
         let workspace = LampWritingWorkspace.url(libraryRootURL: libraryModel.library.rootURL, writingID: id)
         func idle() -> Bool {
-            // Before anything is written: preparing the writing rewrites what
-            // its Terminal, starting now, is about to read.
-            guard !KeptAgentChats.isHeldForTerminal(in: workspace) else {
-                send(.failed(LampAgentRemoteFailure.busy, "The Terminal is starting in this writing on the Mac. Try again in a moment.", requestID: requestID, chatID: chatID), to: peer)
-                return false
-            }
             guard !KeptAgentChats.isRunning(in: workspace) else {
                 send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: chatID), to: peer)
                 return false
