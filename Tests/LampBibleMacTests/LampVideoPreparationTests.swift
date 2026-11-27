@@ -283,6 +283,34 @@ struct LampVideoPreparationTests {
         #expect(try assets(root).isEmpty)
     }
 
+    /// A chat link to such a movie is shown in Finder, not played: the
+    /// player would read the file outside.
+    @Test func aChatLinkToAMovieKeepingItsPicturesElsewhereIsShownNotPlayed() async throws {
+        let root = try folder()
+        let outside = try folder()
+        let cache = try folder()
+        defer {
+            for made in [root, outside, cache] { try? FileManager.default.removeItem(at: made) }
+        }
+        let elsewhere = outside.appendingPathComponent("private.mp4")
+        try await makeVideo(at: elsewhere)
+        let reference = root.appendingPathComponent("reference.mov")
+        try AVMutableMovie(url: elsewhere).writeHeader(to: reference, fileType: .mov, options: [])
+        let viewed: @Sendable (URL) -> Bool = { ["mov", "mp4"].contains($0.pathExtension) }
+        // Off the main thread, as the chat asks it.
+        let shown = await Task.detached { () -> AgentChatFileLink.Action in
+            AgentChatFileLink.action(for: reference, cache: cache, viewedBy: viewed)
+        }.value
+        #expect(shown == .reveal(reference))
+        // One that holds its own pictures plays.
+        let whole = root.appendingPathComponent("whole.mp4")
+        try FileManager.default.copyItem(at: elsewhere, to: whole)
+        let played = await Task.detached { () -> AgentChatFileLink.Action in
+            AgentChatFileLink.action(for: whole, cache: cache, viewedBy: viewed)
+        }.value
+        if case .open = played {} else { Issue.record("a whole movie did not open: \(played)") }
+    }
+
     @Test func aLinkedAssetsFolderIsNotWrittenThrough() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let outside = try folder()

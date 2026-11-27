@@ -1,4 +1,6 @@
+import AVFoundation
 import Foundation
+import UniformTypeIdentifiers
 
 public enum AgentChatWireProvider: String, Sendable {
     case codex
@@ -631,6 +633,203 @@ public enum AgentChatActivity: Equatable, Sendable {
             return self
         }
         return next
+    }
+}
+
+/// A file an agent links to in its reply.
+///
+/// Agents write a file as a bare path — Codex links what it made as
+/// `/Users/…/.lamp-renders/test.png` — and handed on as it is, a link with no
+/// scheme is one macOS will not open (error -50). So an absolute path on this
+/// Mac is a file, as a `file:` link is.
+///
+/// A link opens what it names, and the agent can change what that is, even
+/// between Lamp looking and macOS opening. So a click opens only a picture,
+/// a video, sound or a PDF, and opens a clone of the file Lamp checked —
+/// opened without following a link, regular, not executable — stripped of
+/// the extended attributes that choose how it opens (an alias's mark, an
+/// "open with" choice) and of any lock, in a folder of Lamp's that no agent
+/// writes. Anything else — text, which an editor would change in the copy
+/// rather than the workspace; an SVG, which can carry scripts; Lamp's own
+/// modules and decks, which a click must not install or import over what is
+/// there; a folder; what runs; a link or alias; a type that can't be told —
+/// is shown in Finder, which runs nothing.
+public enum AgentChatFileLink {
+    /// What a click does.
+    public enum Action: Equatable, Sendable {
+        /// Open this clone with its app.
+        case open(URL)
+        case reveal(URL)
+        case missing
+    }
+
+    /// Whether a click on a link is this route's to answer, by its shape
+    /// alone, decided as the click lands with no look at the disk: every
+    /// `file:` link, whatever it names, so none reaches macOS unchecked, and
+    /// a bare absolute path. `file(for:)` then says which are this Mac's.
+    public static func namesAFile(_ url: URL) -> Bool {
+        if url.isFileURL { return true }
+        return url.scheme == nil && url.path.hasPrefix("/")
+    }
+
+    /// Whether a link's authority is this Mac: none, or `localhost`.
+    static func isLocal(_ url: URL) -> Bool {
+        guard let host = url.host, !host.isEmpty else { return true }
+        return host.lowercased() == "localhost"
+    }
+
+    /// The file a link names, or nil for a link that is not a local file's:
+    /// one naming another computer (`//host/…`, `file://host/…`) is left as
+    /// the link it is. A trailing `:12` or `:12:3`, as agents cite a line, is
+    /// left off where the path without it is the one that is there.
+    public static func file(for url: URL) -> URL? {
+        guard namesAFile(url), isLocal(url) else { return nil }
+        let path = url.path
+        guard path.hasPrefix("/") else { return nil }
+        if !isThere(path),
+           let range = path.range(of: #"(:\d+){1,2}$"#, options: .regularExpression),
+           isThere(String(path[..<range.lowerBound])) {
+            return URL(fileURLWithPath: String(path[..<range.lowerBound]))
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// Formats that hold their own pictures or sound, by name: never a
+    /// broad kind, under which a playlist or a stream redirector (`.asx`,
+    /// `.m3u`) counts as video and sends a player elsewhere.
+    static let viewed: [UTType] = [
+        .png, .jpeg, .heic, .heif, .gif, .tiff, .webP, .bmp,
+        .mpeg4Movie, .quickTimeMovie, .appleProtectedMPEG4Video,
+        .mpeg4Audio, .mp3, .wav, .aiff,
+        .pdf,
+    ]
+    static let neverViewed: [UTType] = [
+        .application, .applicationBundle, .executable, .script, .shellScript, .unixExecutable,
+        .sourceCode, .aliasFile, .symbolicLink, .resolvable, .bundle, .package, .svg, .html, .playlist, .m3uPlaylist,
+    ]
+
+    /// Whether a file is looked at, by its name, as the system declares the
+    /// type: never by asking the file, which the agent controls.
+    public static func isViewed(_ file: URL) -> Bool {
+        guard let type = UTType(filenameExtension: file.pathExtension.lowercased()), !type.isDynamic,
+              !neverViewed.contains(where: { type.conforms(to: $0) })
+        else { return false }
+        return viewed.contains { type == $0 || type.conforms(to: $0) }
+    }
+
+    /// Where a click on `file` leads. `cache` is Lamp's own folder for the
+    /// clones; `viewedBy` is `isViewed`, given by a test; `selfContained`
+    /// says whether a clone holds all its own media, as a QuickTime movie
+    /// may not, its pictures in another file a player would read.
+    public static func action(
+        for file: URL, cache: URL,
+        viewedBy: (URL) -> Bool = isViewed,
+        selfContained: (URL) -> Bool = { holdsItsOwnMedia($0) }
+    ) -> Action {
+        var info = stat()
+        // The item itself, not where a link would lead.
+        guard lstat(file.path, &info) == 0 else { return .missing }
+        let reveal = Action.reveal(file)
+        guard info.st_mode & S_IFMT == S_IFREG, viewedBy(file) else { return reveal }
+        // Opened without following a link, then judged as what was opened.
+        let source = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard source >= 0 else { return reveal }
+        defer { close(source) }
+        var opened = stat()
+        guard fstat(source, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG,
+              opened.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH) == 0,
+              let copy = clone(source, named: file.lastPathComponent, into: cache)
+        else { return reveal }
+        guard selfContained(copy) else {
+            try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
+            return reveal
+        }
+        return .open(copy)
+    }
+
+    /// A clone of the open file `source` in a new folder of `cache`, with no
+    /// extended attributes that choose how it opens, no lock (a clone keeps a
+    /// Finder lock, and a locked clone could never be pruned), and readable
+    /// by its owner alone. Nil where it
+    /// can't be made: another disk (a copy of a long video is not made on a
+    /// click), or a cache that is a link or not this user's.
+    static func clone(_ source: Int32, named name: String, into cache: URL) -> URL? {
+        let fileManager = FileManager.default
+        try? fileManager.createDirectory(at: cache, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var root = stat()
+        guard lstat(cache.path, &root) == 0, root.st_mode & S_IFMT == S_IFDIR, root.st_uid == geteuid()
+        else { return nil }
+        prune(cache)
+        let folder = cache.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        guard mkdir(folder.path, 0o700) == 0 else { return nil }
+        let directory = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { return nil }
+        defer { close(directory) }
+        guard fclonefileat(source, directory, name, 0) == 0 else {
+            try? fileManager.removeItem(at: folder)
+            return nil
+        }
+        let made = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard made >= 0 else {
+            try? fileManager.removeItem(at: folder)
+            return nil
+        }
+        defer { close(made) }
+        // An alias is a regular file with a mark: judged before the mark is
+        // stripped, and shown, not viewed.
+        let copy = folder.appendingPathComponent(name)
+        let isAlias = (try? copy.resourceValues(forKeys: [.isAliasFileKey]))?.isAliasFile ?? true
+        // The lock first: a locked file's attributes and mode can't change.
+        let unlocked = fchflags(made, 0) == 0
+        guard !isAlias, unlocked, stripAttributes(made), fchmod(made, 0o400) == 0 else {
+            _ = fchflags(made, 0)
+            try? fileManager.removeItem(at: folder)
+            return nil
+        }
+        return folder.appendingPathComponent(name)
+    }
+
+    /// Removes every extended attribute from the open file but the system's
+    /// own marks of where it came from, which choose nothing about how it
+    /// opens and which a viewer heeds: provenance, which macOS puts on every
+    /// new file and keeps, and a download's quarantine. False if any other
+    /// is left.
+    static func stripAttributes(_ file: Int32) -> Bool {
+        guard let names = attributeNames(file) else { return false }
+        for name in names where !kept.contains(name) { _ = fremovexattr(file, name, 0) }
+        return attributeNames(file).map { $0.allSatisfy(kept.contains) } ?? false
+    }
+
+    static let kept: Set<String> = ["com.apple.provenance", "com.apple.quarantine"]
+
+    static func attributeNames(_ file: Int32) -> [String]? {
+        let size = flistxattr(file, nil, 0, 0)
+        guard size >= 0 else { return nil }
+        guard size > 0 else { return [] }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard flistxattr(file, &buffer, size, 0) == size else { return nil }
+        return buffer.split(separator: 0).map { String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self) }
+    }
+
+    /// Clones from earlier days go: each was for one look. Only folders this
+    /// made, named by a UUID.
+    private static func prune(_ cache: URL) {
+        let dayAgo = Date().addingTimeInterval(-86_400)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: cache.path)) ?? [] {
+            guard UUID(uuidString: name) != nil else { continue }
+            let folder = cache.appendingPathComponent(name)
+            var info = stat()
+            guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+                  Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)) < dayAgo
+            else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    /// Whether anything is at `path`, a dangling link included.
+    private static func isThere(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0
     }
 }
 
@@ -2358,4 +2557,33 @@ public final class AgentRunMembers: @unchecked Sendable {
             )
         }
     }
+}
+
+extension AgentChatFileLink {
+    /// Whether every track of the movie or sound at `url` holds its own
+    /// media, as `prepare_video` requires of a source; true for what is not
+    /// a movie (a picture, a PDF). Asked from a background thread, which it
+    /// holds until AVFoundation answers.
+    public static func holdsItsOwnMedia(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()),
+              type.conforms(to: .audiovisualContent)
+        else { return true }
+        let answer = AgentChatFileLinkAnswer()
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            defer { done.signal() }
+            guard let tracks = try? await AVURLAsset(url: url).load(.tracks) else { return }
+            for track in tracks where (try? await track.load(.isSelfContained)) != true { return }
+            answer.set(true)
+        }
+        done.wait()
+        return answer.value
+    }
+}
+
+private final class AgentChatFileLinkAnswer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    func set(_ value: Bool) { lock.lock(); stored = value; lock.unlock() }
+    var value: Bool { lock.lock(); defer { lock.unlock() }; return stored }
 }

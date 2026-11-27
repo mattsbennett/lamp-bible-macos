@@ -108,6 +108,12 @@ private struct SelectableProseView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        /// Where a linked picture or video is cloned to be opened; see
+        /// `AgentChatFileLink`.
+        static let openedLinks = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "Lamp Bible", isDirectory: true)
+            .appendingPathComponent("Opened Links", isDirectory: true)
+
         var blocks: [LampProseBlock]?
         var openURL: OpenURLAction?
 
@@ -115,7 +121,34 @@ private struct SelectableProseView: NSViewRepresentable {
         /// app's handler, so Lamp's own links stay in Lamp.
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
-            guard let url, let openURL else { return false }
+            guard let url else { return false }
+            // A file, by the checked route; see `AgentChatFileLink`. Known by
+            // its link alone here; every look at the disk is off the main
+            // thread, where a file on a slow disk or not yet downloaded
+            // would otherwise hold the window.
+            if AgentChatFileLink.namesAFile(url) {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    // Nil for another computer's file: not looked for here,
+                    // and never handed to macOS, which would look here.
+                    let file = AgentChatFileLink.file(for: url)
+                    let action = file.map { AgentChatFileLink.action(for: $0, cache: Self.openedLinks) } ?? .missing
+                    DispatchQueue.main.async {
+                        switch action {
+                        case .open(let copy):
+                            // With nothing to view it in, where it is.
+                            if !NSWorkspace.shared.open(copy), let file {
+                                NSWorkspace.shared.activateFileViewerSelecting([file])
+                            }
+                        case .reveal(let item):
+                            NSWorkspace.shared.activateFileViewerSelecting([item])
+                        case .missing:
+                            NSSound.beep()
+                        }
+                    }
+                }
+                return true
+            }
+            guard let openURL else { return false }
             openURL(url)
             return true
         }

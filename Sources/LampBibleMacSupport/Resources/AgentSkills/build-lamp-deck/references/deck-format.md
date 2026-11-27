@@ -753,15 +753,19 @@ made.
   clip's sound set the audio codec to AAC. Saving a `.blend` writes a
   thumbnail outside the workspace, which a sandbox refuses: build the scene in
   the script and render it, or turn file previews off.
-- **No Metal device means a sandbox.** First set the render device: Cycles
-  renders on the CPU unless the scene asks for the GPU
+- **Blender needs the GPU, which a sandbox keeps from it.** First set the
+  render device: Cycles renders on the CPU unless the scene asks for the GPU
   (`scene.cycles.device = 'GPU'`, with Metal chosen in Cycles' preferences).
-  A renderer that still reports no Metal device ("Could not initialize
-  Metal", Eevee failing to start) is running in a sandbox that keeps the GPU
-  from it. Where you can ask to run a command outside the sandbox, ask,
-  saying it needs the GPU; the writer answers in Lamp. Don't fall back to
-  the CPU without saying so: it is many times slower. If the answer is no,
-  say what that costs and go on at a small size.
+  If you run in a sandbox (Codex does), don't try Blender inside it first:
+  there it cannot reach the GPU or the window server, and it crashes, which
+  puts "Blender quit unexpectedly" on the writer's screen. Ask from the start
+  to run it outside the sandbox, saying it needs the GPU; the writer answers
+  in Lamp. A renderer that reports no Metal device ("Could not initialize
+  Metal", Eevee failing to start) is in a sandbox too. Don't fall back to the
+  CPU without saying so: it is many times slower. If the answer is no, don't
+  run Blender in the sandbox anyway, where it crashes whatever its settings:
+  make the moment with `render_animation`, which Lamp renders, or with a
+  still picture, or leave it out, and say which.
 - **It must hold its own pictures.** A movie that refers to media in other
   files is refused, and so is a file outside the workspace. Something
   see-through is laid on black, and the answer says so: make it over the
