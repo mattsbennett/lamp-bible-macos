@@ -2034,6 +2034,7 @@ struct DevotionalAgentWorkspaceView: View {
                     dismiss: { dismissedFocus = editorFocus }
                 )
                 .turnNotifications(title: notificationTitle, route: .writing(devotionalID))
+                .showsTerminal { sessionModeID = AgentSessionDisplayMode.terminal.rawValue }
                 .identityShownByHost()
                 .newChatShownByHost(asked: $newChatAsked) { chatCanStartNew = $0 }
                 .onConnectionChanged { state in providerConnection = state }
@@ -2097,7 +2098,8 @@ struct DevotionalAgentWorkspaceView: View {
                         terminalExitCode = exitCode
                         terminalDidExit(exitStatus: exitCode)
                     },
-                    onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
+                    onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) },
+                    holdID: activeProvider.map(AgentTerminalHolds.holds) == true ? terminalID : nil
                 )
                 .inset()
                 .id(terminalID)
@@ -3132,9 +3134,15 @@ struct DevotionalAgentWorkspaceView: View {
             errorMessage = "Couldn’t prepare the Terminal session: \(error.localizedDescription)"
             return
         }
+        // The hold begins here, with nothing awaited since the last check, so
+        // no turn can start between the hand-over and the process
+        // (`AgentTerminalHolds`). Only Claude's: it reloads its settings
+        // while it runs.
+        AgentTerminalHolds.shared.dropIfNotStarted(terminalID)
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
+        if AgentTerminalHolds.holds(provider) { AgentTerminalHolds.shared.begin(terminalID, in: workspaceURL) }
         // Opened with what was checked: its restrictions, as the scan read
         // them, are the reference for the next check.
         AgentTerminalLaunchCheck.recordRestrictions(scanned.restrictions, for: workspaceURL)
@@ -3615,9 +3623,13 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     /// The view was torn down, ending its process: the pane was hidden, the
     /// mode switched, or the window closed.
     var onDismantle: () -> Void = {}
+    /// The launch that holds its writing's chats while this process runs
+    /// (`AgentTerminalHolds`): told the process once it starts, and its exit
+    /// however it comes, the view taken down or not.
+    var holdID: UUID? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onExit: onExit, onDismantle: onDismantle)
+        Coordinator(onExit: onExit, onDismantle: onDismantle, holdID: holdID)
     }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
@@ -3648,7 +3660,12 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
                 args: ["-l"],
                 currentDirectory: workingDirectory.path
             )
-            coordinator.watchForExit(of: terminal.process.shellPid)
+            let pid = terminal.process.shellPid
+            if let holdID = coordinator.holdID {
+                let running = terminal.process.running
+                MainActor.assumeIsolated { AgentTerminalHolds.shared.started(holdID, pid: running ? pid : 0) }
+            }
+            coordinator.watchForExit(of: pid)
             coordinator.watchForEditingKeys(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
@@ -3674,15 +3691,25 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var onExit: (Int32?) -> Void
         var onDismantle: () -> Void
+        let holdID: UUID?
         private var exitSource: DispatchSourceProcess?
         private var reportedExit = false
         private var editingKeyMonitor: Any?
         private var isDismantled = false
         private weak var terminal: LocalProcessTerminalView?
 
-        init(onExit: @escaping (Int32?) -> Void, onDismantle: @escaping () -> Void) {
+        init(onExit: @escaping (Int32?) -> Void, onDismantle: @escaping () -> Void, holdID: UUID?) {
             self.onExit = onExit
             self.onDismantle = onDismantle
+            self.holdID = holdID
+        }
+
+        deinit {
+            // A view that went before its process started: nothing will
+            // exit to let the hold go.
+            if let holdID {
+                DispatchQueue.main.async { MainActor.assumeIsolated { AgentTerminalHolds.shared.dropIfNotStarted(holdID) } }
+            }
         }
 
         func stopWatching() {
@@ -3764,6 +3791,8 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             reportedExit = true
             exitSource?.cancel()
             exitSource = nil
+            // Reported on the main queue, by the exit watch or SwiftTerm.
+            if let holdID { MainActor.assumeIsolated { AgentTerminalHolds.shared.ended(holdID) } }
             onExit(status)
         }
 

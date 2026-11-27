@@ -1070,6 +1070,10 @@ final class AgentRemoteHost: ObservableObject {
             return
         }
         let workspace = workspace(of: chat, root: root)
+        // Before anything is written in it: a writing a Claude Terminal
+        // holds is left as it is.
+        guard admitsTurn(in: workspace, running: false, chatID: chat.id, requestID: message.requestID, peer: peer)
+        else { return }
         do {
             if case .writing(let id) = chat {
                 // The workspace made before anything is chosen in it, as the
@@ -1135,10 +1139,8 @@ final class AgentRemoteHost: ObservableObject {
         _ text: String, reading: LampAgentRemoteReading?, selection: String?, writingRevision: Int?,
         writingDigest: String?, in open: OpenChat, requestID: UUID?, peer: Peer
     ) async {
-        guard !open.model.isRunning else {
-            send(.failed(LampAgentRemoteFailure.busy, "A reply is still arriving in this chat.", requestID: requestID, chatID: open.id), to: peer)
-            return
-        }
+        guard admitsTurn(in: open.workspace, running: open.model.isRunning, chatID: open.id, requestID: requestID, peer: peer)
+        else { return }
         // Held from here, while the prompt is prepared and before the model
         // says it is running, so a change of provider from another device
         // can't move the chat out from under the turn (`setChoices`).
@@ -1166,6 +1168,9 @@ final class AgentRemoteHost: ObservableObject {
             prompt = written
         }
         guard !Task.isCancelled, mayAct(peer), let device = peer.deviceID else { return }
+        // Again, as the last thing before the send: preparing waited.
+        guard admitsTurn(in: open.workspace, running: open.model.isRunning, chatID: open.id, requestID: requestID, peer: peer)
+        else { return }
         // The question's id is chosen here, so the turn is known as this
         // device's for as long as it runs, and no longer.
         let turn = UUID()
@@ -1221,6 +1226,25 @@ final class AgentRemoteHost: ObservableObject {
         if !taken, isConnected(peer), peer.open === open {
             send(.failed(LampAgentRemoteFailure.busy, "This chat changed on the Mac before the message could go.", requestID: requestID, chatID: open.id), to: peer)
         }
+    }
+
+    /// Whether a device's turn may start in this workspace now, having said
+    /// why not where it may not (`LampAgentRemoteTurnAdmission`): AI
+    /// features off, a Claude Terminal running in the writing
+    /// (`decisions/0042`), or a reply already arriving.
+    private func admitsTurn(in workspace: URL, running: Bool, chatID: String, requestID: UUID?, peer: Peer) -> Bool {
+        guard let refusal = LampAgentRemoteTurnAdmission.refusal(
+            aiOn: AIFeatures.isEnabledNow,
+            terminalOpen: AgentTerminalHolds.shared.isHeld(in: workspace),
+            running: running
+        ) else { return true }
+        let words = switch refusal {
+        case LampAgentRemoteFailure.aiOff: "AI features are turned off on this Mac."
+        case LampAgentRemoteFailure.terminalOpen: LampAgentRemoteTurnAdmission.terminalOpenMessage
+        default: "A reply is still arriving in this chat."
+        }
+        send(.failed(refusal, words, requestID: requestID, chatID: chatID), to: peer)
+        return false
     }
 
     /// Makes a writing's workspace ready for a turn, as its pane does on

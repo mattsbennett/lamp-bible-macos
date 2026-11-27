@@ -2026,10 +2026,13 @@ private struct ChatAttachmentChip: View {
 private struct NativeAgentChatInputView: View {
     @Binding var message: String
     let placeholder: String
+    /// Typing goes on, but nothing is sent: a Claude Terminal holds the
+    /// writing's chats (`AgentTerminalHolds`).
+    var isHeld = false
     let onCommit: (String) -> Bool
 
     private var canSubmit: Bool {
-        !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isHeld && !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// One rounded field with Send inside it, as Messages and ChatGPT draw
@@ -2125,6 +2128,35 @@ private struct CopiedConversationRow: View {
         .padding(.vertical, 6)
         .help("This conversation was copied once. Nothing said here goes back to the reader chat, and nothing said there comes here.")
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Over the composer while a Claude Terminal runs in the writing: why
+/// nothing sends, and the way out (`AgentTerminalHolds`). Ending sends
+/// nothing: the Terminal's last turns come into the chat first, for the
+/// person to read before their message goes on top.
+private struct TerminalHoldNotice: View {
+    let end: () -> Void
+    let show: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Claude is running in this writing’s Terminal. Chats here wait until that session ends.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("End Terminal Session", action: end)
+                    .buttonStyle(.lampProminent)
+                if let show {
+                    Button("Show Terminal", action: show)
+                        .buttonStyle(.lampSecondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -2815,6 +2847,9 @@ final class NativeAgentChatModel: ObservableObject {
         // the reply being stopped would otherwise go the moment it stopped,
         // as a run nobody is left to stop. Refused here, it stays queued.
         guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting else { return false }
+        // The last line before a run: nothing starts in a writing a Claude
+        // Terminal holds, from whichever pane or device asked.
+        guard !AgentTerminalHolds.shared.isHeld(in: workspace) else { return false }
         // Turns from Terminal, another pane or another Mac may have arrived
         // while this prompt was being prepared, so the conversation is read
         // from disk **before** it is judged against the one the caller
@@ -4023,6 +4058,10 @@ struct NativeAgentChatView: View {
     private var dismissAttachment: (() -> Void)?
 
     @StateObject private var model: NativeAgentChatModel
+    /// Claude sessions running in Terminals, which hold a writing's chats.
+    @ObservedObject private var terminalHolds = AgentTerminalHolds.shared
+    /// Shows the writing's Terminal, where the host has one.
+    private var showTerminal: (() -> Void)?
     @State private var draft = ""
     @State private var scrollToBottom = false
     @State private var connectionState = AIProviderConnectionState.checking
@@ -4102,7 +4141,10 @@ struct NativeAgentChatView: View {
 
     /// Sends the next waiting message, if this pane is free to.
     private func drainQueue() {
+        // Held by a Claude Terminal, the queue waits for the person's next
+        // Send once it has ended; it isn't tried again until then.
         guard !isPreparing, !model.isRunning, !model.queueHeld, !KeptAgentChats.isQuitting,
+              !AgentTerminalHolds.shared.isHeld(in: workspaceFolder),
               model.hasWaitingMessage else { return }
         guard let next = model.reserveNextQueued() else { return }
         startSending(next.text, queued: next.id)
@@ -4115,7 +4157,7 @@ struct NativeAgentChatView: View {
         // A message the person sends is their word to carry on, so whatever
         // was held back after a failure goes after it.
         if queued == nil { model.releaseQueue() }
-        guard !isPreparing else {
+        guard !isPreparing, !AgentTerminalHolds.shared.isHeld(in: workspaceFolder) else {
             if let queued { model.releaseQueued(queued) }
             return false
         }
@@ -4159,10 +4201,13 @@ struct NativeAgentChatView: View {
                         drainQueue()
                     } else {
                         // A message typed straight in, refused because the
-                        // conversation changed while it was being prepared.
-                        // The composer cleared it when it was accepted, so
-                        // without this it is simply gone.
-                        submissionError = "That message was not sent: the conversation changed while it was being prepared."
+                        // conversation changed while it was being prepared,
+                        // or a Claude Terminal began meanwhile. The composer
+                        // cleared it when it was accepted, so without this it
+                        // is simply gone.
+                        submissionError = AgentTerminalHolds.shared.isHeld(in: workspaceFolder)
+                            ? "That message was not sent: Claude is running in this writing’s Terminal."
+                            : "That message was not sent: the conversation changed while it was being prepared."
                         if draft.isEmpty { draft = prompt }
                     }
                 }
@@ -4282,9 +4327,16 @@ struct NativeAgentChatView: View {
                         if let attachment {
                             ChatAttachmentChip(attachment: attachment, dismiss: dismissAttachment)
                         }
+                        if isHeldByTerminal {
+                            TerminalHoldNotice(
+                                end: { terminalHolds.end(in: workspaceFolder) },
+                                show: showTerminal
+                            )
+                        }
                         NativeAgentChatInputView(
                             message: $draft,
-                            placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)"
+                            placeholder: model.isRunning ? "\(provider.shortName) is working…" : "Message \(provider.shortName)",
+                            isHeld: isHeldByTerminal
                         ) { prompt in
                             // While a reply is arriving the message waits its
                             // turn rather than being refused. A thought that
@@ -4528,6 +4580,18 @@ struct NativeAgentChatView: View {
     /// the reader or the writing, over the field it is written in, with a
     /// button to send without it. The host decides what is sent: dismissing
     /// asks it to leave the selection out.
+    /// Where Show Terminal leads, in a pane that holds a Terminal.
+    func showsTerminal(_ show: @escaping () -> Void) -> NativeAgentChatView {
+        var copy = self
+        copy.showTerminal = show
+        return copy
+    }
+
+    /// Whether a Claude Terminal holds this chat's writing now.
+    private var isHeldByTerminal: Bool {
+        !terminalHolds.launches.isEmpty && terminalHolds.isHeld(in: workspaceFolder)
+    }
+
     func attachment(_ attachment: ChatAttachment?, dismiss: (() -> Void)?) -> NativeAgentChatView {
         var copy = self
         copy.attachment = attachment
