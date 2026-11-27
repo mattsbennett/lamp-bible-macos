@@ -1208,6 +1208,14 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     }
 
     private nonisolated(unsafe) static var resolvedByName: [String: URL] = [:]
+
+    /// Looks for a CLI afresh, as a connection check does, so the program a
+    /// chat runs is the one the check found.
+    static func forgetResolved(named name: String) {
+        resolvedLock.lock()
+        resolvedByName[name] = nil
+        resolvedLock.unlock()
+    }
     private static let resolvedLock = NSLock()
 
     /// Finds a CLI ahead of its first use, off the main thread, so the first
@@ -1855,6 +1863,7 @@ private struct AgentToolApprovalCard: View {
 /// What Always Allow kept for a writing, each with its Remove.
 private struct SavedPermissionsList: View {
     let rules: [String]
+    let replying: Bool
     let remove: (String) -> Void
 
     var body: some View {
@@ -1863,6 +1872,13 @@ private struct SavedPermissionsList: View {
             Text("Claude may do these here without asking, on this Mac.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if replying {
+                // The running reply was started with them.
+                Text("Removing one takes effect from the next message. To end this reply's use of it now, press Stop.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(rules, id: \.self) { rule in
                 HStack {
                     Text(rule)
@@ -4506,7 +4522,7 @@ struct NativeAgentChatView: View {
                     .buttonStyle(.borderless)
                     .help("What Always Allow saved for this writing (\(savedPermissions.count))")
                     .popover(isPresented: $showingSavedPermissions, arrowEdge: .bottom) {
-                        SavedPermissionsList(rules: savedPermissions) { rule in
+                        SavedPermissionsList(rules: savedPermissions, replying: model.isRunning) { rule in
                             try? AgentToolAllowRules.remove(rule, for: workspaceFolder)
                             loadSavedPermissions()
                         }

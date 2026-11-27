@@ -138,6 +138,9 @@ enum AIProviderCommandRunner {
     private static let notInstalledMarker = "__LAMP_AI_CLI_NOT_INSTALLED__"
 
     static func connectionState(for provider: AIProviderCLI) async -> AIProviderConnectionState {
+        // Checked afresh, so the program a chat then runs is the one found
+        // here, not one remembered from before an install moved.
+        AgentCLIProcessRunner.forgetResolved(named: provider.executable)
         if provider == .antigravity { return await antigravityConnectionState() }
         let command = """
         if ! command -v \(provider.executable) >/dev/null 2>&1; then
@@ -792,20 +795,23 @@ enum DevotionalAgentWorkspaceStore {
     /// What the writing's settings hold that Lamp can't vouch for; see
     /// `AgentTerminalLaunchCheck`.
     @WritingWorkspaceFiles
-    static func terminalFindings(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> [AgentTerminalLaunchCheck.Finding] {
-        // Lamp's bundled skills brought up to the ones this build ships
-        // first, as opening the writing does, so a copy from an older Lamp is
-        // Lamp's again rather than a finding. Only those: a custom skill the
-        // writer is editing is theirs. And only through real folders: a
-        // linked one would lead the refresh out of the workspace, and is the
-        // scan's to report.
-        if AgentTerminalLaunchCheck.skillFoldersArePlain(in: workspace) {
-            try? installBundledSkillsIfNeeded(in: workspace)
-        }
-        return AgentTerminalLaunchCheck.findings(
+    static func terminalScan(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> (findings: [AgentTerminalLaunchCheck.Finding], restrictions: [String]) {
+        AgentTerminalLaunchCheck.scan(
             in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
             approvedRestrictions: AgentTerminalLaunchCheck.approvedRestrictions(for: workspace)
         )
+    }
+
+    @WritingWorkspaceFiles
+    static func terminalFindings(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> [AgentTerminalLaunchCheck.Finding] {
+        // Nothing written here: Lamp's skills were brought up to date as the
+        // writing's pane opened, which is where the Terminal is opened from,
+        // and a refresh now would write through folders that can change
+        // under it. A copy from an older Lamp is a finding, asked once.
+        AgentTerminalLaunchCheck.scan(
+            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
+            approvedRestrictions: AgentTerminalLaunchCheck.approvedRestrictions(for: workspace)
+        ).findings
     }
 
     /// What a Claude writing run is told in place of the workspace's
@@ -3092,7 +3098,8 @@ struct DevotionalAgentWorkspaceView: View {
         }
         // Checked every time, after an answer too: what was shown is what was
         // approved, and anything changed since is asked about again.
-        let findings = await DevotionalAgentWorkspaceStore.terminalFindings(in: workspaceURL, lampServer: lampServer)
+        let scanned = await DevotionalAgentWorkspaceStore.terminalScan(in: workspaceURL, lampServer: lampServer)
+        let findings = scanned.findings
         // What couldn't be looked at can't be approved.
         if let unchecked = findings.first(where: \.isIncomplete) {
             errorMessage = "Lamp didn’t open the Terminal: it couldn’t check all of this writing’s settings (\(unchecked.detail))."
@@ -3128,9 +3135,9 @@ struct DevotionalAgentWorkspaceView: View {
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
-        // Opened with what was checked: its restrictions are the reference
-        // for the next check.
-        AgentTerminalLaunchCheck.recordRestrictions(AgentTerminalLaunchCheck.restrictions(in: workspaceURL), for: workspaceURL)
+        // Opened with what was checked: its restrictions, as the scan read
+        // them, are the reference for the next check.
+        AgentTerminalLaunchCheck.recordRestrictions(scanned.restrictions, for: workspaceURL)
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —

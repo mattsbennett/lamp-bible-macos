@@ -246,7 +246,9 @@ struct AgentTerminalLaunchCheckTests {
         let state = FileManager.default.temporaryDirectory.appendingPathComponent("checks-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: state) }
         try write(#"{"permissions":{"allow":["Bash(git *)"],"deny":["Bash(git push *)"]}}"#, ".claude/settings.local.json", in: root)
-        AgentTerminalLaunchCheck.recordRestrictions(AgentTerminalLaunchCheck.restrictions(in: root), for: root, in: state)
+        AgentTerminalLaunchCheck.recordRestrictions(
+            AgentTerminalLaunchCheck.scan(in: root, lampServer: server, bundledSkills: bundle).restrictions, for: root, in: state
+        )
         func scan() -> [AgentTerminalLaunchCheck.Finding] {
             AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle,
                                               approvedRestrictions: AgentTerminalLaunchCheck.approvedRestrictions(for: root, in: state))
@@ -261,6 +263,13 @@ struct AgentTerminalLaunchCheckTests {
         // And so with the whole file gone.
         try FileManager.default.removeItem(at: root.appendingPathComponent(".claude/settings.local.json"))
         #expect(scan().contains { $0.detail.hasSuffix("deny Bash(git push *)") })
+        // And one in the project's settings, gone with that file.
+        try write(#"{"permissions":{"deny":["WebFetch"]}}"#, ".claude/settings.json", in: root)
+        AgentTerminalLaunchCheck.recordRestrictions(
+            AgentTerminalLaunchCheck.scan(in: root, lampServer: server, bundledSkills: bundle).restrictions, for: root, in: state
+        )
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".claude/settings.json"))
+        #expect(scan().contains { $0.detail.hasSuffix("deny WebFetch") })
     }
 
     /// A bundled skill holding anything its digest doesn't cover is scanned

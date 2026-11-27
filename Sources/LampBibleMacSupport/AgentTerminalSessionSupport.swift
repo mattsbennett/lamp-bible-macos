@@ -1164,7 +1164,19 @@ public enum AgentTerminalLaunchCheck {
         in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?,
         approvedRestrictions: [String] = []
     ) -> [Finding] {
+        scan(in: workspace, lampServer: lampServer, bundledSkills: bundledSkills, approvedRestrictions: approvedRestrictions).findings
+    }
+
+    /// The findings, and the restrictions in Claude's two project settings
+    /// files as the scan read them, which become the reference for the next
+    /// check if the Terminal opens: read once, from the bytes checked, and
+    /// only from plain files the walk reached.
+    public static func scan(
+        in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?,
+        approvedRestrictions: [String] = []
+    ) -> (findings: [Finding], restrictions: [String]) {
         var found: [Finding] = []
+        var restrictionsRead: [String] = []
         var counted = 0
         let expected: [String: String] = lampServer.map { server in
             [
@@ -1176,7 +1188,7 @@ public enum AgentTerminalLaunchCheck {
         // What can't be looked at is incomplete, never nothing: a provider
         // can still open a file by its known name in a folder Lamp can't list.
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: workspace.path) else {
-            return [Finding(path: ".", fingerprint: incomplete, detail: "the writing's folder could not be listed")]
+            return ([Finding(path: ".", fingerprint: incomplete, detail: "the writing's folder could not be listed")], [])
         }
         func visit(_ relative: String) {
             counted += 1
@@ -1215,6 +1227,9 @@ public enum AgentTerminalLaunchCheck {
                     return
                 }
                 if let lamps = expected[relative], size == lamps.utf8.count, head == Data(lamps.utf8) { return }
+                if [".claude/settings.local.json", ".claude/settings.json"].contains(relative), size <= Int64(settingsBytes) {
+                    restrictionsRead += restrictions(inSettingsData: head)
+                }
                 if relative == ".claude/settings.local.json", size <= Int64(settingsBytes),
                    let settings = claudeLocalSettings(head) {
                     found += settings.map {
@@ -1235,18 +1250,18 @@ public enum AgentTerminalLaunchCheck {
         }
         for name in names.sorted() where roots.contains(name.lowercased()) { visit(name) }
         // Restrictions in place when the Terminal last opened and gone now,
-        // the file itself gone included, which leaves none.
-        let now = Set(restrictions(in: workspace))
+        // from either project settings file, the file itself gone included.
+        let now = Set(restrictionsRead)
         for rule in approvedRestrictions where !now.contains(rule) {
             found.append(Finding(
-                path: ".claude/settings.local.json", fingerprint: digest("unrestricted\u{0}\(rule)"),
+                path: ".claude/settings", fingerprint: digest("unrestricted\u{0}\(rule)"),
                 detail: "a restriction taken away, which can widen what Claude may do: \(rule)", isPermission: true
             ))
         }
         if counted > largestCount {
             found.append(Finding(path: ".", fingerprint: incomplete, detail: "more than \(largestCount) entries, too many to check one by one"))
         }
-        return found
+        return (found, Array(Set(restrictionsRead)).sorted())
     }
 
     /// What a file's bytes hash to, read in pieces, with up to the first
@@ -1308,17 +1323,6 @@ public enum AgentTerminalLaunchCheck {
               let permissions = settings["permissions"] as? [String: Any]
         else { return [] }
         return ["ask", "deny"].flatMap { kind in ((permissions[kind] as? [Any]) ?? []).map { "\(kind) \(shown($0))" } }
-    }
-
-    /// The restrictions in a workspace's Claude local settings now, read as
-    /// the scan reads them; none where it can't be read plainly.
-    public static func restrictions(in workspace: URL) -> [String] {
-        let file = workspace.appendingPathComponent(".claude/settings.local.json")
-        var info = stat()
-        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= settingsBytes,
-              let data = try? Data(contentsOf: file)
-        else { return [] }
-        return restrictions(inSettingsData: data)
     }
 
     /// How a saved permission reads, which the sheet words as a
