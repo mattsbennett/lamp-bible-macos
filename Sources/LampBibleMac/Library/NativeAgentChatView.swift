@@ -536,7 +536,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                         self?.stop(process)
                     }
                     declineAll()
-                    send(["method": "session/cancel", "params": ["sessionId": sessionToCancel]])
+                    // After the replies, through the same writer, so none is
+                    // overtaken by the cancel.
+                    replies.async { send(["method": "session/cancel", "params": ["sessionId": sessionToCancel]]) }
                 } else {
                     self?.stop(process)
                     declineAll()
@@ -696,6 +698,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // Nothing outlives the turn on the card.
             stateLock.lock(); stopped = true; stateLock.unlock()
             declineAll()
+            // Every reply written before the input closes.
+            replies.sync {}
             // The turn is over: closing its input ends `agy acp`, which then
             // saves and exits; one that does not is stopped.
             try? input.fileHandleForWriting.close()
@@ -864,8 +868,10 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                         self?.stop(process)
                     }
                     declineAll()
-                    send(["id": 1_000_000, "method": "turn/interrupt",
-                          "params": AgentCodexRun.interrupt(threadID: toInterrupt.0, turnID: toInterrupt.1)])
+                    replies.async {
+                        send(["id": 1_000_000, "method": "turn/interrupt",
+                              "params": AgentCodexRun.interrupt(threadID: toInterrupt.0, turnID: toInterrupt.1)])
+                    }
                 } else {
                     self?.stop(process)
                     declineAll()
@@ -1022,6 +1028,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             // Nothing outlives the turn on the card.
             stateLock.lock(); stopped = true; stateLock.unlock()
             declineAll()
+            // Every reply written before the input closes.
+            replies.sync {}
             try? input.fileHandleForWriting.close()
             if !process.waitUntilExit(within: Self.stopGraceSeconds) {
                 stop(process)
@@ -2243,7 +2251,9 @@ enum KeptAgentChats {
     @MainActor
     static func holdForTerminal(in workspace: URL, seconds: Double = 120) -> UUID {
         let token = UUID()
-        heldForTerminal[workspace.standardizedFileURL.path, default: [:]][token] = Date().addingTimeInterval(seconds)
+        // Infinite: until released, with no timer.
+        heldForTerminal[workspace.standardizedFileURL.path, default: [:]][token] =
+            seconds.isFinite ? Date().addingTimeInterval(seconds) : .distantFuture
         releaseWhenDue(token, in: workspace)
         return token
     }
@@ -2259,7 +2269,7 @@ enum KeptAgentChats {
     /// Lets the hold go when its time is up, so what waited is told.
     @MainActor
     private static func releaseWhenDue(_ token: UUID, in workspace: URL) {
-        guard let due = heldForTerminal[workspace.standardizedFileURL.path]?[token] else { return }
+        guard let due = heldForTerminal[workspace.standardizedFileURL.path]?[token], due != .distantFuture else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due.timeIntervalSinceNow) + 0.05) {
             MainActor.assumeIsolated {
                 guard let now = heldForTerminal[workspace.standardizedFileURL.path]?[token], now <= Date() else { return }

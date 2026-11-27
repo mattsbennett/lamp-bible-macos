@@ -241,4 +241,12 @@ struct AgentTerminalLaunchCheckTests {
         // Still capturing as before.
         #expect(start.count >= 2)
     }
+
+    /// A pipe among the settings can't be looked at, so no answer covers it.
+    @Test func aSpecialFileIsIncomplete() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(mkfifo(root.appendingPathComponent(".claude/settings.json").path, 0o644) == 0)
+        #expect(findings(root, server, bundle).contains { $0.path == ".claude/settings.json" && $0.isIncomplete })
+    }
 }

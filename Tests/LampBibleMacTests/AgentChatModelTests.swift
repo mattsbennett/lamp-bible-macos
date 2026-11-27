@@ -90,6 +90,10 @@ struct AgentChatModelTests {
         #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
         #expect(await model.send("Hello", contextualPrompt: "Hello") == false)
         #expect(model.messages.isEmpty && !model.isRunning)
+        // One held while Lamp checks has no end of its own.
+        let checking = KeptAgentChats.holdForTerminal(in: workspace, seconds: .infinity)
+        #expect(KeptAgentChats.terminalHoldEnds(in: workspace) == .distantFuture)
+        KeptAgentChats.releaseTerminalHold(checking, in: workspace)
         // Two launches each own their hold: one let go leaves the other.
         let second = KeptAgentChats.holdForTerminal(in: workspace)
         KeptAgentChats.releaseTerminalHold(first, in: workspace)

@@ -446,7 +446,7 @@ public enum ClaudePermissionHook {
             "id=$(/usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z')",
             "t=$(/usr/bin/mktemp \"$d/.request.XXXXXXXX\") && /bin/cat > \"$t\" && /bin/mv \"$t\" \"$d/request-$id.json\" || exit 0",
             "while [ \"$(/bin/date +%s)\" -lt \"$end\" ]; do",
-            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; /bin/cp \"$d/answer-$id.json\" \"$d/taken-$id\"; exit 0; fi",
+            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; /bin/ln \"$d/answer-$id.json\" \"$d/taken-$id\"; exit 0; fi",
             "  [ -d \"$d\" ] || exit 0",
             "  /bin/sleep 0.2",
             "done",

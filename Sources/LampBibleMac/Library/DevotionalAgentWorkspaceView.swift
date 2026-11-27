@@ -3084,7 +3084,10 @@ struct DevotionalAgentWorkspaceView: View {
         // held by this launch from here, released if it doesn't open, and
         // once it does when the CLI shows it has started (its first report),
         // or after a while for one that reports nothing until asked.
-        let hold = KeptAgentChats.holdForTerminal(in: workspaceURL)
+        // Without an end of its own while Lamp prepares and checks, however
+        // long that takes: a fallback starts only once the Terminal has its
+        // command.
+        let hold = KeptAgentChats.holdForTerminal(in: workspaceURL, seconds: .infinity)
         var opened = false
         defer { if !opened { KeptAgentChats.releaseTerminalHold(hold, in: workspaceURL) } }
         // The writing's context written first, so the check is the last
@@ -3132,8 +3135,9 @@ struct DevotionalAgentWorkspaceView: View {
         opened = true
         terminalHold.map { KeptAgentChats.releaseTerminalHold($0, in: workspaceURL) }
         terminalHold = hold
-        // Until the CLI marks its start, or for one that can't, a while.
-        if terminalReadyMarker == nil { KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: 30) }
+        // Until the CLI marks its start; for one that can't, a while; and for
+        // one that can but never does, longer.
+        KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: terminalReadyMarker == nil ? 30 : 120)
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —

@@ -575,11 +575,9 @@ struct AgentTerminalLauncherTests {
             openCodeConfigDirectory: workspace.appendingPathComponent("opencode-config"),
             launchRoot: launchRoot(for: workspace)
         )
-        let script = try String(
-            contentsOf: AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot(for: workspace))
-                .appendingPathComponent("launch.sh"),
-            encoding: .utf8
-        )
+        let script = try String(contentsOf: prepared.launchFolder.appendingPathComponent("launch.sh"), encoding: .utf8)
+        // A folder of this launch's own, within the writing's, outside it.
+        #expect(prepared.launchFolder.deletingLastPathComponent() == AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot(for: workspace)))
         // What the Terminal runs is never in the workspace, where an agent
         // could have written it.
         #expect(!prepared.command.contains(workspace.path))
@@ -632,11 +630,7 @@ struct AgentTerminalLauncherTests {
 
         #expect(prepared.resumedSessionID == nil)
         #expect(prepared.carriesRecap)
-        let recap = try String(
-            contentsOf: AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot(for: workspace))
-                .appendingPathComponent("earlier-conversation.md"),
-            encoding: .utf8
-        )
+        let recap = try String(contentsOf: prepared.launchFolder.appendingPathComponent("earlier-conversation.md"), encoding: .utf8)
         #expect(recap.contains("MANGO"))
         #expect(script.contains("OPENCODE_CONFIG_CONTENT="))
         #expect(FileManager.default.fileExists(
