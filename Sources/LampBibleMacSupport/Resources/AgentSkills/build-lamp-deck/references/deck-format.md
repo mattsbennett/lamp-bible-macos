@@ -706,10 +706,16 @@ the new video: after every render, write the names it returned into the deck.
   reading files from the page's folder. Not there: controls (nothing is
   interactive), WebXR, exporters, physics, and anything needing a decoder
   from `libs/` — Draco- or KTX2-compressed models and EXR images. Save a model
-  as plain glTF instead. Nor yet the WebGPU variants, which import
-  `three/webgpu` or `three/tsl` — `WaterMesh`, `lines/webgpu/`, the `tsl`
-  folder: use `Water.js` and `lines/Line2.js`. An addon Lamp lacks stops the
-  render with its name.
+  as plain glTF instead. An addon Lamp lacks stops the render with its name.
+- **WebGPU**, for compute or TSL node materials: import from `three/webgpu`
+  (and `three/tsl`), make a `WebGPURenderer`, and `await renderer.init()`
+  before setting `window.lamp`. The WebGPU addons (`WaterMesh`,
+  `lines/webgpu/`, `tsl/display/` with bloom and the rest) go with it, and
+  post-processing goes through `RenderPipeline`. On a Mac without WebGPU (before
+  macOS 26) the same page draws with WebGL and may look a little different;
+  `render_animation` says which drew. Draw on a canvas in the page: WebGPU
+  on an `OffscreenCanvas`, or in a worker, reaches no frame Lamp keeps, and is
+  refused. If the scene doesn't need WebGPU, plain `three` is simpler.
 - **A page written for 0.170** that uses something three has since taken
   away, such as `WebGLMultipleRenderTargets` (now `WebGLRenderTarget` with a
   `count`), stops with what is missing when it is drawn again; the video

@@ -384,19 +384,27 @@ public enum LampAnimationRenderer {
 
         let sampleFrames = Set([0, frameCount / 4, frameCount / 2, frameCount * 3 / 4])
         var drewWith: String?
-        // The first frame drawn once and not kept: three's WebGPU pipeline,
-        // and any page building its shaders on its first draw, shows nothing
-        // until then, and the first frame is the still (tried: frame 0 of a
-        // RenderPipeline page was black, frame 1 right). `render(t)` hangs
-        // on `t` alone, so drawing it twice draws the same.
-        do {
-            _ = try await within(frameTimeout, "to draw a frame") {
-                try await script(view, "await window.lamp.render(0); return true;", server: server)
+        // On a WebGPU page, the first frame drawn once and not kept: three's
+        // RenderPipeline shows nothing until its first draw has built its
+        // shaders, and the first frame is the still (tried: frame 0 of one
+        // was black, frame 1 right). Only there: a 2D or WebGL page is drawn
+        // once a frame, as it always was, since one painting over its last
+        // frame would show the first one twice.
+        let drawsWithWebGPU = (try? await within(frameTimeout, "to set up its scene") {
+            (try? await view.evaluateJavaScript(
+                "(() => { try { return window.__lampWebGPUKeep?.drew?.has('webgpu') === true; } catch { return false; } })()"
+            )) as? Bool
+        }) ?? false
+        if drawsWithWebGPU == true {
+            do {
+                _ = try await within(frameTimeout, "to draw a frame") {
+                    try await script(view, "await window.lamp.render(0); return true;", server: server)
+                }
+            } catch RenderError.timedOut {
+                throw RenderError.frameTimedOut(0)
             }
-        } catch RenderError.timedOut {
-            throw RenderError.frameTimedOut(0)
+            if let error = server.pageErrors.first { throw RenderError.script(error) }
         }
-        if let error = server.pageErrors.first { throw RenderError.script(error) }
         var samples: [(Double, Data)] = []
         do {
             for index in 0..<frameCount {
@@ -446,10 +454,14 @@ public enum LampAnimationRenderer {
                 }
             }
             // What the page's canvases drew with, as the keep script saw them.
-            let kinds = (try? await view.evaluateJavaScript(
-                "(() => { try { return [...(window.__lampWebGPUKeep?.drew ?? [])].sort().join('+'); } catch { return ''; } })()"
-            )) as? String
-            drewWith = kinds.flatMap { $0.isEmpty ? nil : $0 }
+            // Bounded, as every call into the page is: it is only what is said
+            // about the video, and must not hold the encoder.
+            let kinds = try? await within(frameTimeout, "to say what it drew with") {
+                (try? await view.evaluateJavaScript(
+                    "(() => { try { return [...(window.__lampWebGPUKeep?.drew ?? [])].sort().join('+'); } catch { return ''; } })()"
+                )) as? String
+            }
+            drewWith = kinds.flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
             input.markAsFinished()
             await writer.finishWriting()
             guard writer.status == .completed else {

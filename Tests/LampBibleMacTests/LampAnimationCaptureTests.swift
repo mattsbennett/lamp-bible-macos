@@ -184,6 +184,77 @@ struct LampAnimationCaptureTests {
         #expect(try await wrongFrames(html).isEmpty)
     }
 
+    /// A frame that uploads a material's texture after asking for its own
+    /// and before drawing is kept as drawn, not as it was before.
+    @Test(.enabled(if: LampAnimationCaptureTests.hasWebGPU))
+    func anUploadBeforeTheDrawDoesNotKeepTheFrameEarly() async throws {
+        let html = Self.webGPUPage(
+            beforeRender: """
+            const view = context.getCurrentTexture();
+            const material = device.createTexture({ size: [4, 4], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING });
+            device.queue.writeTexture({ texture: material }, new Uint8Array(64), { bytesPerRow: 16 }, [4, 4]);
+            const upload = device.createCommandEncoder();
+            device.queue.submit([upload.finish()]);
+            """
+        )
+        let wrong = try await wrongFrames(html)
+        #expect(wrong.isEmpty, "frames kept wrong: \(wrong)")
+    }
+
+    /// A canvas configured again and not drawn on is empty, as the spec has
+    /// it, not the frame before.
+    @Test(.enabled(if: LampAnimationCaptureTests.hasWebGPU))
+    func aCanvasConfiguredAgainIsEmptyUntilDrawn() async throws {
+        let html = Self.webGPUPage()
+            .replacingOccurrences(of: "background:#000", with: "background:#fff")
+            .replacingOccurrences(of: "alphaMode: \"opaque\"", with: "alphaMode: \"premultiplied\"")
+            .replacingOccurrences(
+                of: "const [r, g, b] = palette",
+                with: "if (Math.round(t * 12) % 2 === 1) { context.configure({ device, format, alphaMode: \"premultiplied\" }); return; }\n          const [r, g, b] = palette"
+            )
+        let shown = try await colours(html, at: (0.5, 0.5))
+        for (index, colour) in shown.enumerated() where index % 2 == 1 {
+            #expect(colour.0 > 0.9 && colour.1 > 0.9 && colour.2 > 0.9, "frame \(index): \(colour)")
+        }
+    }
+
+    /// WebGPU on an offscreen canvas reaches no snapshot, so it is refused
+    /// by name.
+    @Test(.enabled(if: LampAnimationCaptureTests.hasWebGPU))
+    func webGPUOnAnOffscreenCanvasIsRefused() async throws {
+        let html = Self.webGPUPage().replacingOccurrences(
+            of: "const palette =", with: "new OffscreenCanvas(64, 64).getContext(\"webgpu\");\n        const palette ="
+        )
+        do {
+            _ = try await wrongFrames(html)
+            Issue.record("rendered with WebGPU on an offscreen canvas")
+        } catch {
+            #expect(error.localizedDescription.contains("OffscreenCanvas"), "\(error.localizedDescription)")
+        }
+    }
+
+    /// A 2D page is drawn once a frame, never twice: one painting over its
+    /// last frame would show the first one twice.
+    @Test func a2DPageIsDrawnOnceAFrame() async throws {
+        let html = """
+        <!doctype html><html><head></head><body style="margin:0">
+        <canvas id="c" width="256" height="256" style="width:100vw;height:100vh;display:block"></canvas>
+        <script type="module">
+        const flat = document.getElementById("c").getContext("2d");
+        const palette = \(Self.paletteJS);
+        let calls = 0;
+        window.lamp = { duration: 1, render(t) {
+          calls += 1;
+          const index = Math.round(t * 12);
+          const [r, g, b] = calls === index + 1 ? palette[index % palette.length] : [0.5, 0.5, 0.5];
+          flat.fillStyle = `rgb(${r * 255}, ${g * 255}, ${b * 255})`;
+          flat.fillRect(0, 0, 256, 256);
+        } };
+        </script></body></html>
+        """
+        #expect(try await wrongFrames(html).isEmpty)
+    }
+
     /// The colour at `point` of each frame, as 0 to 1.
     private func colours(_ html: String, at point: (Double, Double)) async throws -> [(Double, Double, Double)] {
         let root = try folder()
