@@ -140,7 +140,16 @@ struct AgentTerminalLaunchCheckTests {
         try write(#"{"permissions":{"allow":["Bash(npm test)","Bash(make)","WebSearch","Bash"]}}"#, ".claude/settings.local.json", in: root)
         let now = findings(root, server, bundle)
         #expect(!AgentTerminalLaunchCheck.isApproved(now, for: root, in: state))
-        #expect(now.filter { !saved.map(\.id).contains($0.id) }.map(\.detail) == ["a permission saved for Claude: allow Bash"])
+        // Shown: only what is new, and as a permission.
+        let shown = AgentTerminalLaunchCheck.unapproved(now, for: root, in: state)
+        #expect(shown.map(\.detail) == ["a permission saved for Claude: allow Bash"])
+        #expect(shown.allSatisfy { $0.isPermission })
+        // Kept, the earlier ones stay kept.
+        try AgentTerminalLaunchCheck.approve(shown, for: root, in: state)
+        #expect(AgentTerminalLaunchCheck.isApproved(findings(root, server, bundle), for: root, in: state))
+        // A file that merely says so is no permission.
+        try write("a permission saved for Claude: allow Bash", ".claude/notes.txt", in: root)
+        #expect(findings(root, server, bundle).first { $0.path == ".claude/notes.txt" }?.isPermission == false)
     }
 
     @Test func lampsFilesAreRestoredOnlyInsideTheWorkspace() throws {
@@ -220,5 +229,16 @@ struct AgentTerminalLaunchCheckTests {
         let odd = "notes\u{2028}x"
         try write("---\nname: \(odd)\ndescription: \"N\"\n---\n\nTake notes.\n", ".claude/skills/\(odd)/SKILL.md", in: root)
         #expect(findings(root, server, bundle).contains { $0.path.contains("SKILL.md") && $0.path.contains("notes") })
+    }
+
+    /// A Claude launch marks its start in Lamp's own folder, never the
+    /// workspace's, and the mark is this launch's.
+    @Test func aClaudeLaunchMarksItsStartInLampsFolder() throws {
+        let marker = URL(fileURLWithPath: "/Users/Reader/Library/Application Support/Lamp Bible/Terminal Launches/abc/ready-1")
+        let settings = try #require(try JSONSerialization.jsonObject(with: AgentTerminalLaunchPlanner.claudeSettings(readyMarker: marker)) as? [String: Any])
+        let start = try #require(((settings["hooks"] as? [String: Any])?["SessionStart"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
+        #expect(start.contains { ($0["command"] as? String)?.contains("touch '/Users/Reader/Library/Application Support/Lamp Bible/Terminal Launches/abc/ready-1'") == true })
+        // Still capturing as before.
+        #expect(start.count >= 2)
     }
 }

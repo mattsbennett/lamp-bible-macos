@@ -259,12 +259,16 @@ struct AgentToolApprovalSupportTests {
 
         #expect(!channel.waitUntilTaken(request.id, seconds: 0.1))
         try channel.answer(request.id, with: .allow)
+        // Once: another pane's answer after it is refused, not written over.
+        #expect(throws: AgentToolApprovalChannel.AnswerError.alreadyAnswered) { try channel.answer(request.id, with: .deny) }
         try await waitForExit(hook.process)
         #expect(hook.process.terminationStatus == 0)
         #expect(hook.output.fileHandleForReading.readDataToEndOfFile() == AgentToolApprovalAnswer.allow.hookOutput)
         // It marks what it took, so Lamp keeps a rule only for an answer
-        // that was heard.
+        // that was heard, and only if it is the one that was.
         #expect(channel.waitUntilTaken(request.id))
+        #expect(channel.waitUntilTaken(request.id, answer: .allow))
+        #expect(!channel.waitUntilTaken(request.id, answer: .deny, seconds: 0))
     }
 
     @Test func theHookGivesNoDecisionOnceLampStopsListening() async throws {

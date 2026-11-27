@@ -414,6 +414,9 @@ public enum AgentTerminalLauncher {
         /// Lamp wrote its integration afresh — for OpenCode, the plugin, which
         /// OpenCode then installs again on load.
         public var integrationWrittenAfresh: Bool
+        /// Where this launch's CLI says it has started, for one that can
+        /// (Claude); nil for one that can't, whose hold ends by time.
+        public var readyMarker: URL?
     }
 
     public static func prepare(
@@ -461,7 +464,9 @@ public enum AgentTerminalLauncher {
         }
 
         let claudeSettings = terminalDirectory.appendingPathComponent("claude-settings.json")
-        try AgentTerminalLaunchPlanner.claudeSettings().write(to: claudeSettings, options: .atomic)
+        // This launch's own, so an older one's start doesn't count for it.
+        let readyMarker = terminalDirectory.appendingPathComponent("ready-\(UUID().uuidString)")
+        try AgentTerminalLaunchPlanner.claudeSettings(readyMarker: readyMarker).write(to: claudeSettings, options: .atomic)
         let integrationWrittenAfresh = provider == .openCode
             ? try installOpenCodePlugin(in: openCodeConfigDirectory)
             : false
@@ -494,7 +499,8 @@ public enum AgentTerminalLauncher {
             command: "exec /bin/sh " + AgentTerminalLaunchPlanner.shellQuote(script.path),
             resumedSessionID: resumeSessionID,
             carriesRecap: recapText != nil,
-            integrationWrittenAfresh: integrationWrittenAfresh
+            integrationWrittenAfresh: integrationWrittenAfresh,
+            readyMarker: provider == .claude ? readyMarker : nil
         )
     }
 
@@ -801,12 +807,20 @@ public enum AgentTerminalLaunchPlanner {
 
     /// The settings file for Claude's capture hooks, and the context hook
     /// that hands over the editor's state with each message.
-    public static func claudeSettings() throws -> Data {
+    /// `readyMarker`: a file in Lamp's own folder the session touches as it
+    /// starts, once it has read its settings, which is how Lamp knows a
+    /// launch is ready (`decisions/0032`); never anything in the workspace,
+    /// which an agent could write.
+    public static func claudeSettings(readyMarker: URL? = nil) throws -> Data {
         let capture: [String: Any] = ["type": "command", "command": captureCommand(prefix: "claude")]
         let context: [String: Any] = ["type": "command", "command": contextCommand]
         var hooks = Dictionary(uniqueKeysWithValues: capturedEvents.map { event in
             (event, [["hooks": event == contextEvent ? [capture, context] : [capture]]])
         })
+        if let readyMarker {
+            let ready: [String: Any] = ["type": "command", "command": "/usr/bin/touch " + shellQuote(readyMarker.path)]
+            hooks["SessionStart"] = [["hooks": (hooks["SessionStart"]?.first?["hooks"] as? [[String: Any]] ?? []) + [ready]]]
+        }
         // What the assistant wrote, said by the assistant.
         //
         // The editor sees only that a file in the workspace changed, and
@@ -1105,6 +1119,9 @@ public enum AgentTerminalLaunchCheck {
         /// What is shown: the setting and its whole value, a small file's
         /// text, a link's target, or a file's size.
         public let detail: String
+        /// A permission parsed from Claude's local settings, set by the scan
+        /// alone, which the sheet words as a confirmation.
+        public var isPermission = false
         public var id: String { path + "\u{0}" + fingerprint }
         /// Something the check could not look at, which no answer can cover.
         public var isIncomplete: Bool { fingerprint == AgentTerminalLaunchCheck.incomplete }
@@ -1186,7 +1203,9 @@ public enum AgentTerminalLaunchCheck {
                 if let lamps = expected[relative], size == lamps.utf8.count, head == Data(lamps.utf8) { return }
                 if relative == ".claude/settings.local.json", size <= Int64(settingsBytes),
                    let settings = claudeLocalSettings(head) {
-                    found += settings.map { Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown) }
+                    found += settings.map {
+                        Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown, isPermission: $0.canonical.hasPrefix("grant\u{0}"))
+                    }
                     return
                 }
                 let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
@@ -1366,13 +1385,20 @@ public enum AgentTerminalLaunchCheck {
         try? save(records, to: file)
     }
 
-    /// The person said to open with exactly these: replacing what was
-    /// approved before, so one that has gone is not approved for ever.
+    /// The person said to open with these, as shown: added to what they
+    /// said before, which `keepApprovals` trims to what is still there.
     public static func approve(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) throws {
         storeLock.lock()
         defer { storeLock.unlock() }
         var records = load(file)
-        records[key(workspace), default: Record()].approved = findings.map(\.id).sorted()
+        let before = Set(records[key(workspace)]?.approved ?? [])
+        records[key(workspace), default: Record()].approved = Array(before.union(findings.map(\.id))).sorted()
         try save(records, to: file)
+    }
+
+    /// The findings not yet approved, which are what is shown.
+    public static func unapproved(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) -> [Finding] {
+        let approved = Set(load(file)[key(workspace)]?.approved ?? [])
+        return findings.filter { !approved.contains($0.id) }
     }
 }

@@ -1319,6 +1319,8 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var terminalLaunchCheck: TerminalLaunchCheck?
     /// This pane's hold on the writing while its Terminal starts.
     @State private var terminalHold: UUID?
+    /// Where this launch's CLI marks that it has started, for one that can.
+    @State private var terminalReadyMarker: URL?
     /// Kept apart from `errorMessage`: the refresh loop runs every 400ms, so
     /// clearing one state for both would erase what a failed add just reported
     /// before anyone could read it.
@@ -2091,6 +2093,11 @@ struct DevotionalAgentWorkspaceView: View {
                         guard launch == terminalID else { return }
                         terminalExitCode = exitCode
                         terminalDidExit(exitStatus: exitCode)
+                        // Ended, so it reads nothing more: the hold goes.
+                        if let hold = terminalHold {
+                            KeptAgentChats.releaseTerminalHold(hold, in: workspaceURL)
+                            terminalHold = nil
+                        }
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
                 )
@@ -3105,13 +3112,16 @@ struct DevotionalAgentWorkspaceView: View {
         }
         AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings, for: workspaceURL)
         if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspaceURL) {
-            terminalLaunchCheck = TerminalLaunchCheck(provider: provider, findings: findings)
+            // Only what is new since the last answer.
+            terminalLaunchCheck = TerminalLaunchCheck(
+                provider: provider, findings: AgentTerminalLaunchCheck.unapproved(findings, for: workspaceURL)
+            )
             return
         }
         _ = checked
         scheduleEditorSync(draftMarkdown)
         do {
-            terminalCommand = try prepareTerminalLaunch(of: provider, in: workspaceURL)
+            (terminalCommand, terminalReadyMarker) = try prepareTerminalLaunch(of: provider, in: workspaceURL)
         } catch {
             errorMessage = "Couldn’t prepare the Terminal session: \(error.localizedDescription)"
             return
@@ -3122,7 +3132,8 @@ struct DevotionalAgentWorkspaceView: View {
         opened = true
         terminalHold.map { KeptAgentChats.releaseTerminalHold($0, in: workspaceURL) }
         terminalHold = hold
-        KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: 30)
+        // Until the CLI marks its start, or for one that can't, a while.
+        if terminalReadyMarker == nil { KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: 30) }
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —
@@ -3130,7 +3141,7 @@ struct DevotionalAgentWorkspaceView: View {
     private func prepareTerminalLaunch(
         of provider: AIProviderCLI,
         in workspace: URL
-    ) throws -> String {
+    ) throws -> (String, URL?) {
         let prepared = try AgentTerminalLauncher.prepare(
             providerID: provider.rawValue,
             executable: provider.executable,
@@ -3157,7 +3168,7 @@ struct DevotionalAgentWorkspaceView: View {
                 ? "\(provider.shortName) was given a recap of the earlier conversation, whose session can’t be resumed on this Mac."
                 : nil
         )
-        return prepared.command
+        return (prepared.command, prepared.readyMarker)
     }
 
     private func collectTerminalTurns(in workspace: URL) {
@@ -3165,9 +3176,11 @@ struct DevotionalAgentWorkspaceView: View {
             workspace: workspace,
             installID: LampInstallIdentity.current()
         ) else { return }
-        // The CLI has started, and so has read its settings: the writing's
-        // chats may go on.
-        if result.integrationReported || result.linkedSessionID != nil, let hold = terminalHold {
+        // This launch's CLI has started, and so has read its settings, by a
+        // mark in Lamp's own folder only it makes: the writing's chats may go
+        // on. Never by what arrives in the workspace, which anyone can write.
+        if let hold = terminalHold, let marker = terminalReadyMarker,
+           FileManager.default.fileExists(atPath: marker.path) {
             KeptAgentChats.releaseTerminalHold(hold, in: workspace)
             terminalHold = nil
         }
@@ -3225,6 +3238,10 @@ struct DevotionalAgentWorkspaceView: View {
         // ending means the session has ended.
         guard launch == terminalID, activeProvider != nil else { return }
         if let workspaceURL { collectTerminalTurns(in: workspaceURL) }
+        if let hold = terminalHold, let workspaceURL {
+            KeptAgentChats.releaseTerminalHold(hold, in: workspaceURL)
+            terminalHold = nil
+        }
         activeProvider = nil
         terminalExitCode = nil
         terminalCapture = TerminalCaptureState()
@@ -3786,7 +3803,7 @@ private struct TerminalLaunchCheckSheet: View {
     var body: some View {
         // Only permissions saved for Claude: most likely the person's own
         // "don't ask again", so it reads as a confirmation.
-        let onlyPermissions = check.findings.allSatisfy { $0.detail.hasPrefix(AgentTerminalLaunchCheck.permissionPrefix) }
+        let onlyPermissions = check.findings.allSatisfy(\.isPermission)
         VStack(alignment: .leading, spacing: 12) {
             Text(onlyPermissions ? "Keep the permissions saved for Claude?" : "This writing’s settings hold things Lamp didn’t put there")
                 .font(.headline)

@@ -96,8 +96,14 @@ struct AgentChatModelTests {
         #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
         KeptAgentChats.releaseTerminalHold(second, in: workspace)
         #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
-        // And a hold ends by itself.
-        _ = KeptAgentChats.holdForTerminal(in: workspace, seconds: -1)
+        // And a hold ends by itself, telling the panes waiting on it.
+        let ended = NotificationCenter.default.notifications(named: KeptAgentChats.terminalHoldEnded)
+        _ = KeptAgentChats.holdForTerminal(in: workspace, seconds: 0.1)
+        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
+        for await note in ended {
+            #expect(note.object as? String == workspace.standardizedFileURL.path)
+            break
+        }
         #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
     }
 

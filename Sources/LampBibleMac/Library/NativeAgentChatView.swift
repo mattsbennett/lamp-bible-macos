@@ -480,6 +480,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             var promptID: Int?
             var cancelSent = false
             var stopped = false
+            let replies = DispatchQueue(label: "lamp.acp.replies")
             // Commands on the card, by Lamp's key: the agent's own id to
             // answer with, its request (for the options), and as shown.
             var waiting: [(key: String, id: Any, params: [String: Any], request: AgentToolApprovalRequest)] = []
@@ -502,7 +503,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: answer, permission: entry.params)
                 publish()
                 stateLock.unlock()
-                send(["id": entry.id, "result": ["outcome": outcome]])
+                // Written off the caller's thread, the card's being the main
+                // one: an agent that has stopped reading would hold it.
+                replies.async { send(["id": entry.id, "result": ["outcome": outcome]]) }
                 return true
             }
             func declineAll() {
@@ -808,6 +811,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             var turn: String?
             var interruptSent = false
             var stopped = false
+            let replies = DispatchQueue(label: "lamp.codex.replies")
             // Requests on the card, by Lamp's key: Codex's own id, to answer
             // with, and the request as shown.
             var waiting: [(key: String, id: Any, request: AgentToolApprovalRequest)] = []
@@ -830,7 +834,8 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 let given = stopped || isCancelled ? .deny : answer
                 publish()
                 stateLock.unlock()
-                send(["id": entry.id, "result": AgentCodexRun.decision(given)])
+                // Off the caller's thread, as for Antigravity.
+                replies.async { send(["id": entry.id, "result": AgentCodexRun.decision(given)]) }
                 return true
             }
             func declineAll() {
@@ -2239,6 +2244,7 @@ enum KeptAgentChats {
     static func holdForTerminal(in workspace: URL, seconds: Double = 120) -> UUID {
         let token = UUID()
         heldForTerminal[workspace.standardizedFileURL.path, default: [:]][token] = Date().addingTimeInterval(seconds)
+        releaseWhenDue(token, in: workspace)
         return token
     }
 
@@ -2247,14 +2253,33 @@ enum KeptAgentChats {
         let key = workspace.standardizedFileURL.path
         guard heldForTerminal[key]?[token] != nil else { return }
         heldForTerminal[key]?[token] = Date().addingTimeInterval(seconds)
+        releaseWhenDue(token, in: workspace)
+    }
+
+    /// Lets the hold go when its time is up, so what waited is told.
+    @MainActor
+    private static func releaseWhenDue(_ token: UUID, in workspace: URL) {
+        guard let due = heldForTerminal[workspace.standardizedFileURL.path]?[token] else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due.timeIntervalSinceNow) + 0.05) {
+            MainActor.assumeIsolated {
+                guard let now = heldForTerminal[workspace.standardizedFileURL.path]?[token], now <= Date() else { return }
+                releaseTerminalHold(token, in: workspace)
+            }
+        }
     }
 
     @MainActor
     static func releaseTerminalHold(_ token: UUID, in workspace: URL) {
         let key = workspace.standardizedFileURL.path
         heldForTerminal[key]?[token] = nil
-        if heldForTerminal[key]?.isEmpty == true { heldForTerminal[key] = nil }
+        if heldForTerminal[key]?.isEmpty == true {
+            heldForTerminal[key] = nil
+            // The panes open on it send what waited.
+            NotificationCenter.default.post(name: terminalHoldEnded, object: key)
+        }
     }
+
+    static let terminalHoldEnded = Notification.Name("LampTerminalHoldEnded")
 
     @MainActor
     static func terminalHoldEnds(in workspace: URL) -> Date? {
@@ -2913,7 +2938,7 @@ final class NativeAgentChatModel: ObservableObject {
             // Always Allow answers the hook took, kept before the channel's
             // folder, and the hook's marks in it, go.
             if let channel {
-                for grant in grantsAwaitingTheHook where channel.waitUntilTaken(grant.id, seconds: 0) {
+                for grant in grantsAwaitingTheHook where channel.waitUntilTaken(grant.id, answer: .alwaysAllow(grant.rule), seconds: 0) {
                     try? AgentToolAllowRules.add(grant.rule.rules, for: workspace)
                 }
             }
@@ -3251,7 +3276,7 @@ final class NativeAgentChatModel: ObservableObject {
                 grantsAwaitingTheHook.append((request.id, rule))
                 let workspace = workspace
                 Task { [weak self] in
-                    let taken = await Task.detached { approvalChannel.waitUntilTaken(request.id) }.value
+                    let taken = await Task.detached { approvalChannel.waitUntilTaken(request.id, answer: answer) }.value
                     guard let self else { return }
                     // Settled already, as the run ended.
                     guard self.grantsAwaitingTheHook.contains(where: { $0.id == request.id }) else { return }
@@ -3959,10 +3984,8 @@ struct NativeAgentChatView: View {
             if let queued { model.releaseQueued(queued) } else {
                 submissionError = "The Terminal is starting in this writing. Send this again in a moment."
             }
-            // Tried again once the hold is over: nothing else would drain the
-            // queue, no run having finished.
-            let wait = max(0.2, (KeptAgentChats.terminalHoldEnds(in: workspaceFolder)?.timeIntervalSinceNow ?? 0) + 0.2)
-            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { drainQueue() }
+            // Tried again when the hold ends (`terminalHoldEnded`), by the
+            // panes open then.
             return false
         }
         guard !isPreparing else {
@@ -4254,6 +4277,10 @@ struct NativeAgentChatView: View {
             if let context { model.notificationContext = context }
         }
         .reportsVisibility(to: visibility)
+        // What waited while the writing's Terminal started goes when it has.
+        .onReceive(NotificationCenter.default.publisher(for: KeptAgentChats.terminalHoldEnded)) { note in
+            if note.object as? String == workspaceFolder.standardizedFileURL.path { drainQueue() }
+        }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at

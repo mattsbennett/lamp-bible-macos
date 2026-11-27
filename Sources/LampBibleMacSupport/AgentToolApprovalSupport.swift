@@ -273,32 +273,54 @@ public struct AgentToolApprovalChannel: Sendable {
 
     public enum AnswerError: LocalizedError {
         case expired
+        case alreadyAnswered
 
         public var errorDescription: String? {
-            "That request had already timed out, and the tool call was denied."
+            switch self {
+            case .expired: "That request had already timed out, and the tool call was denied."
+            case .alreadyAnswered: "That request was already answered."
+            }
         }
     }
 
     /// Writes the decision the waiting hook prints. Written whole, then
     /// renamed into place, so the hook never reads half of one. A request its
     /// hook has taken back can't be answered: nothing would read it.
+    ///
+    /// Once: a second answer, from another pane on the same chat, is refused
+    /// rather than written over the first, which the hook may already have
+    /// taken. Linked into place, which fails where one is there.
     public func answer(_ id: String, with answer: AgentToolApprovalAnswer) throws {
         guard FileManager.default.fileExists(atPath: requestURL(id).path) else {
             throw AnswerError.expired
         }
-        try answer.hookOutput.write(to: answerURL(id), options: .atomic)
+        let draft = directory.appendingPathComponent(".answer-\(UUID().uuidString)")
+        try answer.hookOutput.write(to: draft)
+        defer { unlink(draft.path) }
+        guard link(draft.path, answerURL(id).path) == 0 else {
+            if errno == EEXIST { throw AnswerError.alreadyAnswered }
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 
     /// Whether the hook took the answer to `id`, waiting for it to settle:
     /// it looks five times a second and marks what it took, and one whose
     /// wait ended took its request back without it. Gone with the channel's
     /// folder, or after `seconds`, it was not taken.
-    public func waitUntilTaken(_ id: String, seconds: Double = Double(ClaudePermissionHook.timeoutSeconds)) -> Bool {
+    /// With `answer`, only if what it took is that answer.
+    public func waitUntilTaken(
+        _ id: String, answer: AgentToolApprovalAnswer? = nil,
+        seconds: Double = Double(ClaudePermissionHook.timeoutSeconds)
+    ) -> Bool {
         let end = Date().addingTimeInterval(seconds)
         let fileManager = FileManager.default
+        let taken = directory.appendingPathComponent("taken-\(id)")
         repeat {
             // Looked at once at least, a wait of nothing included.
-            if fileManager.fileExists(atPath: directory.appendingPathComponent("taken-\(id)").path) { return true }
+            if fileManager.fileExists(atPath: taken.path) {
+                guard let answer else { return true }
+                return (try? Data(contentsOf: taken)) == answer.hookOutput
+            }
             if !fileManager.fileExists(atPath: requestURL(id).path) { return false }
             Thread.sleep(forTimeInterval: 0.05)
         } while Date() < end
@@ -424,7 +446,7 @@ public enum ClaudePermissionHook {
             "id=$(/usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z')",
             "t=$(/usr/bin/mktemp \"$d/.request.XXXXXXXX\") && /bin/cat > \"$t\" && /bin/mv \"$t\" \"$d/request-$id.json\" || exit 0",
             "while [ \"$(/bin/date +%s)\" -lt \"$end\" ]; do",
-            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; /usr/bin/touch \"$d/taken-$id\"; exit 0; fi",
+            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; /bin/cp \"$d/answer-$id.json\" \"$d/taken-$id\"; exit 0; fi",
             "  [ -d \"$d\" ] || exit 0",
             "  /bin/sleep 0.2",
             "done",
