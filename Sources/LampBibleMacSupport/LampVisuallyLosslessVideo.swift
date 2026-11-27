@@ -132,11 +132,7 @@ public enum LampVisuallyLosslessVideo {
         // was shown.
         let composition = try await AVVideoComposition.videoComposition(with: asset) { request in
             let image = request.sourceImage
-            let factor = CGFloat(width) / image.extent.width
-            let scaled = factor == 1 ? image : image.applyingFilter("CILanczosScaleTransform", parameters: [
-                kCIInputScaleKey: factor,
-                kCIInputAspectRatioKey: (CGFloat(height) / image.extent.height) / factor,
-            ])
+            let scaled = LampVisuallyLosslessVideo.scaled(image, toWidth: width, height: height)
             request.finish(with: scaled.cropped(to: CGRect(x: 0, y: 0, width: width, height: height)), context: nil)
         }
         let renderComposition = composition.mutableCopy() as! AVMutableVideoComposition
@@ -316,14 +312,23 @@ extension LampVisuallyLosslessVideo {
         defer { ticket.release() }
         try Task.checkCancellation()
 
-        func picture(_ index: Int) throws -> CGImage {
+        /// A frame turned upright as its orientation says, and refused where
+        /// it isn't whole: a frame copied while still being written can
+        /// decode at full size with rows missing.
+        func picture(_ index: Int) throws -> (image: CGImage, upright: CIImage) {
             guard let source = CGImageSourceCreateWithURL(frames[index] as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
             else { throw EncodingError.badFrame("\(frameName(index)) is not a picture Lamp can read.") }
-            return image
+            guard CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else {
+                throw EncodingError.badFrame("\(frameName(index)) is not whole: it may still have been being written.")
+            }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            let orientation = (properties?[kCGImagePropertyOrientation] as? NSNumber)?.int32Value ?? 1
+            let upright = CIImage(cgImage: image).oriented(forExifOrientation: (1...8).contains(orientation) ? orientation : 1)
+            return (image, upright.transformed(by: CGAffineTransform(translationX: -upright.extent.minX, y: -upright.extent.minY)))
         }
         let first = try picture(0)
-        let natural = CGSize(width: first.width, height: first.height)
+        let natural = first.upright.extent.size
         let scale = min(1, Double(largestSide) / Double(max(natural.width, natural.height)))
         let width = max(2, Int((Double(natural.width) * scale / 2).rounded()) * 2)
         let height = max(2, Int((Double(natural.height) * scale / 2).rounded()) * 2)
@@ -384,26 +389,21 @@ extension LampVisuallyLosslessVideo {
                 throw abandon(error)
             }
             try autoreleasepool {
-                let image: CGImage
+                let frame: (image: CGImage, upright: CIImage)
                 do {
-                    image = index == 0 ? first : try picture(index)
+                    frame = index == 0 ? first : try picture(index)
                 } catch {
                     throw abandon(error)
                 }
-                guard image.width == first.width, image.height == first.height else {
+                guard frame.upright.extent.size == natural else {
                     throw abandon(EncodingError.badFrame(
-                        "\(frameName(index)) is \(image.width)×\(image.height), and the first frame \(first.width)×\(first.height): every frame must be the same size."
+                        "\(frameName(index)) is \(Int(frame.upright.extent.width))×\(Int(frame.upright.extent.height)), and the first frame "
+                            + "\(Int(natural.width))×\(Int(natural.height)): every frame must be the same size."
                     ))
                 }
-                var drawn = CIImage(cgImage: image)
-                if !seeThrough, Self.mayBeSeeThrough(image), Self.isSeeThrough(drawn, in: context) { seeThrough = true }
-                let factor = CGFloat(width) / drawn.extent.width
-                if factor != 1 {
-                    drawn = drawn.applyingFilter("CILanczosScaleTransform", parameters: [
-                        kCIInputScaleKey: factor,
-                        kCIInputAspectRatioKey: (CGFloat(height) / drawn.extent.height) / factor,
-                    ])
-                }
+                var drawn = frame.upright
+                if !seeThrough, Self.mayBeSeeThrough(frame.image), Self.isSeeThrough(drawn, in: context) { seeThrough = true }
+                drawn = Self.scaled(drawn, toWidth: width, height: height)
                 let bounds = CGRect(x: 0, y: 0, width: width, height: height)
                 drawn = drawn.cropped(to: bounds).composited(over: CIImage(color: .black).cropped(to: bounds))
                 guard let pool = adaptor.pixelBufferPool else { throw abandon(EncodingError.failed("its pictures could not be made")) }
@@ -419,6 +419,9 @@ extension LampVisuallyLosslessVideo {
             }
             while !input.isReadyForMoreMediaData {
                 if writer.status == .failed { break }
+                // Given up on: the partial file goes and the turn at the
+                // encoder is given back, rather than spin while waiting.
+                if Task.isCancelled { throw abandon(CancellationError()) }
                 try? await Task.sleep(nanoseconds: 2_000_000)
             }
             guard let buffer = pendingBuffer, adaptor.append(buffer, withPresentationTime: time(index)) else {
@@ -435,6 +438,18 @@ extension LampVisuallyLosslessVideo {
         }
         let bytes = ((try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
         return Result(bytes: bytes, width: width, height: height, seeThrough: seeThrough)
+    }
+
+    /// `image` made `width` by `height` by Lanczos, which scales its height
+    /// by `inputScale` and its width by that times `inputAspectRatio`; as it
+    /// is where it is that size already.
+    static func scaled(_ image: CIImage, toWidth width: Int, height: Int) -> CIImage {
+        let across = CGFloat(width) / image.extent.width, down = CGFloat(height) / image.extent.height
+        guard across != 1 || down != 1 else { return image }
+        return image.applyingFilter("CILanczosScaleTransform", parameters: [
+            kCIInputScaleKey: down,
+            kCIInputAspectRatioKey: across / down,
+        ])
     }
 
     /// Whether a picture says it has an alpha channel at all.
