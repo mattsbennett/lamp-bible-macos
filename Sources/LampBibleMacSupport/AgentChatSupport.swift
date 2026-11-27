@@ -2206,13 +2206,17 @@ public enum AgentACPRun {
               option("allow_once", in: params) != nil, option("reject_once", in: params) != nil
         else { return nil }
         var shown: [String: Any] = ["command": command]
-        if let folder = (input["Cwd"] as? String ?? call["cwd"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? sessionFolder,
-           !folder.isEmpty { shown["cwd"] = folder }
+        let folder = ((input["Cwd"] as? String ?? call["cwd"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? sessionFolder)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        if let folder { shown["cwd"] = folder }
         // The agent's own account of the command, kept as its words, never
         // as the command.
         if let reason = input["toolSummary"] as? String, !reason.isEmpty { shown["reason"] = reason }
         let data = (try? JSONSerialization.data(withJSONObject: shown, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
-        return AgentToolApprovalRequest(id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self))
+        return AgentToolApprovalRequest(
+            id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self),
+            chatGrant: folder.map { AgentChatCommandGrant(tool: commandToolName, command: command, folder: $0) }
+        )
     }
 
     /// The answer to a command put to the person: its once-only option, never
@@ -2383,11 +2387,15 @@ public enum AgentCodexRun {
                   let command = (params["command"] as? String).flatMap({ $0.isEmpty ? nil : $0 })
             else { return .answer(["decision": "decline"]) }
             var input: [String: Any] = ["command": shown(command)]
-            if let cwd = params["cwd"] as? String, !cwd.isEmpty { input["cwd"] = cwd }
+            let cwd = (params["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            if let cwd { input["cwd"] = cwd }
             if let reason = params["reason"] as? String, !reason.isEmpty { input["reason"] = reason }
             let data = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
             return .ask(AgentToolApprovalRequest(
-                id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self)
+                id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self),
+                // The command as Codex sent it, wrapper and all, not as shown:
+                // what is remembered is what ran.
+                chatGrant: cwd.map { AgentChatCommandGrant(tool: commandToolName, command: command, folder: $0) }
             ))
         case "item/fileChange/requestApproval":
             return .answer(["decision": "decline"])

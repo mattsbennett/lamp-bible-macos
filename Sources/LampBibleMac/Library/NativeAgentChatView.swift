@@ -292,6 +292,26 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Done by the caller **before** the work is scheduled. Cleared inside
     /// the worker instead, a Stop pressed between scheduling and the worker
     /// starting was wiped by the run it was meant to stop.
+    /// The chat whose allowed commands this run answers without asking
+    /// (`AgentChatCommandGrants`), set before each run.
+    private var chatGrantKey: String?
+
+    func useChatGrants(_ key: String?) {
+        lock.lock()
+        chatGrantKey = key
+        lock.unlock()
+    }
+
+    /// Whether this request was allowed for the chat already: the same
+    /// command, byte for byte, in the same folder.
+    fileprivate func isAllowedForChat(_ request: AgentToolApprovalRequest) -> Bool {
+        lock.lock()
+        let key = chatGrantKey
+        lock.unlock()
+        guard let key, let grant = request.chatGrant else { return false }
+        return AgentChatCommandGrants.shared.contains(grant, for: key)
+    }
+
     func prepareForRun() {
         lock.lock()
         cancelled = false
@@ -628,15 +648,32 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                             // again after its answer would meet the old
                             // request's timer. The agent's id answers it.
                             // A command, put to the person; see `commandRequest`.
+                            // One allowed for this chat already is answered as
+                            // Allow once, unasked (`decisions/0044`).
+                            let allowedForChat = isAllowedForChat(ask)
                             stateLock.lock()
                             let refuse = stopped || isCancelled
-                            if !refuse {
+                            if !refuse, !allowedForChat {
                                 waiting.append((ask.id, id, params, ask))
                                 publish()
                             }
                             stateLock.unlock()
                             if refuse {
                                 send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]])
+                            } else if allowedForChat {
+                                // Through the writer the card's answers take,
+                                // and judged as it is written, so a Stop
+                                // pressed meanwhile still wins.
+                                replies.async {
+                                    sendDecided {
+                                        stateLock.lock()
+                                        let late = stopped
+                                        stateLock.unlock()
+                                        let outcome: [String: Any] = late || self.isCancelled
+                                            ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: .allow, permission: params)
+                                        return ["id": id, "result": ["outcome": outcome]]
+                                    }
+                                }
                             } else {
                                 DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) {
                                     _ = settle(ask.id, .deny)
@@ -1008,15 +1045,27 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                         guard let key = AgentCodexRun.requestKey(id) else { continue }
                         switch AgentCodexRun.reply(to: method, params: params, id: key) {
                         case .ask(let approval):
+                            // One allowed for this chat already is accepted,
+                            // once, unasked (`decisions/0044`).
+                            let allowedForChat = isAllowedForChat(approval)
                             stateLock.lock()
                             let refuse = stopped || isCancelled
-                            if !refuse {
+                            if !refuse, !allowedForChat {
                                 waiting.append((key, id, approval))
                                 publish()
                             }
                             stateLock.unlock()
                             if refuse {
                                 send(["id": id, "result": AgentCodexRun.decision(.deny)])
+                            } else if allowedForChat {
+                                replies.async {
+                                    sendDecided {
+                                        stateLock.lock()
+                                        let late = stopped
+                                        stateLock.unlock()
+                                        return ["id": id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : .allow)]
+                                    }
+                                }
                             } else {
                                 DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) {
                                     _ = settle(key, .deny)
@@ -1853,6 +1902,8 @@ private struct AgentToolApprovalCard: View {
     let request: AgentToolApprovalRequest
     let providerName: String
     let waitingCount: Int
+    /// Allow for This Chat, where the request offers it.
+    var allowForChat: (() -> Void)? = nil
     let answer: (AgentToolApprovalAnswer) -> Void
 
     var body: some View {
@@ -1895,9 +1946,21 @@ private struct AgentToolApprovalCard: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if allowForChat != nil {
+                // Said whole, since what it allows outlasts this answer, and
+                // runs outside any sandbox.
+                Text("Allow for This Chat runs this exact command in this folder again without asking, until you start a new chat. Lamp doesn’t check what the command’s files hold by then.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 Spacer()
                 Button("Deny") { answer(.deny) }
+                if let allowForChat {
+                    Button("Allow for This Chat", action: allowForChat)
+                        .help("Allow this command in this folder for the rest of this chat")
+                }
                 if let rule = request.alwaysAllowRule {
                     Button("Always Allow") { answer(.alwaysAllow(rule)) }
                         .help("Saves \(rule.ruleText) to this writing's settings")
@@ -1951,6 +2014,42 @@ private struct SavedPermissionsList: View {
         }
         .padding(14)
         .frame(width: 360)
+    }
+}
+
+/// What Allow for This Chat remembered, each with its Remove.
+private struct ChatCommandGrantsList: View {
+    let grants: [AgentChatCommandGrant]
+    let remove: (AgentChatCommandGrant) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Allowed for this chat").font(.headline)
+            Text("These run again without asking, exactly as shown and in this folder, until you start a new chat.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(grants, id: \.self) { grant in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(grant.commandText)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(3)
+                        Text("in \(grant.folderText)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
+                    Button("Remove", role: .destructive) { remove(grant) }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 380)
     }
 }
 
@@ -2957,6 +3056,8 @@ final class NativeAgentChatModel: ObservableObject {
             conversationID = UUID()
             conversationStartedAt = Date()
         }
+        // This conversation's allowed commands, whoever started the turn.
+        runner.useChatGrants(chatGrantKey)
 
         // What the pane showed while the message was being prepared is
         // replaced by the real thing, under the same identities, so the
@@ -3054,8 +3155,16 @@ final class NativeAgentChatModel: ObservableObject {
     /// Whether this chat writes, as a writing's assistant does.
     var isWritingChat: Bool { !mode.isReadOnly }
 
+    /// This chat's commands allowed for it (`AgentChatCommandGrants`): by
+    /// conversation, so a new chat has none.
+    var chatGrantKey: String? {
+        AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: conversationID)
+    }
+
     func clearConversation() {
         guard !isRunning else { return }
+        // What was allowed for the chat goes with it.
+        if let chatGrantKey { AgentChatCommandGrants.shared.removeAll(for: chatGrantKey) }
         // A message still being prepared belongs to the conversation going.
         placeholderToken = nil
         sendingPlaceholder = []
@@ -3481,14 +3590,29 @@ final class NativeAgentChatModel: ObservableObject {
     /// longer waiting, or the answer could not be given; said in the pane
     /// unless `saysWhy` is false, as for a device, which is told itself
     /// rather than have every follower shown the Mac's notice.
+    ///
+    /// `forChat`: Allow for This Chat (`decisions/0044`), for a request that
+    /// offers it: allowed once, as Allow is, and remembered for the chat only
+    /// once that answer went as given, so one pressed as Stop refused it
+    /// remembers nothing.
     @discardableResult
-    func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer, saysWhy: Bool = true) -> Bool {
+    func answer(
+        _ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer, saysWhy: Bool = true,
+        forChat: Bool = false
+    ) -> Bool {
         if runnerApprovals {
             let taken = runner.answerApproval(request.id, with: answer)
             if !taken, saysWhy {
                 errorMessage = "That request had already ended, and the command did not run."
             }
             pendingApprovals.removeAll { $0.id == request.id }
+            if taken, forChat, answer == .allow, let grant = request.chatGrant, let key = chatGrantKey {
+                Task { [runner] in
+                    if await runner.replyWentAsAnswered(request.id) {
+                        AgentChatCommandGrants.shared.add(grant, for: key)
+                    }
+                }
+            }
             return taken
         }
         guard let approvalChannel else { return false }
@@ -4192,6 +4316,8 @@ struct NativeAgentChatView: View {
 
     @State private var savedPermissions: [String] = []
     @State private var showingSavedPermissions = false
+    @State private var chatGrants: [AgentChatCommandGrant] = []
+    @State private var showingChatGrants = false
 
     /// The conversation, and after it the message being prepared, if one
     /// is; only the conversation is ever written back.
@@ -4406,7 +4532,9 @@ struct NativeAgentChatView: View {
                 AgentToolApprovalCard(
                     request: request,
                     providerName: provider.shortName,
-                    waitingCount: model.pendingApprovals.count
+                    waitingCount: model.pendingApprovals.count,
+                    allowForChat: request.chatGrant != nil && model.chatGrantKey != nil
+                        ? { model.answer(request, with: .allow, forChat: true) } : nil
                 ) { answer in
                     model.answer(request, with: answer)
                 }
@@ -4554,9 +4682,17 @@ struct NativeAgentChatView: View {
             if let context { model.notificationContext = context }
         }
         .reportsVisibility(to: visibility)
-        .onAppear { loadSavedPermissions() }
+        .onAppear {
+            loadSavedPermissions()
+            loadChatGrants()
+        }
         .onReceive(NotificationCenter.default.publisher(for: AgentToolAllowRules.changed)) { _ in loadSavedPermissions() }
-        .onChange(of: model.pendingApprovals.count) { _, _ in loadSavedPermissions() }
+        .onChange(of: model.pendingApprovals.count) { _, _ in
+            loadSavedPermissions()
+            loadChatGrants()
+        }
+        .onChange(of: model.isRunning) { _, _ in loadChatGrants() }
+        .onReceive(NotificationCenter.default.publisher(for: AgentChatCommandGrants.changed)) { _ in loadChatGrants() }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)
             // The reply has landed, so the next message waiting goes. One at
@@ -4754,7 +4890,14 @@ struct NativeAgentChatView: View {
     /// Whether the header has a button to show.
     private var headerHasActions: Bool {
         (connectionState != .connected && connectionState != .checking) || model.isRunning
-            || (!hostShowsNewChat && !model.messages.isEmpty) || !savedPermissions.isEmpty
+            || (!hostShowsNewChat && !model.messages.isEmpty) || !savedPermissions.isEmpty || !chatGrants.isEmpty
+    }
+
+    /// What Allow for This Chat remembered for this conversation.
+    private func loadChatGrants() {
+        let grants = model.chatGrantKey.map(AgentChatCommandGrants.shared.list(for:)) ?? []
+        if grants != chatGrants { chatGrants = grants }
+        if grants.isEmpty { showingChatGrants = false }
     }
 
     /// See `onConnectionChanged`.
@@ -4824,6 +4967,17 @@ struct NativeAgentChatView: View {
                                 submissionError = "Lamp couldn’t remove \(rule), so Claude may still do it without asking: \(error.localizedDescription)"
                             }
                             loadSavedPermissions()
+                        }
+                    }
+            }
+            if !chatGrants.isEmpty {
+                Button("Allowed for This Chat", systemImage: "checkmark.circle") { showingChatGrants = true }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Commands allowed for this chat (\(chatGrants.count))")
+                    .popover(isPresented: $showingChatGrants, arrowEdge: .bottom) {
+                        ChatCommandGrantsList(grants: chatGrants) { grant in
+                            if let key = model.chatGrantKey { AgentChatCommandGrants.shared.remove(grant, for: key) }
                         }
                     }
             }

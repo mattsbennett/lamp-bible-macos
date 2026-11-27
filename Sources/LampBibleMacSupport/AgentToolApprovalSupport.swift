@@ -31,19 +31,25 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
     /// Claude Code's hook does: a relative path in a command is read from
     /// here.
     public let folder: String?
+    /// What Allow for This Chat would remember, where it can be offered: a
+    /// Codex or Antigravity command with the folder it runs in
+    /// (`AgentChatCommandGrant`).
+    public let chatGrant: AgentChatCommandGrant?
 
     public init(
         id: String,
         toolName: String,
         toolInputJSON: String,
         alwaysAllowRule: AgentToolAlwaysAllowRule? = nil,
-        folder: String? = nil
+        folder: String? = nil,
+        chatGrant: AgentChatCommandGrant? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.toolInputJSON = toolInputJSON
         self.alwaysAllowRule = alwaysAllowRule
         self.folder = folder
+        self.chatGrant = chatGrant
     }
 
     /// Reads a hook's payload. Nil if it names no tool.
@@ -567,5 +573,89 @@ public struct AgentToolApprovalSummary: Equatable, Sendable {
 
     private static func excerpt(_ text: String, _ limit: Int) -> String {
         text.count > limit ? text.prefix(limit) + "…" : text
+    }
+}
+
+/// A command allowed for the rest of a chat (`decisions/0044`): this exact
+/// command, as the provider sent it, in this exact folder. Held as bytes, so
+/// two spellings Swift's `==` takes for one (a precomposed accent and a
+/// combining one) are two, and nothing about it is a pattern: a request
+/// that differs anywhere, by a space or a shell, is asked about.
+///
+/// Only for Codex and Antigravity, whose requests are the command and its
+/// folder. Claude's Always Allow is a rule of Claude Code's own, which can't
+/// bind a folder; matching its hook's input here would be a second copy of
+/// its matcher (0038).
+public struct AgentChatCommandGrant: Hashable, Sendable {
+    /// The provider's name for a command request (`AgentCodexRun` or
+    /// `AgentACPRun`'s `commandToolName`).
+    public let tool: String
+    public let command: [UInt8]
+    public let folder: [UInt8]
+
+    public init(tool: String, command: String, folder: String) {
+        self.tool = tool
+        self.command = Array(command.utf8)
+        self.folder = Array(folder.utf8)
+    }
+
+    public var commandText: String { String(decoding: command, as: UTF8.self) }
+    public var folderText: String { String(decoding: folder, as: UTF8.self) }
+}
+
+/// The commands allowed for each chat, in memory only: by provider, workspace
+/// and conversation, so a new chat (a new conversation) starts with none, and
+/// a quit forgets them all. Never written anywhere. Read by a run's thread as
+/// each request arrives, and changed from the card, so it is locked.
+public final class AgentChatCommandGrants: @unchecked Sendable {
+    public static let shared = AgentChatCommandGrants()
+    public static let changed = Notification.Name("LampAgentChatCommandGrantsChanged")
+
+    private let lock = NSLock()
+    private var grants: [String: [AgentChatCommandGrant]] = [:]
+
+    public init() {}
+
+    /// One chat's key; none for a chat with no conversation yet.
+    public static func key(provider: String, workspace: URL, conversation: UUID?) -> String? {
+        conversation.map { "\(provider)|\(workspace.standardizedFileURL.path)|\($0.uuidString)" }
+    }
+
+    public func add(_ grant: AgentChatCommandGrant, for key: String) {
+        lock.lock()
+        if !(grants[key] ?? []).contains(grant) { grants[key, default: []].append(grant) }
+        lock.unlock()
+        announce()
+    }
+
+    public func contains(_ grant: AgentChatCommandGrant, for key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return grants[key]?.contains(grant) == true
+    }
+
+    public func remove(_ grant: AgentChatCommandGrant, for key: String) {
+        lock.lock()
+        grants[key]?.removeAll { $0 == grant }
+        if grants[key]?.isEmpty == true { grants[key] = nil }
+        lock.unlock()
+        announce()
+    }
+
+    public func removeAll(for key: String) {
+        lock.lock()
+        let had = grants.removeValue(forKey: key) != nil
+        lock.unlock()
+        if had { announce() }
+    }
+
+    public func list(for key: String) -> [AgentChatCommandGrant] {
+        lock.lock()
+        defer { lock.unlock() }
+        return grants[key] ?? []
+    }
+
+    private func announce() {
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
 }
