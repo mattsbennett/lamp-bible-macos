@@ -40,6 +40,14 @@ enum WritingChatTurns {
     /// Clear, it is noted against the turns begun so far, and the chat's
     /// send checks that nothing began since (`KeptAgentChats.takeOpenCodeCheck`).
     static func checkOpenCode(in workspace: URL) async -> OpenCodeCheck {
+        // Counted before anything is looked at, so a turn begun while the
+        // check runs makes it stale.
+        let generation = KeptAgentChats.turnsBegun(in: workspace)
+        // A Terminal's agent writes while it runs, and OpenCode rereads its
+        // settings at every request.
+        if AgentTerminalHolds.shared.hasTerminal(in: workspace) {
+            return .refused("OpenCode wasn’t started: a Terminal session is open in this writing. End it, then send again.")
+        }
         let lampServer = mcpConfiguration(forWorkspace: workspace)
         if let lampServer {
             do {
@@ -48,7 +56,7 @@ enum WritingChatTurns {
                 return .refused("Lamp didn’t start OpenCode: \(error.localizedDescription)")
             }
         }
-        let scanned = await DevotionalAgentWorkspaceStore.terminalScan(in: workspace, lampServer: lampServer)
+        let scanned = await DevotionalAgentWorkspaceStore.openCodeScan(in: workspace, lampServer: lampServer)
         let above = await Task.detached(priority: .userInitiated) {
             AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
         }.value
@@ -56,10 +64,15 @@ enum WritingChatTurns {
         if let unchecked = findings.first(where: \.isIncomplete) {
             return .refused("Lamp didn’t start OpenCode: it couldn’t check all of what OpenCode reads in this writing (\(unchecked.detail)).")
         }
+        // Answers for what this check looked at and found gone are let go, so
+        // a setting removed and put back is asked about again.
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings, for: workspace, inScope: { path in
+            path.hasPrefix("../") || AgentTerminalLaunchCheck.openCodeScope(path)
+        })
         if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspace) {
             return .unapproved(AgentTerminalLaunchCheck.unapproved(findings, for: workspace))
         }
-        KeptAgentChats.noteOpenCodeChecked(in: workspace)
+        KeptAgentChats.noteOpenCodeChecked(in: workspace, at: generation)
         return .clear
     }
 

@@ -1179,9 +1179,13 @@ public enum AgentTerminalLaunchCheck {
     /// files as the scan read them, which become the reference for the next
     /// check if the Terminal opens: read once, from the bytes checked, and
     /// only from plain files the walk reached.
+    ///
+    /// `scope`: which paths are looked at, where only some provider's are
+    /// wanted (`openCodeScope`); a folder on the way to one is walked, and
+    /// nothing else is counted against the scan's limit.
     public static func scan(
         in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?,
-        approvedRestrictions: [String] = []
+        approvedRestrictions: [String] = [], scope: ((String) -> Bool)? = nil
     ) -> (findings: [Finding], restrictions: [String]) {
         var found: [Finding] = []
         var restrictionsRead: [String] = []
@@ -1199,6 +1203,7 @@ public enum AgentTerminalLaunchCheck {
             return ([Finding(path: ".", fingerprint: incomplete, detail: "the writing's folder could not be listed")], [])
         }
         func visit(_ relative: String) {
+            if let scope, !scope(relative) { return }
             counted += 1
             guard counted <= largestCount else { return }
             let url = workspace.appendingPathComponent(relative)
@@ -1272,6 +1277,13 @@ public enum AgentTerminalLaunchCheck {
         return (found, Array(Set(restrictionsRead)).sorted())
     }
 
+    /// Whether the OpenCode check looks at a path: what OpenCode reads, and
+    /// the folders on the way to its skill folders.
+    public static func openCodeScope(_ relative: String) -> Bool {
+        let path = relative.lowercased()
+        return [".claude", ".agents"].contains(path) || openCodeReads(Finding(path: relative, fingerprint: "", detail: ""))
+    }
+
     /// Whether an OpenCode run reads what a finding is about: its own files,
     /// and the skill folders it reads beside its own (`decisions/0043`).
     /// Claude's settings are Claude's, and asked about before a Claude
@@ -1288,7 +1300,9 @@ public enum AgentTerminalLaunchCheck {
 
     /// The names OpenCode reads in a folder above the one it runs in: it
     /// looks for its project settings from there up to the root.
-    static let openCodeAncestorNames: Set<String> = ["opencode.json", "opencode.jsonc", ".opencode"]
+    /// Its skill folders' parents too: it finds skills in each folder up to
+    /// its project's root.
+    static let openCodeAncestorNames: Set<String> = ["opencode.json", "opencode.jsonc", ".opencode", ".claude", ".agents"]
 
     /// What OpenCode would read above a writing's workspace, as far up as
     /// Lamp's library (`<library>/AgentWorkspaces/Writing/<writing>`): the
@@ -1315,7 +1329,15 @@ public enum AgentTerminalLaunchCheck {
                 }
                 switch info.st_mode & S_IFMT {
                 case S_IFREG:
-                    guard let (fingerprint, head, size) = read(url) else {
+                    // Opened following no link and without blocking, and
+                    // read only if what opened is a plain file: it may have
+                    // been swapped since it was looked at.
+                    let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+                    var opened = stat()
+                    guard descriptor >= 0, fstat(descriptor, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG,
+                          let (fingerprint, head, size) = read(from: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true))
+                    else {
+                        if descriptor >= 0, opened.st_mode & S_IFMT != S_IFREG { close(descriptor) }
                         found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) could not be read"))
                         continue
                     }
@@ -1548,14 +1570,22 @@ public enum AgentTerminalLaunchCheck {
     }
 
     /// After a scan that finished, approvals for what is no longer there go,
-    /// so a setting removed and later put back is asked about again.
-    public static func keepApprovals(onlyFor findings: [Finding], for workspace: URL, in file: URL = stateFile) {
+    /// so a setting removed and later put back is asked about again: only
+    /// for the paths that scan looked at (`inScope`), so the Terminal's
+    /// check and OpenCode's, which look at different things, leave each
+    /// other's alone.
+    public static func keepApprovals(
+        onlyFor findings: [Finding], for workspace: URL, inScope: (String) -> Bool = { !$0.hasPrefix("../") },
+        in file: URL = stateFile
+    ) {
         storeLock.lock()
         defer { storeLock.unlock() }
         var records = load(file)
         guard var record = records[key(workspace)] else { return }
         let present = Set(findings.map(\.id))
-        let kept = record.approved.filter(present.contains)
+        let kept = record.approved.filter { id in
+            present.contains(id) || !inScope(String(id.split(separator: "\u{0}", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""))
+        }
         guard kept != record.approved else { return }
         record.approved = kept
         records[key(workspace)] = record

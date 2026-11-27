@@ -36,6 +36,10 @@ final class AgentTerminalHolds: ObservableObject {
     struct Launch {
         var workspace: String
         var state: State
+        /// A Claude Terminal's, which holds the writing's chats; every
+        /// provider's is kept, since an OpenCode turn starts beside none
+        /// (`decisions/0043`).
+        var holdsChats: Bool
     }
 
     @Published private(set) var launches: [UUID: Launch] = [:]
@@ -54,8 +58,8 @@ final class AgentTerminalHolds: ObservableObject {
 
     /// A Claude Terminal is handed its command in this writing: held from
     /// now, before its process exists.
-    func begin(_ id: UUID, in workspace: URL) {
-        launches[id] = Launch(workspace: Self.key(workspace), state: .starting)
+    func begin(_ id: UUID, in workspace: URL, holdsChats: Bool = true) {
+        launches[id] = Launch(workspace: Self.key(workspace), state: .starting, holdsChats: holdsChats)
     }
 
     /// Its process started. One that could not start ends the hold.
@@ -91,10 +95,19 @@ final class AgentTerminalHolds: ObservableObject {
     /// found gone is let go, after this returns, so asking from a view's body
     /// changes nothing while it is drawn.
     func isHeld(in workspace: URL) -> Bool {
+        isLive(in: workspace) { $0.holdsChats }
+    }
+
+    /// Whether any provider's Terminal runs in this writing now.
+    func hasTerminal(in workspace: URL) -> Bool {
+        isLive(in: workspace) { _ in true }
+    }
+
+    private func isLive(in workspace: URL, _ counts: (Launch) -> Bool) -> Bool {
         let key = Self.key(workspace)
         var held = false
         var gone: [UUID] = []
-        for (id, launch) in launches where launch.workspace == key {
+        for (id, launch) in launches where launch.workspace == key && counts(launch) {
             switch launch.state {
             case .starting:
                 held = true

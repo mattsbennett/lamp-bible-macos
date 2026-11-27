@@ -105,4 +105,66 @@ struct OpenCodeWritingCheckTests {
         #expect(!model.isRunning)
         #expect(model.errorMessage?.contains("OpenCode wasn’t started") == true)
     }
+
+    /// Only what OpenCode reads is walked, so a large folder of Claude's
+    /// neither shows nor spends the scan's limit.
+    @Test func aLargeClaudeFolderDoesNotStopAnOpenCodeTurn() async throws {
+        let (_, workspace) = try writing()
+        let worktrees = workspace.appendingPathComponent(".claude/worktrees", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktrees, withIntermediateDirectories: true)
+        for index in 0..<5_100 { FileManager.default.createFile(atPath: worktrees.appendingPathComponent("f\(index)").path, contents: nil) }
+        #expect(await WritingChatTurns.checkOpenCode(in: workspace) == .clear)
+    }
+
+    @Test func aClaudeFolderAboveTheWritingStopsTheTurn() async throws {
+        let (library, workspace) = try writing()
+        try write("x", to: library.appendingPathComponent("AgentWorkspaces/.claude/skills/x/SKILL.md"))
+        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            Issue.record("expected the turn refused")
+            return
+        }
+        #expect(words.contains("../.claude"))
+    }
+
+    /// A Terminal of any provider running in the writing: OpenCode doesn't
+    /// start beside it.
+    @Test func anOpenCodeTurnDoesNotStartBesideAnyTerminal() async throws {
+        let (_, workspace) = try writing()
+        let launch = UUID()
+        AgentTerminalHolds.shared.begin(launch, in: workspace, holdsChats: false)
+        defer { AgentTerminalHolds.shared.dropIfNotStarted(launch) }
+        #expect(!AgentTerminalHolds.shared.isHeld(in: workspace))
+        guard case .refused = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            Issue.record("expected the turn refused")
+            return
+        }
+    }
+
+    /// Noted at the count from before the check began, so a turn begun
+    /// while it ran makes it stale.
+    @Test func aCheckIsStaleOnceATurnBeganWhileItRan() throws {
+        let (_, workspace) = try writing()
+        let before = KeptAgentChats.turnsBegun(in: workspace)
+        KeptAgentChats.noteTurnBegun(in: workspace)
+        KeptAgentChats.noteOpenCodeChecked(in: workspace, at: before)
+        #expect(!KeptAgentChats.takeOpenCodeCheck(in: workspace))
+    }
+
+    /// Each check lets go only of answers for what it looked at.
+    @Test func answersAreLetGoOnlyWithinTheScopeLookedAt() throws {
+        let (_, workspace) = try writing()
+        let file = workspace.deletingLastPathComponent().appendingPathComponent("approvals.json")
+        let above = finding("../opencode.json"), own = finding("opencode.json"), claudes = finding(".claude/settings.local.json")
+        try AgentTerminalLaunchCheck.approve([above, own, claudes], for: workspace, in: file)
+        // The Terminal's check, which doesn't look above the writing.
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: [claudes], for: workspace, in: file)
+        #expect(AgentTerminalLaunchCheck.isApproved([above, claudes], for: workspace, in: file))
+        #expect(!AgentTerminalLaunchCheck.isApproved([own], for: workspace, in: file))
+        // OpenCode's, which doesn't look at Claude's settings.
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: [], for: workspace, inScope: { path in
+            path.hasPrefix("../") || AgentTerminalLaunchCheck.openCodeScope(path)
+        }, in: file)
+        #expect(AgentTerminalLaunchCheck.isApproved([claudes], for: workspace, in: file))
+        #expect(!AgentTerminalLaunchCheck.isApproved([above], for: workspace, in: file))
+    }
 }

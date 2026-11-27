@@ -2137,6 +2137,8 @@ struct OpenCodeChatCheck: Identifiable {
     let prompt: String
     /// The queued message it was, which goes back to waiting meanwhile.
     let queued: UUID?
+    /// The conversation it was written in, the only one it is sent to.
+    let conversation: UUID?
     let findings: [AgentTerminalLaunchCheck.Finding]
     var id: String { (queued?.uuidString ?? prompt) + findings.map(\.id).joined() }
 }
@@ -2402,9 +2404,10 @@ enum KeptAgentChats {
     @MainActor
     private static var openCodeChecked: [String: Int] = [:]
 
+    /// `generation`: the turns begun when the check began.
     @MainActor
-    static func noteOpenCodeChecked(in workspace: URL) {
-        openCodeChecked[workspace.standardizedFileURL.path] = turnsBegun(in: workspace)
+    static func noteOpenCodeChecked(in workspace: URL, at generation: Int) {
+        openCodeChecked[workspace.standardizedFileURL.path] = generation
     }
 
     /// Whether the writing was found clear for OpenCode with no turn begun
@@ -2913,6 +2916,22 @@ final class NativeAgentChatModel: ObservableObject {
         if provider == .openCode, !mode.isReadOnly, !KeptAgentChats.takeOpenCodeCheck(in: workspace) {
             errorMessage = "OpenCode wasn’t started: this writing’s settings weren’t checked for this message, or something began in it meanwhile. Send it again."
             return false
+        }
+        // An OpenCode writing turn runs alone in its writing: OpenCode rereads
+        // its settings at every request, so another agent writing them as it
+        // runs would change what it does (`decisions/0043`).
+        if !mode.isReadOnly {
+            let othersRunning = AIProviderCLI.allCases.contains {
+                $0 != provider && KeptAgentChats.existing(provider: $0, workspace: workspace)?.isRunning == true
+            }
+            if provider == .openCode, othersRunning || AgentTerminalHolds.shared.hasTerminal(in: workspace) {
+                errorMessage = "OpenCode wasn’t started: another chat or a Terminal is at work in this writing. Send it again when that has finished."
+                return false
+            }
+            if provider != .openCode, KeptAgentChats.existing(provider: .openCode, workspace: workspace)?.isRunning == true {
+                errorMessage = "OpenCode is answering in this writing. Send this when it has finished."
+                return false
+            }
         }
         errorMessage = nil
         needsProviderSetup = false
@@ -4247,7 +4266,9 @@ struct NativeAgentChatView: View {
                     case .refused(let words):
                         throw AgentChatSendRefusal(message: words)
                     case .unapproved(let findings):
-                        openCodeCheck = OpenCodeChatCheck(prompt: prompt, queued: queued, findings: findings)
+                        openCodeCheck = OpenCodeChatCheck(
+                            prompt: prompt, queued: queued, conversation: conversation, findings: findings
+                        )
                         throw AgentChatSendRefusal(message: "OpenCode wasn’t started: this writing’s settings hold things Lamp didn’t put there.")
                     }
                 }
@@ -4295,6 +4316,9 @@ struct NativeAgentChatView: View {
                 // put back when the field happened to be empty.
                 if let queued {
                     model.releaseQueued(queued)
+                    // Held, with Send Them to go on, rather than tried again
+                    // unasked or left with no way on.
+                    model.holdQueue()
                 } else if draft.isEmpty {
                     draft = prompt
                 }
@@ -4582,9 +4606,17 @@ struct NativeAgentChatView: View {
                     submissionError = "Lamp couldn’t keep your answer, so it didn’t send the message: \(error.localizedDescription)"
                     return
                 }
+                // Only into the conversation it was written in, and only the
+                // message it was: another may have taken its place meanwhile.
+                guard model.conversationID == check.conversation else {
+                    submissionError = "That message was not sent: the conversation changed while you were asked."
+                    return
+                }
                 // Checked again as it goes: what changed while this was up
                 // is asked about afresh.
-                if check.queued != nil {
+                if let queued = check.queued {
+                    guard model.queued.first?.id == queued else { return }
+                    model.releaseQueue()
                     drainQueue()
                 } else {
                     if draft == check.prompt { draft = "" }

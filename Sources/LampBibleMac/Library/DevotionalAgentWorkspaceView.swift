@@ -802,6 +802,17 @@ enum DevotionalAgentWorkspaceStore {
         )
     }
 
+    /// What OpenCode reads of the writing's settings that Lamp can't vouch
+    /// for (`WritingChatTurns.checkOpenCode`): its own files and the skill
+    /// folders it reads, and nothing of Claude's, which isn't asked about.
+    @WritingWorkspaceFiles
+    static func openCodeScan(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> (findings: [AgentTerminalLaunchCheck.Finding], restrictions: [String]) {
+        AgentTerminalLaunchCheck.scan(
+            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
+            scope: AgentTerminalLaunchCheck.openCodeScope
+        )
+    }
+
     @WritingWorkspaceFiles
     static func terminalFindings(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> [AgentTerminalLaunchCheck.Finding] {
         // Nothing written here: Lamp's skills were brought up to date as the
@@ -2112,7 +2123,7 @@ struct DevotionalAgentWorkspaceView: View {
                         terminalDidExit(exitStatus: exitCode)
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) },
-                    holdID: activeProvider.map(AgentTerminalHolds.holds) == true ? terminalID : nil
+                    holdID: terminalID
                 )
                 .inset()
                 .id(terminalID)
@@ -3149,14 +3160,15 @@ struct DevotionalAgentWorkspaceView: View {
         }
         // The hold begins here, with nothing awaited since the last check, so
         // no turn can start between the hand-over and the process
-        // (`AgentTerminalHolds`). Only Claude's: it reloads its settings
-        // while it runs.
+        // (`AgentTerminalHolds`). Only Claude's holds the writing's chats: it
+        // reloads its settings while it runs. Every provider's is noted, since
+        // an OpenCode turn starts beside none (`decisions/0043`).
         AgentTerminalHolds.shared.dropIfNotStarted(terminalID)
         guard !paneLifetime.isGone else { return }
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
-        if AgentTerminalHolds.holds(provider) { AgentTerminalHolds.shared.begin(terminalID, in: workspaceURL) }
+        AgentTerminalHolds.shared.begin(terminalID, in: workspaceURL, holdsChats: AgentTerminalHolds.holds(provider))
         // Opened with what was checked: its restrictions, as the scan read
         // them, are the reference for the next check.
         AgentTerminalLaunchCheck.recordRestrictions(scanned.restrictions, for: workspaceURL)
