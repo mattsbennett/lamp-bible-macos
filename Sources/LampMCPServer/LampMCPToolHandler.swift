@@ -457,6 +457,9 @@ public actor LampMCPToolHandler {
             "seconds": .double(rendered.duration),
             "frames": .int(rendered.frameCount),
             "bytes": .int(Int(rendered.videoBytes)),
+            // Which drew it: a WebGPU page falls back to WebGL on a Mac
+            // without WebGPU, and may look a little different there.
+            "drewWith": rendered.drewWith.map(Value.string) ?? .null,
             "use": .string(
                 "On an image block: \"assetPath\": \"\(relative(rendered.stillURL))\", "
                     + "\"video\": \"\(relative(rendered.videoURL))\". These names change whenever the animation does: write them "

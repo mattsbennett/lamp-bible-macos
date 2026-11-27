@@ -60,6 +60,9 @@ public enum LampAnimationRenderer {
         /// A few frames across the loop, as JPEG, for whoever made the page
         /// to look at: the first, and three more evenly through.
         public var samples: [(seconds: Double, jpeg: Data)]
+        /// What drew it: `webgpu`, `webgl`, both, or nil for a page that
+        /// drew with neither, as a page's canvases asked for them.
+        public var drewWith: String? = nil
     }
 
     public enum RenderError: LocalizedError, Equatable {
@@ -126,6 +129,10 @@ public enum LampAnimationRenderer {
     /// addons by both of the names three's docs use.
     nonisolated static let importMap: [String: String] = [
         "three": "\(threeFolderPath)build/three.module.js",
+        // WebGPU, where the Mac's web views have it (macOS 26 on), and its
+        // shading language; `WebGPURenderer` falls back to WebGL elsewhere.
+        "three/webgpu": "\(threeFolderPath)build/three.webgpu.js",
+        "three/tsl": "\(threeFolderPath)build/three.tsl.js",
         "three/addons/": "\(threeFolderPath)examples/jsm/",
         "three/examples/jsm/": "\(threeFolderPath)examples/jsm/",
     ]
@@ -270,6 +277,16 @@ public enum LampAnimationRenderer {
             // that fails is a failed scene.
             forMainFrameOnly: false
         ))
+        // A WebGPU frame kept on the page's own canvas when work reaches it,
+        // so the snapshot sees it (`decisions/0025`). Beside three.js in
+        // Lamp's resources; without it a WebGPU page's every frame would be
+        // the one before, so a render stops rather than go on.
+        guard let keepWebGPU = try? String(
+            contentsOf: three.deletingLastPathComponent().appendingPathComponent("webgpu-keep.js"), encoding: .utf8
+        ) else { throw RenderError.script("Lamp's WebGPU capture is missing from this install; reinstall Lamp.") }
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: keepWebGPU, injectionTime: .atDocumentStart, forMainFrameOnly: false
+        ))
         // Without its rules the page could reach the network, so a failure to
         // set them up stops the render rather than going on without them.
         guard let rules = try? await blockEverythingElse() else { throw RenderError.offlineRulesUnavailable }
@@ -366,6 +383,20 @@ public enum LampAnimationRenderer {
         writer.startSession(atSourceTime: .zero)
 
         let sampleFrames = Set([0, frameCount / 4, frameCount / 2, frameCount * 3 / 4])
+        var drewWith: String?
+        // The first frame drawn once and not kept: three's WebGPU pipeline,
+        // and any page building its shaders on its first draw, shows nothing
+        // until then, and the first frame is the still (tried: frame 0 of a
+        // RenderPipeline page was black, frame 1 right). `render(t)` hangs
+        // on `t` alone, so drawing it twice draws the same.
+        do {
+            _ = try await within(frameTimeout, "to draw a frame") {
+                try await script(view, "await window.lamp.render(0); return true;", server: server)
+            }
+        } catch RenderError.timedOut {
+            throw RenderError.frameTimedOut(0)
+        }
+        if let error = server.pageErrors.first { throw RenderError.script(error) }
         var samples: [(Double, Data)] = []
         do {
             for index in 0..<frameCount {
@@ -414,6 +445,11 @@ public enum LampAnimationRenderer {
                     samples.append((seconds, try jpeg(image, width: 640, height: 640 * options.height / options.width, quality: 0.8)))
                 }
             }
+            // What the page's canvases drew with, as the keep script saw them.
+            let kinds = (try? await view.evaluateJavaScript(
+                "(() => { try { return [...(window.__lampWebGPUKeep?.drew ?? [])].sort().join('+'); } catch { return ''; } })()"
+            )) as? String
+            drewWith = kinds.flatMap { $0.isEmpty ? nil : $0 }
             input.markAsFinished()
             await writer.finishWriting()
             guard writer.status == .completed else {
@@ -457,7 +493,7 @@ public enum LampAnimationRenderer {
         )
         return Result(
             videoURL: publishedVideo, stillURL: publishedStill, duration: duration, frameCount: frameCount,
-            videoBytes: bytes, samples: samples.map { (seconds: $0.0, jpeg: $0.1) }
+            videoBytes: bytes, samples: samples.map { (seconds: $0.0, jpeg: $0.1) }, drewWith: drewWith
         )
     }
 
