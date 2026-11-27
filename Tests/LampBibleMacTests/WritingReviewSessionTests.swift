@@ -550,6 +550,53 @@ struct WritingReviewSessionTests {
         #expect(try store.review(writingID: id) == before)
     }
 
+    /// The owner's case (2026-11-26): a ✓ was accepted, unaccepted and
+    /// accepted again a second later. The page takes the marks off as it is
+    /// pressed; a draw worked out from the record before the clear landed
+    /// (one already running, or one asked for while the write was in
+    /// flight) sent them back. Nothing sent after the press may hold the
+    /// cleared mark.
+    @Test func nothingSentWhileAClearIsWrittenPutsItsMarkBack() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "flicker-\(UUID().uuidString)"
+        let new = "One alpha three.\n\nFour five six."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(
+            from: "One two three.\n\nFour five six.", to: new
+        ))
+        let session = WritingReviewSession()
+        var sent: [String?] = []
+        session.onMarksChanged = { marked, _ in sent.append(marked) }
+        let following = Task { await session.follow(writingID: id, text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 && sent.last??.contains("alpha") == true }
+
+        // A ✓ whose passage cannot be placed is answered at once with a
+        // draw from the record as it stands: here, the record before the
+        // real ✓'s write has landed.
+        let unplaceable = "Elsewhere \(LampWritingReview.markStart)entirely\(LampWritingReview.markEnd)."
+        let pressed = new.replacingOccurrences(
+            of: "alpha", with: "\(LampWritingReview.markStart)alpha\(LampWritingReview.markEnd)"
+        )
+        for round in 0..<10 {
+            sent = []
+            // A draw already being worked out as the ✓ is pressed, and one
+            // asked for while its write is in flight.
+            session.clear(markedMarkdown: unplaceable)
+            session.clear(markedMarkdown: pressed, pageText: new)
+            session.clear(markedMarkdown: unplaceable)
+            try await waitUntil { session.count == 0 && sent.last == .some(nil) }
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(sent.allSatisfy { $0 == nil }, "round \(round): marks sent back after the ✓: \(sent)")
+            // Marked again for the next round.
+            try store.save(LampWritingReview(writingID: id).markingAssistantChange(
+                from: "One two three.\n\nFour five six.", to: new
+            ))
+            try await waitUntil { session.count == 1 }
+        }
+    }
+
     /// Codex's case: markers can change how the page writes what is round
     /// them, so the marked Markdown with its markers taken out is text the
     /// page never held. A page that sends no text of its own clears only

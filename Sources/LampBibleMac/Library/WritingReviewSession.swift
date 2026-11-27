@@ -413,6 +413,17 @@ final class WritingReviewSession: ObservableObject {
     private var hasRead = false
     private var settleTask: Task<Void, Never>?
     private var drawGeneration = 0
+    /// Changes to each document's marks file being written. Its marks are
+    /// not drawn meanwhile: drawn from the record as it was before the
+    /// change, they put back on the page what a ✓ had just taken off, and
+    /// the change's own draw took it off again a second later (owner,
+    /// 2026-11-26). A draw asked for meanwhile waits for the last write.
+    private var writesInFlight: [WritingReviewKey: Int] = [:]
+    /// A draw was asked for while a write was in flight.
+    private var drawWaiting = false
+    /// Writes to the marks files begun, ever: a read that began before one
+    /// may have read the record from before it.
+    private var writesBegun = 0
     /// The page refused the last marks sent (its text was a moment ahead of
     /// this one's), so the next draw sends them again.
     private var needsResend = false
@@ -1184,7 +1195,16 @@ final class WritingReviewSession: ObservableObject {
             return nil
         }
         let document = document
+        let place = WritingReviewKey(writingID: writingID, document: document)
         LampPendingWrites.shared.begin()
+        // A draw already being worked out read the record before this
+        // change: it is dropped, and one is owed in its place once the write
+        // lands, whether or not the write changes anything. The marks it
+        // was to send go with that one.
+        writesInFlight[place, default: 0] += 1
+        writesBegun += 1
+        drawGeneration += 1
+        drawWaiting = true
         return Task { [weak self] in
             let written = await Task.detached(priority: .userInitiated) {
                 try? store.updating(writingID: writingID, document: document, edit)
@@ -1194,9 +1214,19 @@ final class WritingReviewSession: ObservableObject {
             // tell the writer that the writing took their restore and the
             // marks file would not.
             then(written != nil)
+            guard let self else { return }
+            self.writesInFlight[place, default: 1] -= 1
+            if self.writesInFlight[place] == 0 { self.writesInFlight[place] = nil }
+            // The draw that waited, once the last write has landed, if what
+            // follows did not draw already.
+            defer {
+                if self.drawWaiting, let key = self.key, self.writesInFlight[key] == nil {
+                    self.draw(sendsMarks: false)
+                }
+            }
             // Not for a writing or document left since, nor once marks
             // were turned off.
-            guard let self, self.writingID == writingID,
+            guard self.writingID == writingID,
                   self.document == document, self.store != nil
             else { return }
             guard let written else {
@@ -1214,11 +1244,21 @@ final class WritingReviewSession: ObservableObject {
     private func reloadIfMoved() async {
         guard let store, let writingID else { return }
         let document = document
+        let place = WritingReviewKey(writingID: writingID, document: document)
+        // Not while a write is being made: the read could take the record
+        // from before it and be taken up after it. The next look reads.
+        guard writesInFlight[place] == nil else { return }
+        let begun = writesBegun
         let read = await Task.detached(priority: .utility) {
             try? store.snapshot(writingID: writingID, document: document)
         }.value
         guard self.writingID == writingID, self.document == document, !Task.isCancelled
         else { return }
+        // Not a read that a write of this session's began during, or is still
+        // being made across: it can hold the record from before the write,
+        // with a date other than the one the write left, and taken up it put
+        // back a mark a ✓ had just cleared. The next look reads again.
+        guard writesBegun == begun, writesInFlight[place] == nil else { return }
         guard let read else {
             // Unreadable now, though it was read before: the agent is told
             // so rather than what was read then, until a read succeeds.
@@ -1256,12 +1296,17 @@ final class WritingReviewSession: ObservableObject {
     }
 
     private func draw(sendsMarks asked: Bool) {
-        drawGeneration += 1
-        let generation = drawGeneration
         // Owed until a draw that sends them lands: a later draw supersedes
         // this one (a typing settle while it is worked out), and the marks
         // it was to send are then that draw's to send.
         if asked { needsResend = true }
+        if let key, writesInFlight[key, default: 0] > 0 {
+            drawWaiting = true
+            return
+        }
+        drawWaiting = false
+        drawGeneration += 1
+        let generation = drawGeneration
         let sendsMarks = needsResend
         guard let review, !review.isEmpty else {
             needsResend = false
