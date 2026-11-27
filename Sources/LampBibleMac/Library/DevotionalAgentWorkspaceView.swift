@@ -797,14 +797,14 @@ enum DevotionalAgentWorkspaceStore {
         if AgentTerminalLaunchCheck.baseline(for: workspace) == nil {
             try? AgentTerminalLaunchCheck.recordBaseline(in: workspace)
         }
-        // Lamp's skills brought up to the ones this build ships first, as
-        // opening the writing does, so a copy from an older Lamp is Lamp's
-        // again rather than a finding.
-        // Only through real folders: a linked one would lead the refresh out
-        // of the workspace, and is the scan's to report.
+        // Lamp's bundled skills brought up to the ones this build ships
+        // first, as opening the writing does, so a copy from an older Lamp is
+        // Lamp's again rather than a finding. Only those: a custom skill the
+        // writer is editing is theirs. And only through real folders: a
+        // linked one would lead the refresh out of the workspace, and is the
+        // scan's to report.
         if AgentTerminalLaunchCheck.skillFoldersArePlain(in: workspace) {
             try? installBundledSkillsIfNeeded(in: workspace)
-            try? synchronizeClaudeSkills(in: workspace)
         }
         return AgentTerminalLaunchCheck.findings(
             in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
@@ -3076,6 +3076,12 @@ struct DevotionalAgentWorkspaceView: View {
         // What the writing's own settings would run on opening that Lamp did
         // not put there, put to the person first; see
         // `AgentTerminalLaunchCheck`.
+        // A Claude session being replaced by this launch saved its rules as
+        // it ran; they are its own, kept before the new launch is checked,
+        // since its exit is no longer heard once the launch changes.
+        if activeProvider == .claude {
+            await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL)
+        }
         // Lamp's own files first, written again whole: whatever an agent put
         // in them goes without asking anyone. A writing they can't be written
         // into doesn't open.

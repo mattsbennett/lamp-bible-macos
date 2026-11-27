@@ -443,13 +443,24 @@ struct AgentCodexRunnerTests {
 struct AgentCLILookupTests {
     @Test func aProgramFoundOnceIsAnsweredAtOnce() throws {
         let runner = AgentCLIProcessRunner()
-        let first = try runner.resolveExecutable(named: "sw_vers")
-        let asked = AgentCLIProcessRunner.loginShellLookupCount("sw_vers")
-        for _ in 0..<5 { #expect(try runner.resolveExecutable(named: "sw_vers") == first) }
-        // Answered from what was found, the login shell not asked again.
-        #expect(AgentCLIProcessRunner.loginShellLookupCount("sw_vers") == asked)
-        // A program that isn't there is not remembered as there.
-        #expect(throws: (any Error).self) { try runner.resolveExecutable(named: "lamp-no-such-cli-\(UUID().uuidString.prefix(8))") }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let program = folder.appendingPathComponent("agent")
+        try "#!/bin/sh\n".write(to: program, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program.path)
+        let name = "lamp-test-agent-\(UUID().uuidString.prefix(8))"
+        let asked = Locked(0)
+        let look: (String) throws -> URL = { _ in asked.mutate { $0 += 1 }; return program }
+        for _ in 0..<5 { #expect(try runner.resolveExecutable(named: name, lookingUp: look) == program) }
+        // Looked for once, then answered from what was found.
+        #expect(asked.value == 1)
+        // Moved away, it is looked for afresh.
+        try FileManager.default.removeItem(at: program)
+        #expect(throws: (any Error).self) {
+            try runner.resolveExecutable(named: name, lookingUp: { _ in asked.mutate { $0 += 1 }; throw CocoaError(.fileNoSuchFile) })
+        }
+        #expect(asked.value == 2)
     }
 }
 

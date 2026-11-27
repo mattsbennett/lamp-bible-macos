@@ -54,28 +54,24 @@ struct AgentChatModelTests {
         AgentChatTranscriptStore.load(providerID: providerID, in: workspace)
     }
 
-    /// The message and the loader show as Send is pressed, before the
-    /// prompt is made: a writing's preparation can wait seconds, and the
-    /// pane showed nothing through it (owner, 2026-11-26). A preparation that
-    /// fails is the turn's failure, said under the message, and nothing runs.
-    @Test func theMessageAndLoaderShowBeforeThePromptIsMade() async throws {
+    /// The message and the loader show as Send is pressed, while the
+    /// prompt is prepared, and are never written down: the transcript is
+    /// made from the conversation alone (owner, 2026-11-26).
+    @Test func theMessageBeingPreparedShowsAndIsNeverWrittenDown() throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }
         let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
         model.load()
-        struct Unprepared: LocalizedError { var errorDescription: String? { "the workspace was busy" } }
-        var seen: (count: Int, running: Bool, asked: Bool)?
-        let taken = await model.send("Hello there", preparing: {
-            seen = (model.messages.count, model.isRunning, model.messages.contains { $0.text == "Hello there" })
-            throw Unprepared()
-        })
-        #expect(taken)
-        // While it was being made: the question and the loader, running.
-        #expect(seen?.count == 2 && seen?.running == true && seen?.asked == true)
-        // After: the question stays, the failure is said, and it ran nothing.
-        #expect(!model.isRunning)
-        #expect(model.messages.contains { $0.text == "Hello there" })
-        #expect(model.errorMessage?.contains("the workspace was busy") == true)
+        model.showSending("Hello there")
+        #expect(model.sendingPlaceholder.count == 2)
+        #expect(model.sendingPlaceholder.first?.text == "Hello there")
+        #expect(model.messages.isEmpty)
+        // A save meanwhile, as a reload or another pane makes, takes none of it.
+        model.reloadIfChangedOnDisk()
+        #expect(AgentChatTranscriptStore.load(providerID: providerID, in: workspace).messages.isEmpty)
+        // Not sent after all, it goes.
+        model.clearSending()
+        #expect(model.sendingPlaceholder.isEmpty)
     }
 
     /// The save that follows an undo used to merge the whole conversation

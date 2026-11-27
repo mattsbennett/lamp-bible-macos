@@ -1141,13 +1141,20 @@ public enum AgentTerminalLaunchCheck {
                 "opencode.json": server.answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON,
             ]
         } ?? [:]
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: workspace.path)) ?? []
+        // What can't be looked at is incomplete, never nothing: a provider
+        // can still open a file by its known name in a folder Lamp can't list.
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: workspace.path) else {
+            return [Finding(path: ".", fingerprint: incomplete, detail: "the writing's folder could not be listed")]
+        }
         func visit(_ relative: String) {
             counted += 1
             guard counted <= largestCount else { return }
             let url = workspace.appendingPathComponent(relative)
             var info = stat()
-            guard lstat(url.path, &info) == 0 else { return }
+            guard lstat(url.path, &info) == 0 else {
+                found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be looked at"))
+                return
+            }
             switch info.st_mode & S_IFMT {
             case S_IFLNK:
                 let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "?"
@@ -1170,7 +1177,7 @@ public enum AgentTerminalLaunchCheck {
                 }
             case S_IFREG:
                 guard let data = try? Data(contentsOf: url) else {
-                    found.append(Finding(path: relative, fingerprint: digest("unreadable"), detail: "a file Lamp could not read"))
+                    found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be read"))
                     return
                 }
                 if let lamps = expected[relative], data == Data(lamps.utf8) { return }

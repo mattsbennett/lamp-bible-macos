@@ -597,7 +597,11 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     if let method = message["method"] as? String, let id = message["id"] {
                         // A request from the agent.
                         if method == "session/request_permission", let params = message["params"] as? [String: Any],
-                           let ask = AgentACPRun.commandRequest(permission: params, readOnly: mode.isReadOnly, id: "agy-\(id)") {
+                           let ask = AgentACPRun.commandRequest(permission: params, readOnly: mode.isReadOnly, id: "agy-\(UUID().uuidString)") {
+                            // Keyed by a name of Lamp's own, never the agent's
+                            // id: "1" and 1 spell the same, and an id used
+                            // again after its answer would meet the old
+                            // request's timer. The agent's id answers it.
                             // A command, put to the person; see `commandRequest`.
                             stateLock.lock()
                             let refuse = stopped || isCancelled
@@ -1146,6 +1150,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private static let versionLock = NSLock()
 
     func resolveExecutable(named name: String) throws -> URL {
+        try resolveExecutable(named: name, lookingUp: resolveThroughLoginShell(named:))
+    }
+
+    /// As `resolveExecutable(named:)`, with how a name is looked for given:
+    /// a test's own, which counts.
+    func resolveExecutable(named name: String, lookingUp lookUp: (String) throws -> URL) throws -> URL {
         // A path is already resolved; a login shell has nothing to add, and
         // a startup file that prints would only garble it.
         if name.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: name) {
@@ -1160,22 +1170,14 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         let known = Self.resolvedByName[name]
         Self.resolvedLock.unlock()
         if let known, FileManager.default.isExecutableFile(atPath: known.path) { return known }
-        let found = try resolveThroughLoginShell(named: name)
+        let found = try lookUp(name)
         Self.resolvedLock.lock()
-        Self.loginShellLookups[name, default: 0] += 1
         Self.resolvedByName[name] = found
         Self.resolvedLock.unlock()
         return found
     }
 
     private nonisolated(unsafe) static var resolvedByName: [String: URL] = [:]
-    /// How many times a name was asked of the login shell; for tests.
-    private nonisolated(unsafe) static var loginShellLookups: [String: Int] = [:]
-    static func loginShellLookupCount(_ name: String) -> Int {
-        resolvedLock.lock()
-        defer { resolvedLock.unlock() }
-        return loginShellLookups[name] ?? 0
-    }
     private static let resolvedLock = NSLock()
 
     /// Finds a CLI ahead of its first use, off the main thread, so the first
@@ -2482,6 +2484,26 @@ final class NativeAgentChatModel: ObservableObject {
     private var cancelRequested = false
     private var loadingMessageID: UUID?
     private var approvalChannel: AgentToolApprovalChannel?
+    /// The message being prepared and its loader, shown as Send is pressed
+    /// and never written down: a writing's preparation can wait seconds on
+    /// its workspace (the draft saved, its context and settings written,
+    /// behind a sync pass), and the pane showed nothing through it, as if
+    /// Send had not been pressed (owner, 2026-11-26). Kept out of `messages`,
+    /// which the transcript is made from; `send` takes their places.
+    @Published private(set) var sendingPlaceholder: [NativeAgentChatMessage] = []
+
+    func showSending(_ text: String) {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isRunning else { return }
+        sendingPlaceholder = [
+            NativeAgentChatMessage(id: UUID(), user: person, messageKind: .custom(PersonMessageContent(text: prompt)), isSender: true, date: Date()),
+            NativeAgentChatMessage(id: UUID(), user: agentUser, messageKind: .custom(AgentWaitingContent()), isSender: false, date: Date()),
+        ]
+    }
+
+    /// The message was not sent after all: it goes back where it came from.
+    func clearSending() { sendingPlaceholder = [] }
+
     /// Whether the card's requests are a Codex or Antigravity turn's,
     /// answered over its protocol rather than through a hook's folder.
     private var runnerApprovals = false
@@ -2622,26 +2644,6 @@ final class NativeAgentChatModel: ObservableObject {
         inConversation expected: UUID? = nil,
         notifiesWhenDone: Bool = true
     ) async -> Bool {
-        await send(
-            rawPrompt, preparing: { contextualPrompt }, messageID: messageID,
-            inConversation: expected, notifiesWhenDone: notifiesWhenDone
-        )
-    }
-
-    /// Sends a message whose prompt is still to be made: the message and the
-    /// loader are shown at once, and `preparing` runs after, while they show.
-    /// A writing's preparation can wait seconds on its workspace (the draft
-    /// saved, its context and settings written, behind a sync pass), and the
-    /// pane sat unchanged through it, as if Send had not been pressed (owner,
-    /// 2026-11-26). Stop works through the wait; a preparation that fails is
-    /// the turn's failure, said under the message.
-    func send(
-        _ rawPrompt: String,
-        preparing: @escaping () async throws -> String,
-        messageID: UUID? = nil,
-        inConversation expected: UUID? = nil,
-        notifiesWhenDone: Bool = true
-    ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // Nothing new starts once Lamp is quitting: a message queued behind
         // the reply being stopped would otherwise go the moment it stopped,
@@ -2685,8 +2687,13 @@ final class NativeAgentChatModel: ObservableObject {
             conversationStartedAt = Date()
         }
 
+        // What the pane showed while the message was being prepared is
+        // replaced by the real thing, under the same identities, so the
+        // bubbles stay where they are.
+        let shown = sendingPlaceholder
+        sendingPlaceholder = []
         let userMessage = NativeAgentChatMessage(
-            id: messageID ?? UUID(),
+            id: messageID ?? shown.first?.id ?? UUID(),
             user: person,
             messageKind: .custom(PersonMessageContent(text: prompt)),
             isSender: true,
@@ -2698,7 +2705,7 @@ final class NativeAgentChatModel: ObservableObject {
             AgentChatTranscript.Event.said, role: .user,
             text: prompt, at: userMessage.date
         )
-        let loadingID = UUID()
+        let loadingID = shown.count == 2 ? shown[1].id : UUID()
         loadingMessageID = loadingID
         messages.append(NativeAgentChatMessage(
             id: loadingID,
@@ -2716,30 +2723,6 @@ final class NativeAgentChatModel: ObservableObject {
 
         streamTask?.cancel()
         streamTask = showReplyAsItArrives()
-
-        let contextualPrompt: String
-        do {
-            contextualPrompt = try await preparing()
-            // A conversation sync put in place while the prompt was being
-            // made is not answered from this one: the earlier check passed
-            // before the wait, and a running chat takes nothing from disk.
-            let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace).conversationID
-            if let onDisk, let mine = conversationID, onDisk != mine {
-                throw CocoaError(.userCancelled, userInfo: [
-                    NSLocalizedDescriptionKey: "the conversation changed on another device while it was being prepared, so it wasn’t sent",
-                ])
-            }
-        } catch {
-            finish(RunOutcome(
-                result: AgentCLIProcessResult(
-                    exitCode: -1, output: "",
-                    launchError: "Lamp couldn’t prepare this message: \(error.localizedDescription)"
-                ),
-                proposedSessionID: nil,
-                resumedSessionID: sessionID
-            ))
-            return true
-        }
 
         let firstPrompt = sessionID == nil
             ? AgentChatContinuation.prompt(continuing: earlier, with: contextualPrompt)
@@ -3861,6 +3844,18 @@ struct NativeAgentChatView: View {
         ))
     }
 
+    /// The conversation, and after it the message being prepared, if one
+    /// is; only the conversation is ever written back.
+    private var shownMessages: Binding<[NativeAgentChatMessage]> {
+        Binding(
+            get: { model.messages + model.sendingPlaceholder },
+            set: { [model] new in
+                let placeholders = Set(model.sendingPlaceholder.map(\.id))
+                model.messages = new.filter { !placeholders.contains($0.id) }
+            }
+        )
+    }
+
     /// Sends the next waiting message, if this pane is free to.
     private func drainQueue() {
         guard !isPreparing, !model.isRunning, !model.queueHeld, !KeptAgentChats.isQuitting,
@@ -3887,23 +3882,23 @@ struct NativeAgentChatView: View {
         // The conversation this message was written in. Preparing waits,
         // and New Chat is allowed during that wait.
         let conversation = model.conversationID
+        // Shown at once, while the prompt is prepared; see `sendingPlaceholder`.
+        model.showSending(prompt)
+        scrollToBottom = true
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
         Task { [workspaceFolder, preparePrompt] in
             defer { isPreparing = false }
             defer { KeptAgentChats.endTurn(in: workspaceFolder) }
             do {
+                let contextualPrompt = try await preparePrompt(prompt)
                 submissionError = nil
-                // The message and the loader show at once; the prompt is
-                // made while they do (`send(_:preparing:)`).
+                isPreparing = false
                 let taken = await model.send(
-                    prompt, preparing: {
-                        let made = try await preparePrompt(prompt)
-                        isPreparing = false
-                        return made
-                    },
+                    prompt, contextualPrompt: contextualPrompt,
                     messageID: queued, inConversation: conversation
                 )
+                if !taken { model.clearSending() }
                 // Taken means it is in the transcript, which is where the
                 // model takes it out of the queue. Refused — the pane was
                 // reopened and something else is running, or New Chat
@@ -3928,6 +3923,7 @@ struct NativeAgentChatView: View {
                 }
                 scrollToBottom = true
             } catch {
+                model.clearSending()
                 submissionError = error.localizedDescription
                 // A queued message goes back to waiting, in its place,
                 // rather than into a draft field the reader may be typing
@@ -4036,7 +4032,7 @@ struct NativeAgentChatView: View {
                 moveUp: { model.sendQueuedSooner($0) }
             )
             ZStack {
-                ChatView(messages: $model.messages, scrollToBottom: $scrollToBottom) {
+                ChatView(messages: shownMessages, scrollToBottom: $scrollToBottom) {
                     VStack(spacing: 0) {
                         if let attachment {
                             ChatAttachmentChip(attachment: attachment, dismiss: dismissAttachment)
