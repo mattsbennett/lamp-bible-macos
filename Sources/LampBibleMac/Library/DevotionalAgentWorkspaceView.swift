@@ -800,8 +800,12 @@ enum DevotionalAgentWorkspaceStore {
         // Lamp's skills brought up to the ones this build ships first, as
         // opening the writing does, so a copy from an older Lamp is Lamp's
         // again rather than a finding.
-        try? installBundledSkillsIfNeeded(in: workspace)
-        try? synchronizeClaudeSkills(in: workspace)
+        // Only through real folders: a linked one would lead the refresh out
+        // of the workspace, and is the scan's to report.
+        if AgentTerminalLaunchCheck.skillFoldersArePlain(in: workspace) {
+            try? installBundledSkillsIfNeeded(in: workspace)
+            try? synchronizeClaudeSkills(in: workspace)
+        }
         return AgentTerminalLaunchCheck.findings(
             in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
             baseline: AgentTerminalLaunchCheck.baseline(for: workspace)
@@ -2088,7 +2092,11 @@ struct DevotionalAgentWorkspaceView: View {
                         guard launch == terminalID else { return }
                         terminalExitCode = exitCode
                         terminalDidExit(exitStatus: exitCode)
-                        Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
+                        // Only Claude's own session saves Claude's rules; one
+                        // added while another provider's ran is still asked.
+                        if activeProvider == .claude {
+                            Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
+                        }
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
                 )
@@ -3080,6 +3088,11 @@ struct DevotionalAgentWorkspaceView: View {
         // Checked every time, after an answer too: what was shown is what was
         // approved, and anything changed since is asked about again.
         let findings = await DevotionalAgentWorkspaceStore.terminalFindings(in: workspaceURL, lampServer: lampServer)
+        // What couldn't be looked at can't be approved.
+        if let unchecked = findings.first(where: \.isIncomplete) {
+            errorMessage = "Lamp didn’t open the Terminal: it couldn’t check all of this writing’s settings (\(unchecked.detail))."
+            return
+        }
         if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspaceURL) {
             terminalLaunchCheck = TerminalLaunchCheck(provider: provider, findings: findings)
             return

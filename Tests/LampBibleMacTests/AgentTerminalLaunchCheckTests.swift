@@ -141,4 +141,37 @@ struct AgentTerminalLaunchCheckTests {
         try FileManager.default.createDirectory(at: root.appendingPathComponent(".mcp.json"), withIntermediateDirectories: true)
         #expect(throws: (any Error).self) { try server.restoreProviderConfigurations(in: root) }
     }
+
+    /// A linked skills folder is never written through, and a linked local
+    /// settings file gives no rules to trust.
+    @Test func linkedFoldersAreNeitherRefreshedThroughNorTrusted() throws {
+        let (root, _, _) = try workspace()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let state = FileManager.default.temporaryDirectory.appendingPathComponent("checks-\(UUID().uuidString).json")
+        defer { for made in [root, outside, state] { try? FileManager.default.removeItem(at: made) } }
+        #expect(AgentTerminalLaunchCheck.skillFoldersArePlain(in: root))
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".agents/skills"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent(".agents/skills"), withDestinationURL: outside)
+        #expect(!AgentTerminalLaunchCheck.skillFoldersArePlain(in: root))
+
+        try write(#"{"permissions":{"allow":["Bash"]}}"#, "planted.json", in: outside)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(".claude/settings.local.json"), withDestinationURL: outside.appendingPathComponent("planted.json")
+        )
+        try AgentTerminalLaunchCheck.recordBaseline(in: root, file: state)
+        #expect(AgentTerminalLaunchCheck.baseline(for: root, in: state) == [])
+    }
+
+    /// What couldn't be looked at is marked so, and no answer covers it.
+    @Test func aScanThatCouldNotFinishIsMarkedIncomplete() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shut = root.appendingPathComponent(".opencode/shut", isDirectory: true)
+        try FileManager.default.createDirectory(at: shut, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shut.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shut.path) }
+        let found = AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle, baseline: [])
+        #expect(found.contains { $0.path == ".opencode/shut" && $0.isIncomplete })
+    }
 }

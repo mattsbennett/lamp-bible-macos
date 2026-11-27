@@ -1104,6 +1104,20 @@ public enum AgentTerminalLaunchCheck {
         /// text, a link's target, or a file's size.
         public let detail: String
         public var id: String { path + "\u{0}" + fingerprint }
+        /// Something the check could not look at, which no answer can cover.
+        public var isIncomplete: Bool { fingerprint == AgentTerminalLaunchCheck.incomplete }
+    }
+
+    static let incomplete = "incomplete"
+
+    /// Whether the folders Lamp's skills are installed into are real ones,
+    /// or not there: never a link, which an install would write through.
+    public static func skillFoldersArePlain(in workspace: URL) -> Bool {
+        for path in [".claude", ".claude/skills", ".agents", ".agents/skills"] {
+            var info = stat()
+            if lstat(workspace.appendingPathComponent(path).path, &info) == 0, info.st_mode & S_IFMT != S_IFDIR { return false }
+        }
+        return true
     }
 
     /// What every provider reads from a workspace, matched without regard to
@@ -1139,7 +1153,11 @@ public enum AgentTerminalLaunchCheck {
                 let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "?"
                 found.append(Finding(path: relative, fingerprint: digest("link:" + target), detail: "a link to \(target)"))
             case S_IFDIR:
-                let children = ((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
+                guard let listed = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
+                    found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be listed"))
+                    return
+                }
+                let children = listed.sorted()
                 let parts = relative.split(separator: "/")
                 for child in children {
                     let path = relative + "/" + child
@@ -1171,7 +1189,7 @@ public enum AgentTerminalLaunchCheck {
         }
         for name in names.sorted() where roots.contains(name.lowercased()) { visit(name) }
         if counted > largestCount {
-            found.append(Finding(path: ".", fingerprint: digest("count:\(counted)"), detail: "more than \(largestCount) entries, too many to check one by one"))
+            found.append(Finding(path: ".", fingerprint: incomplete, detail: "more than \(largestCount) entries, too many to check one by one"))
         }
         return found
     }
@@ -1210,8 +1228,18 @@ public enum AgentTerminalLaunchCheck {
             + ((permissions["additionalDirectories"] as? [Any]) ?? []).map { "folder \(shown($0))" }
     }
 
+    /// Read only from a plain file reached through plain folders: a linked
+    /// one would hand Lamp grants from somewhere else to trust.
     static func grants(inFile file: URL) -> [String] {
-        guard let data = try? Data(contentsOf: file),
+        var folder = file.deletingLastPathComponent()
+        for _ in 0..<2 {
+            var info = stat()
+            if lstat(folder.path, &info) == 0, info.st_mode & S_IFMT != S_IFDIR { return [] }
+            folder = folder.deletingLastPathComponent()
+        }
+        var info = stat()
+        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              let data = try? Data(contentsOf: file),
               let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return [] }
         return grants(in: settings)
@@ -1275,6 +1303,10 @@ public enum AgentTerminalLaunchCheck {
 
     private static func key(_ workspace: URL) -> String { workspace.standardizedFileURL.path }
 
+    /// Every read and rewrite of the file, one at a time: an approval and a
+    /// session's end can land together, and each rewrites it whole.
+    private static let storeLock = NSLock()
+
     private static func load(_ file: URL) -> [String: Record] {
         (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String: Record].self, from: $0) } ?? [:]
     }
@@ -1295,6 +1327,8 @@ public enum AgentTerminalLaunchCheck {
     /// own: as a Terminal session ends, when only it has been writing them,
     /// and on the first check.
     public static func recordBaseline(in workspace: URL, file: URL = stateFile) throws {
+        storeLock.lock()
+        defer { storeLock.unlock() }
         var records = load(file)
         records[key(workspace), default: Record()].baseline =
             grants(inFile: workspace.appendingPathComponent(".claude/settings.local.json"))
@@ -1310,6 +1344,8 @@ public enum AgentTerminalLaunchCheck {
     /// The person said to open with exactly these: replacing what was
     /// approved before, so one that has gone is not approved for ever.
     public static func approve(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) throws {
+        storeLock.lock()
+        defer { storeLock.unlock() }
         var records = load(file)
         records[key(workspace), default: Record()].approved = findings.map(\.id).sorted()
         try save(records, to: file)

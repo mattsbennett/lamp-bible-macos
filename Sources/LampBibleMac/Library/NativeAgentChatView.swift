@@ -525,16 +525,18 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 let first = !cancelSent
                 cancelSent = true
                 stateLock.unlock()
-                declineAll()
                 if let sessionToCancel, first {
-                    // Armed before the write, which can block on a full pipe
-                    // if the agent has stopped reading.
+                    // Armed before any write, which can block on a full pipe
+                    // if the agent has stopped reading: the answers to what
+                    // waits on the card, then the cancel.
                     DispatchQueue.global().asyncAfter(deadline: .now() + Self.acpCancelGraceSeconds) {
                         self?.stop(process)
                     }
+                    declineAll()
                     send(["method": "session/cancel", "params": ["sessionId": sessionToCancel]])
                 } else {
                     self?.stop(process)
+                    declineAll()
                 }
             }
             lock.unlock()
@@ -847,15 +849,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 let first = !interruptSent
                 interruptSent = true
                 stateLock.unlock()
-                declineAll()
                 if let toInterrupt, first {
+                    // Armed before any write, which can block on a full pipe.
                     DispatchQueue.global().asyncAfter(deadline: .now() + Self.acpCancelGraceSeconds) {
                         self?.stop(process)
                     }
+                    declineAll()
                     send(["id": 1_000_000, "method": "turn/interrupt",
                           "params": AgentCodexRun.interrupt(threadID: toInterrupt.0, turnID: toInterrupt.1)])
                 } else {
                     self?.stop(process)
+                    declineAll()
                 }
             }
             lock.unlock()
@@ -2676,6 +2680,15 @@ final class NativeAgentChatModel: ObservableObject {
         let contextualPrompt: String
         do {
             contextualPrompt = try await preparing()
+            // A conversation sync put in place while the prompt was being
+            // made is not answered from this one: the earlier check passed
+            // before the wait, and a running chat takes nothing from disk.
+            let onDisk = AgentChatTranscriptStore.load(providerID: provider.rawValue, in: workspace).conversationID
+            if let onDisk, let mine = conversationID, onDisk != mine {
+                throw CocoaError(.userCancelled, userInfo: [
+                    NSLocalizedDescriptionKey: "the conversation changed on another device while it was being prepared, so it wasn’t sent",
+                ])
+            }
         } catch {
             finish(RunOutcome(
                 result: AgentCLIProcessResult(
