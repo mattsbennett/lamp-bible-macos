@@ -119,10 +119,12 @@ struct AgentTerminalHoldsTests {
     /// doesn't start it at all.
     /// End is remembered until the process goes, so the Terminal doesn't type
     /// Claude's command into a shell that ignored the request to stop.
-    @Test func endIsRememberedUntilTheProcessGoes() throws {
+    @Test func endIsRememberedUntilTheProcessGoes() async throws {
         let place = try workspace()
         let process = try spawn("trap '' TERM; exec sleep 30")
         defer { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+        // Its trap set before it is asked to stop.
+        try await Task.sleep(for: .milliseconds(200))
         let launch = UUID()
         holds.begin(launch, in: place)
         holds.started(launch, pid: process.processIdentifier)
