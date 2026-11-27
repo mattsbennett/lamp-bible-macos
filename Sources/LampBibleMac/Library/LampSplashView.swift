@@ -12,8 +12,7 @@ import UniformTypeIdentifiers
 /// otherwise assemble itself around an empty reader and a progress spinner in the
 /// corner.
 ///
-/// The icon's flame in the app's accent, the name, and the verse the app is
-/// named for. The gleam under the name is Core Animation's, run by the render
+/// The app's icon, the name, and the verse the app is named for. The gleam under the name is Core Animation's, run by the render
 /// server: the library is opened on the main thread while this shows, and
 /// SwiftUI's own animations stuttered with it. With Reduce Motion the gleam
 /// rests, brightening and dimming.
@@ -23,15 +22,15 @@ struct LampSplashView: View {
 
     var body: some View {
         // Centred as one group on what is drawn: no room left above the
-        // flame or below the last line that the eye would not see, so the
-        // flame, the words and the status sit in the middle of the window
+        // icon or below the last line that the eye would not see, so the
+        // icon, the words and the status sit in the middle of the window
         // together (owner, Nov 2026).
         VStack(spacing: 0) {
-            flame
+            LampSplashIcon(size: 80)
 
             Text("Lamp Bible")
                 .font(.system(size: 30, weight: .semibold, design: .serif))
-                .padding(.top, 44)
+                .padding(.top, 24)
 
             LampSplashShimmer(isAnimated: !reduceMotion)
                 .frame(width: 180, height: 2)
@@ -76,27 +75,42 @@ struct LampSplashView: View {
             withAnimation { isShowingSlowStartMessage = true }
         }
     }
+}
 
-    /// The icon's flame on its own, in the app's accent: the phone's launch
-    /// image (`lampsplash`) as the accent's mask. That image is cropped to
-    /// the flame, so centring it centres the flame; the `lampflame.fill`
-    /// symbol drawn here before carried its template's uneven margins and
-    /// sat 38 points right of the words under it. The whole icon stands in
-    /// where the asset catalog isn't built in, as in a SwiftPM build.
-    @ViewBuilder
-    private var flame: some View {
-        if NSImage(named: "lampsplash") != nil {
-            Color.accentColor
-                .mask(Image("lampsplash").resizable().scaledToFit())
-                .aspectRatio(0.5, contentMode: .fit)
-                .frame(height: 120)
-                .accessibilityHidden(true)
-        } else {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 112, height: 112)
-                .accessibilityHidden(true)
+/// The app's icon, small, as a tile with the system's rounded corners.
+///
+/// It was the icon's flame alone, in the accent, at 120 points with 44 above
+/// the name: large, far from the words, and plain (owner, 2026-11-26, who
+/// chose this from seven static options). The artwork is the icon's own
+/// (`lampicon`, the 128 to 512 pixel icon images), clipped as macOS and iOS
+/// clip an icon, so it is the icon and not a drawing of it. Where the asset
+/// catalog is not built, as in a SwiftPM build, the application's icon
+/// stands in, which carries its own shape.
+struct LampSplashIcon: View {
+    let size: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if NSImage(named: "lampicon") != nil {
+                let shape = RoundedRectangle(cornerRadius: size * 0.2237, style: .continuous)
+                Image("lampicon")
+                    .resizable()
+                    .interpolation(.high)
+                    .clipShape(shape)
+                    // A hairline in the dark, where the icon's dark spine
+                    // would otherwise run into the window.
+                    .overlay(shape.strokeBorder(.white.opacity(colorScheme == .dark ? 0.08 : 0), lineWidth: 1))
+                    .shadow(
+                        color: colorScheme == .dark ? .black.opacity(0.45) : Color(red: 0.47, green: 0.04, blue: 0.06).opacity(0.22),
+                        radius: 10, y: 8
+                    )
+            } else {
+                Image(nsImage: NSApp.applicationIconImage).resizable()
+            }
         }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
