@@ -233,6 +233,27 @@ struct LampAnimationCaptureTests {
         }
     }
 
+    /// A canvas's current texture given straight as an attachment, and
+    /// buffers submitted as an iterator, are followed; a canvas set up for a
+    /// compute shader to write into is refused by name.
+    @Test(.enabled(if: LampAnimationCaptureTests.hasWebGPU))
+    func otherWaysOfReachingTheCanvasAreFollowedOrRefused() async throws {
+        let iterated = Self.webGPUPage().replacingOccurrences(
+            of: "device.queue.submit([encoder.finish()]);", with: "device.queue.submit([encoder.finish()].values());"
+        )
+        #expect(try await wrongFrames(iterated).isEmpty)
+        let compute = Self.webGPUPage().replacingOccurrences(
+            of: "context.configure({ device, format, alphaMode: \"opaque\" });",
+            with: "context.configure({ device, format: \"rgba8unorm\", alphaMode: \"opaque\", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING });"
+        )
+        do {
+            _ = try await wrongFrames(compute)
+            Issue.record("rendered a canvas set up for compute writes")
+        } catch {
+            #expect(error.localizedDescription.contains("compute shader"), "\(error.localizedDescription)")
+        }
+    }
+
     /// A 2D page is drawn once a frame, never twice: one painting over its
     /// last frame would show the first one twice.
     @Test func a2DPageIsDrawnOnceAFrame() async throws {

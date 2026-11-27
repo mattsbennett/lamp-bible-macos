@@ -9,7 +9,10 @@
   // One registry for every frame of the page, in the top window, so a queue
   // from one frame copies a canvas drawn in another and frames agree about
   // which context a canvas gave.
-  const fresh = () => ({ twins: new WeakMap(), kinds: new WeakMap(), transferred: new WeakSet(), drew: new Set() });
+  const fresh = () => ({
+    twins: new WeakMap(), kinds: new WeakMap(), transferred: new WeakSet(), drew: new Set(),
+    byContext: new WeakMap(), canvasTexture: new WeakMap(), viewTexture: new WeakMap(), drawsOn: new WeakMap(),
+  });
   let registry;
   try {
     registry = window.top.__lampWebGPUKeep || (window.top.__lampWebGPUKeep = fresh());
@@ -40,12 +43,10 @@
   // texture (this frame's, once asked for) }. Held weakly, so a canvas the
   // page drops goes with its twin.
   const twinOf = (canvas) => registry.twins.get(canvas);
-  const byContext = new WeakMap();
   // This frame's canvas textures, to their twins, and the textures each view
-  // and each command buffer drew on.
-  const canvasTexture = new WeakMap();
-  const viewTexture = new WeakMap();
-  const drawsOn = new WeakMap();
+  // and each command buffer drew on: shared by every frame of the page, so a
+  // device in one drawing on a canvas in another is seen.
+  const { byContext, canvasTexture, viewTexture, drawsOn } = registry;
 
   /// The twin's frame is over: what the spec empties a canvas for. The page
   /// canvas keeps the last frame copied to it until the next is.
@@ -173,6 +174,14 @@
   const configure = GPUCanvasContext.prototype.configure;
   GPUCanvasContext.prototype.configure = function (descriptor) {
     const entry = byContext.get(this);
+    // A compute shader writing straight into the canvas reaches nothing Lamp
+    // follows, so a canvas set up for it is refused by name.
+    if (entry && descriptor && (descriptor.usage & GPUTextureUsage.STORAGE_BINDING)) {
+      const message = "Lamp keeps no WebGPU frame a compute shader writes into the canvas: write to a texture of "
+        + "your own and draw it onto the canvas with a render pass.";
+      report(message);
+      throw new DOMException(message, "NotSupportedError");
+    }
     if (entry) { endFrame(entry); follow(entry); }
     const result = configure.call(this, descriptor);
     // Configuring empties the canvas, as the spec has it.
@@ -217,12 +226,18 @@
     if (!set) drawsOn.set(encoder, set = new Set());
     set.add(texture);
   };
+  // A view, or a texture given as one, which newer WebKit takes.
+  const textureOf = (target) => target && (viewTexture.get(target) || (canvasTexture.has(target) ? target : null));
   const beginRenderPass = GPUCommandEncoder.prototype.beginRenderPass;
   GPUCommandEncoder.prototype.beginRenderPass = function (descriptor) {
+    // Read once, and handed on as read: a sequence may be an iterator.
+    if (descriptor && descriptor.colorAttachments && !Array.isArray(descriptor.colorAttachments)) {
+      descriptor = { ...descriptor, colorAttachments: Array.from(descriptor.colorAttachments) };
+    }
     for (const attachment of (descriptor && descriptor.colorAttachments) || []) {
       if (!attachment) continue;
-      note(this, viewTexture.get(attachment.view));
-      note(this, viewTexture.get(attachment.resolveTarget));
+      note(this, textureOf(attachment.view));
+      note(this, textureOf(attachment.resolveTarget));
     }
     return beginRenderPass.call(this, descriptor);
   };
@@ -247,9 +262,10 @@
   const queue = GPUQueue.prototype;
   const submit = queue.submit;
   queue.submit = function (buffers) {
+    buffers = Array.from(buffers || []);
     const result = submit.call(this, buffers);
     const reached = new Set();
-    for (const buffer of buffers || []) for (const texture of drawsOn.get(buffer) || []) reached.add(texture);
+    for (const buffer of buffers) for (const texture of drawsOn.get(buffer) || []) reached.add(texture);
     for (const texture of reached) keepTexture(texture);
     return result;
   };

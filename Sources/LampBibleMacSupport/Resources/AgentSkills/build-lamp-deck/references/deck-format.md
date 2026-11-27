@@ -713,9 +713,14 @@ the new video: after every render, write the names it returned into the deck.
   `lines/webgpu/`, `tsl/display/` with bloom and the rest) go with it, and
   post-processing goes through `RenderPipeline`. On a Mac without WebGPU (before
   macOS 26) the same page draws with WebGL and may look a little different;
-  `render_animation` says which drew. Draw on a canvas in the page: WebGPU
-  on an `OffscreenCanvas`, or in a worker, reaches no frame Lamp keeps, and is
-  refused. If the scene doesn't need WebGPU, plain `three` is simpler.
+  `render_animation` says which drew. Draw on a canvas in the page, with a
+  render pass: WebGPU on an `OffscreenCanvas`, or a compute shader writing
+  straight into the canvas, reaches no frame Lamp keeps and is refused, and
+  one drawn in a worker is never kept. Draw each frame in one submit, or end
+  with the one that draws last. On a WebGPU page Lamp draws the first frame
+  twice and keeps the second, since a first draw may only build shaders:
+  another reason `render(t)` must hang on `t` alone. If the scene doesn't
+  need WebGPU, plain `three` is simpler.
 - **A page written for 0.170** that uses something three has since taken
   away, such as `WebGLMultipleRenderTargets` (now `WebGLRenderTarget` with a
   `count`), stops with what is missing when it is drawn again; the video
