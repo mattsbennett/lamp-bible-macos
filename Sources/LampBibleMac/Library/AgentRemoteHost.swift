@@ -502,17 +502,27 @@ final class AgentRemoteHost: ObservableObject {
                 requestID: message.requestID, chatID: open.id
             ), to: peer)
         case .allowOnce, .deny:
-            guard let request = model.pendingApprovals.first(where: { $0.id == message.approvalID }),
-                  model.answer(request, with: outcome == .allowOnce ? .allow : .deny, saysWhy: false)
+            let answer: AgentToolApprovalAnswer = outcome == .allowOnce ? .allow : .deny
+            // After Stop nothing waiting is allowed, though it may not have
+            // been taken off the card yet.
+            guard !model.isStopping,
+                  let request = model.pendingApprovals.first(where: { $0.id == message.approvalID }),
+                  model.answer(request, with: answer, saysWhy: false)
             else {
                 send(gone, to: peer)
                 return
             }
-            send(.approvalAnswered(
-                open.id, approvalID: request.id,
-                decision: outcome == .allowOnce ? LampAgentRemoteApprovalAnswer.allowOnce : LampAgentRemoteApprovalAnswer.deny,
-                requestID: message.requestID
-            ), to: peer)
+            // Acknowledged once the run has it: Claude's hook can give up
+            // waiting with the answer written but unread.
+            track(peer) { [weak self, weak peer] in
+                let taken = await model.answerTaken(request, answer: answer)
+                guard let self, let peer else { return }
+                self.send(taken ? .approvalAnswered(
+                    open.id, approvalID: request.id,
+                    decision: outcome == .allowOnce ? LampAgentRemoteApprovalAnswer.allowOnce : LampAgentRemoteApprovalAnswer.deny,
+                    requestID: message.requestID
+                ) : gone, to: peer)
+            }
         }
     }
 

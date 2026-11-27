@@ -96,4 +96,31 @@ struct LampAgentRemoteApprovalHostingTests {
         )
         #expect(judged(answered) == .gone)
     }
+
+    /// Claude's hook says where a command runs beside its input, and
+    /// Antigravity gives its own account of one: both reach the phone, the
+    /// account as the agent's words.
+    @Test func claudesFolderAndAntigravitysAccountReachThePhone() throws {
+        let payload = #"{"tool_name":"Bash","tool_input":{"command":"ls ../notes"},"cwd":"/Users/x/Writing/talk"}"#
+        let request = try #require(AgentToolApprovalRequest(id: "h1", hookPayload: Data(payload.utf8)))
+        let claude = LampAgentRemoteHosting.approval(request, provider: "claude")
+        #expect(claude.folder == "/Users/x/Writing/talk" && claude.canAllow)
+
+        let params: [String: Any] = ["toolCall": [
+            "kind": "execute",
+            "rawInput": ["CommandLine": "sw_vers -productVersion", "toolSummary": "Check macOS product version"],
+        ] as [String: Any], "options": [
+            ["optionId": "allow", "name": "Allow", "kind": "allow_once"],
+            ["optionId": "deny", "name": "Deny", "kind": "reject_once"],
+        ]]
+        let asked = try #require(AgentACPRun.commandRequest(permission: params, readOnly: false, id: "agy-1"))
+        let agy = LampAgentRemoteHosting.approval(asked, provider: "antigravity")
+        #expect(agy.command == "sw_vers -productVersion" && agy.agentReason == "Check macOS product version")
+        #expect(AgentToolApprovalSummary.of(asked).detail?.contains("Antigravity says: Check macOS product version") == true)
+        // A folder that doesn't read as itself makes it Deny-only.
+        let hidden = LampAgentRemoteHosting.approval(AgentToolApprovalRequest(
+            id: "codex-4", toolName: AgentCodexRun.commandToolName, toolInputJSON: input(["command": "ls", "cwd": "/w/\u{202E}x"])
+        ), provider: "codex")
+        #expect(!hidden.canAllow)
+    }
 }

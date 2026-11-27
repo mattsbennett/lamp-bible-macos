@@ -21,7 +21,9 @@ struct AgentACPCommandTests {
         #expect(request.alwaysAllowRule == nil)
         let shown = AgentToolApprovalSummary.of(request)
         #expect(shown.title == "Run a command")
-        #expect(shown.detail == "sw_vers -productVersion")
+        // The command whole, then the agent's own account of it, said to be
+        // its.
+        #expect(shown.detail == "sw_vers -productVersion\n\nAntigravity says: Check macOS product version")
         #expect(shown.note?.contains("Lamp does not sandbox Antigravity") == true)
         // A reader chat never asks: its rule rejects.
         #expect(AgentACPRun.commandRequest(permission: params, readOnly: true, id: "agy-1") == nil)

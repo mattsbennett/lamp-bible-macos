@@ -27,17 +27,23 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
     /// The rule Always Allow would save, if there is one narrow enough to
     /// offer; see `AgentToolAlwaysAllowRule`.
     public let alwaysAllowRule: AgentToolAlwaysAllowRule?
+    /// Where the call runs, where the provider says beside its input, as
+    /// Claude Code's hook does: a relative path in a command is read from
+    /// here.
+    public let folder: String?
 
     public init(
         id: String,
         toolName: String,
         toolInputJSON: String,
-        alwaysAllowRule: AgentToolAlwaysAllowRule? = nil
+        alwaysAllowRule: AgentToolAlwaysAllowRule? = nil,
+        folder: String? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.toolInputJSON = toolInputJSON
         self.alwaysAllowRule = alwaysAllowRule
+        self.folder = folder
     }
 
     /// Reads a hook's payload. Nil if it names no tool.
@@ -56,7 +62,8 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
                 toolName: toolName,
                 toolInput: payload["tool_input"] as? [String: Any] ?? [:],
                 suggestions: payload["permission_suggestions"] as? [[String: Any]]
-            )
+            ),
+            folder: (payload["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -508,7 +515,9 @@ public struct AgentToolApprovalSummary: Equatable, Sendable {
         case AgentACPRun.commandToolName:
             return .init(
                 title: "Run a command",
-                detail: [string("command"), string("cwd").map { "In \($0)" }].compactMap { $0 }.joined(separator: "\n\n"),
+                detail: [
+                    string("command"), string("cwd").map { "In \($0)" }, string("reason").map { "Antigravity says: \($0)" },
+                ].compactMap { $0 }.joined(separator: "\n\n"),
                 note: "Lamp does not sandbox Antigravity. Unless your own Antigravity settings do, this command can read and change anything your account can, and use the network. Allow lets it run this once."
             )
         case "Bash":

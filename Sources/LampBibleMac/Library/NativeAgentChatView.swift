@@ -3304,6 +3304,20 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Gives the waiting hook, or the waiting Codex request, the person's
     /// answer. Always Allow's rules are kept for this writing's next runs.
+    /// Whether Stop has been pressed on the running turn: nothing waiting is
+    /// then allowed, so a device's answer is too late.
+    var isStopping: Bool { cancelRequested }
+
+    /// Whether the run has taken an answer given with `answer(_:with:)`:
+    /// at once for Codex and Antigravity, whose runners take it as it is
+    /// given; for Claude, once its hook has read it, which it may not before
+    /// it gives up waiting.
+    func answerTaken(_ request: AgentToolApprovalRequest, answer: AgentToolApprovalAnswer) async -> Bool {
+        if runnerApprovals { return true }
+        guard let approvalChannel else { return false }
+        return await Task.detached { approvalChannel.waitUntilTaken(request.id, answer: answer) }.value
+    }
+
     /// Gives a waiting request the person's answer. False where it was no
     /// longer waiting, or the answer could not be given; said in the pane
     /// unless `saysWhy` is false, as for a device, which is told itself

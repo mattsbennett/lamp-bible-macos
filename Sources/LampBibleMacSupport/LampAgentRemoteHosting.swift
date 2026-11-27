@@ -261,14 +261,15 @@ public enum LampAgentRemoteHosting {
         switch request.toolName {
         case AgentCodexRun.commandToolName, AgentACPRun.commandToolName, "Bash":
             let command = string("command")
+            let folder = string("cwd") ?? request.folder
             return LampAgentRemoteApproval(
                 id: request.id, provider: provider, kind: LampAgentRemoteApproval.command, title: summary.title,
-                command: command, folder: string("cwd"),
-                // Codex gives a reason; Claude's shell, a description of the
-                // command. Both are the agent's own words.
+                command: command, folder: folder,
+                // Codex and Antigravity give a reason; Claude's shell, a
+                // description of the command. Each is the agent's own words.
                 agentReason: string("reason") ?? string("description"),
                 note: summary.note,
-                canAllow: command.map(LampAgentRemoteApproval.canShowWhole) ?? false
+                canAllow: LampAgentRemoteApproval.mayAllow(command: command, folder: folder)
             )
         default:
             return LampAgentRemoteApproval(

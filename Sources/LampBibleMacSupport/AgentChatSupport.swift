@@ -2203,6 +2203,9 @@ public enum AgentACPRun {
         else { return nil }
         var shown: [String: Any] = ["command": command]
         if let folder = input["Cwd"] as? String ?? call["cwd"] as? String, !folder.isEmpty { shown["cwd"] = folder }
+        // The agent's own account of the command, kept as its words, never
+        // as the command.
+        if let reason = input["toolSummary"] as? String, !reason.isEmpty { shown["reason"] = reason }
         let data = (try? JSONSerialization.data(withJSONObject: shown, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
         return AgentToolApprovalRequest(id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self))
     }
