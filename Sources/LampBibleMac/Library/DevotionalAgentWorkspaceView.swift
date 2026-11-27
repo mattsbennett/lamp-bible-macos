@@ -2662,11 +2662,19 @@ struct DevotionalAgentWorkspaceView: View {
             // The library's word on the charts goes back with the validator's,
             // because an agent reading this status is the one who can fix a
             // chart naming a translation that is not installed.
-            let issues = LampPresentationDeckValidator.validate(imported) { assetPath in
-                store.assetURL(forAssetPath: assetPath).map {
-                    FileManager.default.fileExists(atPath: $0.path)
-                } ?? false
-            } + charts.issues
+            // The library's own copies now, so read by path: what is too big
+            // or not for every device is said here as validate_deck says it.
+            let issues = LampPresentationDeckValidator.validate(
+                imported,
+                assetExists: { assetPath in
+                    store.assetURL(forAssetPath: assetPath).map {
+                        FileManager.default.fileExists(atPath: $0.path)
+                    } ?? false
+                },
+                videoFacts: { assetPath in
+                    store.assetURL(forAssetPath: assetPath).flatMap(LampPresentationVideoFacts.read(at:))
+                }
+            ) + charts.issues
             let advisory = issues.filter { $0.severity == .warning }
             presentationStatus = advisory.isEmpty
                 ? "Imported \(imported.title) into Slide Studio (\(destination.lastPathComponent))."

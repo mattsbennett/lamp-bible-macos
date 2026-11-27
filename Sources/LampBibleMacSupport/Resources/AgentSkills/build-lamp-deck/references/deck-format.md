@@ -738,7 +738,9 @@ made.
   animation's are, and write the names into the deck again after every
   prepare: they change whenever the video does. A tiny source can come out
   a little larger than it went in; that is the price of one format every
-  device plays.
+  device plays. Both validators warn of a video a deck names that is over its
+  limit or in a codec not every iPhone and iPad plays (AV1, ProRes, VP9):
+  bring such a video in with `prepare_video`.
 - **Sound:** a clip keeps the video's sound, which belongs in the file as AAC;
   a loop is silent. The answer says what sound came in and what was kept, and
   says so when a clip has none or a loop's was left out.

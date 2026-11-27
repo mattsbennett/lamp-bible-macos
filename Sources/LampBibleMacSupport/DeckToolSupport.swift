@@ -74,7 +74,22 @@ public enum LampDeckTools {
             )
         }
         let issues = workspace.map { folder in
-            LampPresentationDeckValidator.validate(deck) { LampWorkspaceFiles.exists($0, in: folder) }
+            // A video's size and codec, read from its boxes as the skill's
+            // validator reads them, for the warnings that point to
+            // prepare_video.
+            LampPresentationDeckValidator.validate(
+                deck,
+                assetExists: { LampWorkspaceFiles.exists($0, in: folder) },
+                // From the very file the workspace's walk opened, following
+                // no link.
+                videoFacts: { path in
+                    let root = open(folder.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+                    guard root >= 0 else { return nil }
+                    defer { close(root) }
+                    guard let file = try? LampWorkspaceFiles.openPlainFile(path, in: root) else { return nil }
+                    return LampPresentationVideoFacts.read(from: FileHandle(fileDescriptor: file, closeOnDealloc: true))
+                }
+            )
         } ?? LampPresentationDeckValidator.validate(deck)
         let errors = issues.filter { $0.severity == .error }
         return ValidationReport(

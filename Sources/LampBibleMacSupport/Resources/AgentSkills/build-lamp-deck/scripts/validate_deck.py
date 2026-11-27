@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import stat
 import sys
 import unicodedata
 from pathlib import Path
@@ -901,6 +903,184 @@ def video_playable(path):
     return name[dot + 1:].lower() in VIDEO_EXTENSIONS
 
 
+# A deck carries a moving background to 100 MB and a clip to 250 MB
+# (LampPresentationVideo / LampPresentationClip.largestFileBytes).
+LOOP_LIMIT = 100_000_000
+CLIP_LIMIT = 250_000_000
+# Codecs every iPhone and iPad plays, by sample entry: H.264, HEVC, and HEVC
+# with Dolby Vision (LampPresentationVideo.everyDevicePlays).
+EVERY_DEVICE_PLAYS = {"avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe"}
+CODEC_NAMES = {
+    "av01": "AV1", "vp09": "VP9", "vp08": "VP8",
+    "apcn": "ProRes", "apch": "ProRes", "apcs": "ProRes", "apco": "ProRes", "ap4h": "ProRes", "ap4x": "ProRes",
+    "jpeg": "Motion JPEG", "mjpa": "Motion JPEG", "mjpb": "Motion JPEG", "mp4v": "MPEG-4",
+}
+
+
+def open_in_deck(deck_directory: Path, relative: str) -> int | None:
+    """An open descriptor for the regular file at `relative` inside the deck's
+    folder, reached one part at a time following no link, as Lamp's own
+    workspace walk reaches it; None where that can't be done."""
+    parts = relative.split("/")
+    if not parts or any(part in ("", ".", "..") for part in parts) or "\0" in relative:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        current = os.open(deck_directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    try:
+        for part in parts[:-1]:
+            following = os.open(part, flags | getattr(os, "O_DIRECTORY", 0), dir_fd=current)
+            os.close(current)
+            current = following
+        file = os.open(parts[-1], flags | getattr(os, "O_NONBLOCK", 0), dir_fd=current)
+    except (OSError, UnicodeError, ValueError):
+        # Not there, a link, or a name the file system can't hold.
+        os.close(current)
+        return None
+    os.close(current)
+    if not stat.S_ISREG(os.fstat(file).st_mode):
+        os.close(file)
+        return None
+    return file
+
+
+def codec_name(code: str) -> str:
+    """A codec's name as a person would know it, as Lamp names it."""
+    if code.startswith(("avc1:", "avc3:")):
+        return {"110": "H.264 High 10", "122": "H.264 4:2:2"}.get(code[5:], "H.264 4:4:4")
+    return CODEC_NAMES.get(code, f"'{code}'")
+
+
+def video_codec(handle) -> str | None:
+    """The codec of the first enabled video track (moov/trak/mdia/minf/stbl/
+    stsd, the track found by its handler, vide, and on by its header's
+    flag): of its entries, the first not every device plays, else the first;
+    H.264 in High 10, 4:2:2 or 4:4:4 by its avcC profile as avc1:<profile>.
+    As LampPresentationVideoFacts reads it. None for a file that is not a
+    movie, has no such track, or whose boxes don't hold together. Reads by
+    seeking; every size is checked against what is left."""
+    def read(offset: int, count: int) -> bytes | None:
+        handle.seek(offset)
+        data = handle.read(count)
+        return data if len(data) == count else None
+
+    def inside(box, skip: int, count: int) -> bytes | None:
+        _, body, end = box
+        if end - body < skip + count:
+            return None
+        return read(body + skip, count)
+
+    def boxes(start: int, end: int, until: str | None = None):
+        found = []
+        offset = start
+        while end - offset >= 8 and len(found) < 4096:
+            header = read(offset, 8)
+            if header is None:
+                break
+            left = end - offset
+            size = int.from_bytes(header[0:4], "big")
+            kind = header[4:8].decode("utf-8", "replace")
+            header_length = 8
+            if size == 1:
+                large = read(offset + 8, 8) if left >= 16 else None
+                if large is None:
+                    break
+                size = int.from_bytes(large, "big")
+                header_length = 16
+            elif size == 0:
+                size = left
+            if size < header_length or size > left:
+                break
+            found.append((kind, offset + header_length, offset + size))
+            if kind == until:
+                break
+            offset += size
+        return found
+
+    def child(kind: str, box):
+        return next((found for found in boxes(box[1], box[2], until=kind) if found[0] == kind), None)
+
+    def entry_codes(descriptions) -> list[str]:
+        count = inside(descriptions, 4, 4)
+        if count is None:
+            return []
+        codes = []
+        offset = descriptions[1] + 8
+        end = descriptions[2]
+        for _ in range(min(int.from_bytes(count, "big"), 64)):
+            header = read(offset, 8) if end - offset >= 8 else None
+            if header is None:
+                break
+            size = int.from_bytes(header[0:4], "big")
+            if size < 8 or size > end - offset:
+                break
+            code = header[4:8].decode("utf-8", "replace")
+            if code in ("avc1", "avc3") and size > 86:
+                configuration = next(
+                    (box for box in boxes(offset + 86, offset + size, until="avcC") if box[0] == "avcC"), None
+                )
+                profile = configuration and inside(configuration, 1, 1)
+                if profile and profile[0] in (110, 122, 244, 44):
+                    code += f":{profile[0]}"
+            codes.append(code)
+            offset += size
+        return codes
+
+    length = handle.seek(0, 2)
+    movie = next((box for box in boxes(0, length, until="moov") if box[0] == "moov"), None)
+    if movie is None:
+        return None
+    for track in boxes(movie[1], movie[2]):
+        if track[0] != "trak":
+            continue
+        header = child("tkhd", track)
+        flags = header and inside(header, 0, 4)
+        if not flags or flags[3] & 1 == 0:
+            continue
+        media = child("mdia", track)
+        handler = media and child("hdlr", media)
+        kind = handler and inside(handler, 8, 4)
+        if not kind or kind.decode("utf-8", "replace") != "vide":
+            continue
+        information = child("minf", media)
+        table = information and child("stbl", information)
+        descriptions = table and child("stsd", table)
+        codes = entry_codes(descriptions) if descriptions else []
+        if codes:
+            return next((code for code in codes if code not in EVERY_DEVICE_PLAYS), codes[0])
+    return None
+
+
+def video_advice(path: str, deck_directory: Path, limit: int, use: str) -> list[str]:
+    """What a named video's size and codec mean for a deck, pointing to
+    prepare_video; the same sentences as Lamp's own validator. Nothing where
+    the file can't be reached as Lamp reaches it, or can't be read."""
+    file = open_in_deck(deck_directory, path)
+    if file is None:
+        return []
+    try:
+        with os.fdopen(file, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            codec = video_codec(handle)
+    except OSError:
+        return []
+    advice = []
+    if size > limit:
+        advice.append(
+            f"'{path}' is {(size + 999_999) // 1_000_000} MB, over the {limit // 1_000_000} MB a deck carries "
+            f"for {use}. Bring it in with prepare_video, which makes it smaller; if it is still over, shorten it."
+        )
+    if codec is not None and codec not in EVERY_DEVICE_PLAYS:
+        name = codec_name(codec)
+        advice.append(
+            f"'{path}' is {name} video, which an iPhone or iPad may not play. "
+            "Bring it in with prepare_video, which saves it as HEVC."
+        )
+    return advice
+
+
 def safe_asset_path(value):
     """Mirror Lamp's own check: a relative path that cannot leave the folder.
 
@@ -1715,6 +1895,25 @@ def validate(deck: object, deck_directory: Path | None = None) -> tuple[list[str
                         f"{path}.blocks[{index}].video: no file at {video!r}; "
                         "the picture is shown still until the video is delivered beside the deck"
                     )
+
+        # Videos a deck carries that are too big, or that not every device
+        # plays: warnings pointing to prepare_video, so decks already made
+        # keep opening.
+        if isinstance(blocks, list) and deck_directory is not None:
+            for index, block in enumerate(blocks):
+                if not isinstance(block, dict) or block.get("kind") != "image":
+                    continue
+                clip = block.get("clip")
+                origin = clip_origin(clip.get("source")) if isinstance(clip, dict) else None
+                named = [
+                    ("video", block.get("video"), LOOP_LIMIT, "a moving background"),
+                    ("clip", origin[1] if origin and origin[0] == "file" else None, CLIP_LIMIT, "a clip"),
+                ]
+                for field, video, limit, use in named:
+                    if not isinstance(video, str) or not safe_asset_path(video):
+                        continue
+                    for advice in video_advice(video, deck_directory, limit, use):
+                        warnings.append(f"{path}.blocks[{index}].{field}: {advice}")
 
         # Blocks the layout will never draw. Saying nothing here is what sent
         # deck authors to read the renderer to find out why a slide was bare.

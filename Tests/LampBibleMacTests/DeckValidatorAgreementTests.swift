@@ -1,6 +1,7 @@
 import Foundation
 import LampCore
 import Testing
+@testable import LampBibleMacSupport
 
 /// The skill ships a Python validator an agent runs before Lamp ever sees the
 /// deck, and Lamp validates again in Swift. Two implementations of one rule set
@@ -29,14 +30,32 @@ struct DeckValidatorAgreementTests {
         })
     }
 
-    /// The script's warnings, each `<path>: <message>`.
-    private func pythonWarnings(forJSON json: Data) throws -> [String] {
+    /// The script's warnings, each `<path>: <message>`, with `files` beside
+    /// the deck.
+    private func pythonWarnings(
+        forJSON json: Data, files: [String: Data] = [:], grow: [String: (Data, UInt64)] = [:]
+    ) throws -> [String] {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let deckURL = directory.appendingPathComponent("presentation.lampdeck")
         try json.write(to: deckURL)
+        for (path, data) in files {
+            let url = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        // Written, then lengthened without writing: a large file that costs
+        // no disk.
+        for (path, (data, size)) in grow {
+            let url = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: size)
+            try handle.close()
+        }
 
         let process = Process()
         let pipe = Pipe()
@@ -63,6 +82,108 @@ struct DeckValidatorAgreementTests {
                 .filter { $0.severity == .warning }
                 .map(\.path)
         )
+    }
+
+    /// A box: size, type, body.
+    private static func box(_ type: String, _ body: [UInt8]) -> [UInt8] {
+        withUnsafeBytes(of: UInt32(8 + body.count).bigEndian, Array.init) + Array(type.utf8) + body
+    }
+
+    /// A movie of one enabled video track whose entries are `codecs`, an
+    /// H.264 one with `profile` in its `avcC`, its media `padding` bytes.
+    private static func movie(_ codecs: String..., profile: UInt8? = nil, padding: Int = 0) -> Data {
+        let handler = box("hdlr", [UInt8](repeating: 0, count: 8) + Array("vide".utf8) + [UInt8](repeating: 0, count: 13))
+        let entries = codecs.flatMap { codec -> [UInt8] in
+            let body: [UInt8] = profile.map { [UInt8](repeating: 0, count: 78) + box("avcC", [1, $0, 0, 30]) }
+                ?? [UInt8](repeating: 0, count: 8)
+            return withUnsafeBytes(of: UInt32(8 + body.count).bigEndian, Array.init) + Array(codec.utf8) + body
+        }
+        let stsd = box("stsd", [0, 0, 0, 0] + withUnsafeBytes(of: UInt32(codecs.count).bigEndian, Array.init) + entries)
+        let tkhd = box("tkhd", [0, 0, 0, 1] + [UInt8](repeating: 0, count: 80))
+        let trak = box("trak", tkhd + box("mdia", handler + box("minf", box("stbl", stsd))))
+        return Data(box("ftyp", Array("isom".utf8) + [0, 0, 2, 0]) + box("moov", trak) + box("mdat", [UInt8](repeating: 0, count: padding)))
+    }
+
+    /// A video too big for a deck, or in a codec not every device plays:
+    /// both validators warn at the same place, in the same words, and say
+    /// nothing of one that fits.
+    @Test func bothValidatorsWarnOfAVideoThatIsTooBigOrNotForEveryDevice() throws {
+        let json = #"""
+        {"schemaVersion":1,"id":"60910124-99b3-48ca-9310-11c63ed118c0","title":"D","aspectRatio":"widescreen",
+         "theme":{"id":"lamp-dark","accentColor":"#F59E0B","backgroundColor":"#111827","foregroundColor":"#F9FAFB","typeface":"system-serif"},
+         "source":{"id":"60910124-99b3-48ca-9310-11c63ed118c1","kind":"devotional"},
+         "slides":[
+          {"id":"3b184129-31c5-48c8-962e-fe79e2862cc8","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd64","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "video":"Assets/loop.mp4"}]},
+          {"id":"3b184129-31c5-48c8-962e-fe79e2862cc9","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd65","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "clip":{"source":"Assets/clip.mov","starts":"click"}}]},
+          {"id":"3b184129-31c5-48c8-962e-fe79e2862cca","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd66","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "video":"Assets/fine.mp4"}]},
+          {"id":"3b184129-31c5-48c8-962e-fe79e2862ccb","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd67","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "video":"Assets/ten.mp4"}]},
+          {"id":"3b184129-31c5-48c8-962e-fe79e2862ccc","layout":"image","isHidden":false,"speakerNotes":"",
+           "blocks":[{"id":"3921b8a7-335a-4424-945b-bcb9d949bd68","kind":"image","text":"","assetPath":"Assets/a.jpg","altText":"A",
+             "video":"Assets/second.mp4"}]}]}
+        """#
+        let files: [String: Data] = [
+            "Assets/a.jpg": Data("jpeg".utf8),
+            // Lengthened past a loop's 100 MB below.
+            "Assets/loop.mp4": Self.movie("avc1"),
+            "Assets/clip.mov": Self.movie("apcn"),
+            "Assets/fine.mp4": Self.movie("hvc1", padding: 64),
+            "Assets/ten.mp4": Self.movie("avc1", profile: 110),
+            "Assets/second.mp4": Self.movie("avc1", "av01"),
+        ]
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for (path, data) in files {
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        let loop = try FileHandle(forWritingTo: folder.appendingPathComponent("Assets/loop.mp4"))
+        try loop.truncate(atOffset: 100_000_001)
+        try loop.close()
+        // The same files for the script, the large one grown the same way.
+        var scriptFiles = files
+        scriptFiles["Assets/loop.mp4"] = nil
+        let deck = try LampPresentationDeckStore.decodeUnvalidated(Data(json.utf8))
+        let fromSwift = LampDeckTools.validate(deckJSON: Data(json.utf8), workspace: folder).issues
+            .filter { $0.message.contains("prepare_video") }
+            .map { "\($0.path): \($0.message)" }
+        let fromPython = try pythonWarnings(forJSON: Data(json.utf8), files: scriptFiles, grow: ["Assets/loop.mp4": (Self.movie("avc1"), 100_000_001)])
+            .filter { $0.contains("prepare_video") }
+        #expect(Set(fromPython) == Set(fromSwift), "python said \(fromPython), swift said \(fromSwift)")
+        // A video reached through a linked folder is no one's to read.
+        let linked = folder.appendingPathComponent("Linked")
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: folder.appendingPathComponent("Assets"))
+        let throughLink = json.replacingOccurrences(of: "Assets/clip.mov", with: "Linked/clip.mov")
+        #expect(!LampDeckTools.validate(deckJSON: Data(throughLink.utf8), workspace: folder).issues
+            .contains { $0.message.contains("ProRes") })
+        let linkedDeck = folder.appendingPathComponent("presentation.lampdeck")
+        try Data(throughLink.utf8).write(to: linkedDeck)
+        let script = Process()
+        let output = Pipe()
+        script.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        script.arguments = ["python3", scriptURL.path, linkedDeck.path]
+        script.standardOutput = output
+        script.standardError = FileHandle.nullDevice
+        try script.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        script.waitUntilExit()
+        #expect(printed.contains("Valid Lamp deck"), "\(printed)")
+        #expect(!printed.contains("ProRes"))
+        #expect(Set(fromSwift) == [
+            "slides[0].blocks[0].video: 'Assets/loop.mp4' is 101 MB, over the 100 MB a deck carries for a moving background. Bring it in with prepare_video, which makes it smaller; if it is still over, shorten it.",
+            "slides[1].blocks[0].clip: 'Assets/clip.mov' is ProRes video, which an iPhone or iPad may not play. Bring it in with prepare_video, which saves it as HEVC.",
+            "slides[3].blocks[0].video: 'Assets/ten.mp4' is H.264 High 10 video, which an iPhone or iPad may not play. Bring it in with prepare_video, which saves it as HEVC.",
+            "slides[4].blocks[0].video: 'Assets/second.mp4' is AV1 video, which an iPhone or iPad may not play. Bring it in with prepare_video, which saves it as HEVC.",
+        ])
+        _ = deck
     }
 
     /// A way of starting a clip this app does not know, which only a deck's

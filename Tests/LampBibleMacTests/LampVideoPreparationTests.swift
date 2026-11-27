@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import LampCore
 import Testing
 @testable import LampBibleMacSupport
 
@@ -309,6 +310,22 @@ struct LampVideoPreparationTests {
             AgentChatFileLink.action(for: whole, cache: cache, viewedBy: viewed)
         }.value
         if case .open = played {} else { Issue.record("a whole movie did not open: \(played)") }
+    }
+
+    /// The deck validators read a video's codec from its boxes; on what
+    /// AVFoundation really writes, that is H.264 for the source, ProRes for a
+    /// see-through one, and HEVC for what this tool makes.
+    @Test func theDeckValidatorsReadTheCodecsVideosReallyHave() async throws {
+        let root = try folder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.mp4")
+        try await makeVideo(at: source)
+        #expect(LampPresentationVideoFacts.read(at: source)?.videoCodec == "avc1")
+        let clear = root.appendingPathComponent("clear.mov")
+        try await makeVideo(at: clear, seeThrough: true)
+        #expect(LampPresentationVideoFacts.read(at: clear)?.videoCodec == "ap4h")
+        let made = try await prepare("source.mp4", in: root)
+        #expect(LampPresentationVideoFacts.read(at: made.videoURL)?.videoCodec == "hvc1")
     }
 
     @Test func aLinkedAssetsFolderIsNotWrittenThrough() async throws {
