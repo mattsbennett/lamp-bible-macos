@@ -110,6 +110,9 @@ struct AgentToolApprovalSupportTests {
         #expect((settings["permissions"] as? NSDictionary)?["allow"] as? [String] == ["Bash(sw_vers)", "WebSearch"])
         // None kept, none given.
         #expect(json(Data(ClaudePermissionHook.settingsJSON(for: channel).utf8))?["permissions"] == nil)
+        // And taken back, as the person asks.
+        try AgentToolAllowRules.remove("Bash(sw_vers)", for: one, in: file)
+        #expect(AgentToolAllowRules.rules(for: one, in: file) == ["WebSearch"])
     }
 
     @Test func withoutASuggestionOnlyANarrowRuleIsOffered() {

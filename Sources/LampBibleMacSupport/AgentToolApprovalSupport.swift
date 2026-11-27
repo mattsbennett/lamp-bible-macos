@@ -367,6 +367,15 @@ public enum AgentToolAllowRules {
         load(file)[key(workspace)] ?? []
     }
 
+    /// Takes one back, as the person asked.
+    public static func remove(_ rule: String, for workspace: URL, in file: URL = defaultFile) throws {
+        var stored = load(file)
+        stored[key(workspace)] = (stored[key(workspace)] ?? []).filter { $0 != rule }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(stored).write(to: file, options: .atomic)
+    }
+
     public static func add(_ rules: [String], for workspace: URL, in file: URL = defaultFile) throws {
         var stored = load(file)
         var kept = stored[key(workspace)] ?? []

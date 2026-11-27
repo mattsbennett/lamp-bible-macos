@@ -502,10 +502,11 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 let outcome: [String: Any] = stopped || isCancelled
                     ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: answer, permission: entry.params)
                 publish()
-                stateLock.unlock()
-                // Written off the caller's thread, the card's being the main
-                // one: an agent that has stopped reading would hold it.
+                // Queued under the same lock that took it off the card, so a
+                // Stop's cancel can't be queued ahead of it; written off the
+                // caller's thread, the card's being the main one.
                 replies.async { send(["id": entry.id, "result": ["outcome": outcome]]) }
+                stateLock.unlock()
                 return true
             }
             func declineAll() {
@@ -837,9 +838,10 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 let entry = waiting.remove(at: index)
                 let given = stopped || isCancelled ? .deny : answer
                 publish()
-                stateLock.unlock()
-                // Off the caller's thread, as for Antigravity.
+                // Queued under the lock, and written off the caller's thread,
+                // as for Antigravity.
                 replies.async { send(["id": entry.id, "result": AgentCodexRun.decision(given)]) }
+                stateLock.unlock()
                 return true
             }
             func declineAll() {
@@ -1837,6 +1839,34 @@ private struct AgentToolApprovalCard: View {
         .padding(.bottom, 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(providerName) is asking permission")
+    }
+}
+
+/// What Always Allow kept for a writing, each with its Remove.
+private struct SavedPermissionsList: View {
+    let rules: [String]
+    let remove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Saved for this writing").font(.headline)
+            Text("Claude may do these here without asking, on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(rules, id: \.self) { rule in
+                HStack {
+                    Text(rule)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Remove", role: .destructive) { remove(rule) }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
     }
 }
 
@@ -3963,6 +3993,9 @@ struct NativeAgentChatView: View {
         ))
     }
 
+    @State private var savedPermissions: [String] = []
+    @State private var showingSavedPermissions = false
+
     /// The conversation, and after it the message being prepared, if one
     /// is; only the conversation is ever written back.
     private var shownMessages: Binding<[NativeAgentChatMessage]> {
@@ -3973,6 +4006,14 @@ struct NativeAgentChatView: View {
                 model.messages = new.filter { !placeholders.contains($0.id) }
             }
         )
+    }
+
+    /// What Always Allow kept for this writing, for a Claude writing chat.
+    private func loadSavedPermissions() {
+        let rules = provider.wireProvider == .claude && !mode.isReadOnly
+            ? AgentToolAllowRules.rules(for: workspaceFolder) : []
+        if rules != savedPermissions { savedPermissions = rules }
+        if rules.isEmpty { showingSavedPermissions = false }
     }
 
     /// Sends the next waiting message, if this pane is free to.
@@ -4287,6 +4328,8 @@ struct NativeAgentChatView: View {
             if let context { model.notificationContext = context }
         }
         .reportsVisibility(to: visibility)
+        .onAppear { loadSavedPermissions() }
+        .onChange(of: model.pendingApprovals.count) { _, _ in loadSavedPermissions() }
         // What waited while the writing's Terminal started goes when it has.
         .onReceive(NotificationCenter.default.publisher(for: KeptAgentChats.terminalHoldEnded)) { note in
             if note.object as? String == workspaceFolder.standardizedFileURL.path { drainQueue() }
@@ -4445,7 +4488,7 @@ struct NativeAgentChatView: View {
     /// Whether the header has a button to show.
     private var headerHasActions: Bool {
         (connectionState != .connected && connectionState != .checking) || model.isRunning
-            || (!hostShowsNewChat && !model.messages.isEmpty)
+            || (!hostShowsNewChat && !model.messages.isEmpty) || !savedPermissions.isEmpty
     }
 
     /// See `onConnectionChanged`.
@@ -4498,6 +4541,20 @@ struct NativeAgentChatView: View {
             if model.isRunning {
                 Button("Stop", systemImage: "stop.fill") { model.cancel() }
                     .controlSize(.small)
+            }
+            // What Always Allow kept for this writing, to see and take back:
+            // Lamp keeps it, out of Claude's own permission settings.
+            if !savedPermissions.isEmpty {
+                Button("Saved Permissions", systemImage: "checkmark.shield") { showingSavedPermissions = true }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("What Always Allow saved for this writing (\(savedPermissions.count))")
+                    .popover(isPresented: $showingSavedPermissions, arrowEdge: .bottom) {
+                        SavedPermissionsList(rules: savedPermissions) { rule in
+                            try? AgentToolAllowRules.remove(rule, for: workspaceFolder)
+                            loadSavedPermissions()
+                        }
+                    }
             }
             if !hostShowsNewChat {
                 Button("New Chat", systemImage: "square.and.pencil") {

@@ -3135,9 +3135,27 @@ struct DevotionalAgentWorkspaceView: View {
         opened = true
         terminalHold.map { KeptAgentChats.releaseTerminalHold($0, in: workspaceURL) }
         terminalHold = hold
-        // Until the CLI marks its start; for one that can't, a while; and for
-        // one that can but never does, longer.
-        KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: terminalReadyMarker == nil ? 30 : 120)
+        // For one that can't mark its start, a while. For one that can, until
+        // it does or ends: never by time, since one slow to start would read
+        // its settings after a chat had changed them. One that hasn't started
+        // in two minutes is closed instead, and only then are chats let go.
+        if terminalReadyMarker == nil {
+            KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: 30)
+        } else {
+            let launch = terminalID
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(120))
+                guard terminalHold == hold, terminalID == launch,
+                      let marker = terminalReadyMarker, !FileManager.default.fileExists(atPath: marker.path)
+                else { return }
+                activeProvider = nil
+                terminalExitCode = nil
+                terminalCapture = TerminalCaptureState()
+                KeptAgentChats.releaseTerminalHold(hold, in: workspaceURL)
+                terminalHold = nil
+                errorMessage = "The Terminal didn’t start within two minutes, so Lamp closed it. Try opening it again."
+            }
+        }
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —
