@@ -280,4 +280,14 @@ struct AgentTerminalLaunchCheckTests {
         #expect(mkfifo(root.appendingPathComponent(".claude/skills/build-lamp-deck/references/pipe").path, 0o644) == 0)
         #expect(findings(root, server, bundle).contains { $0.path.hasSuffix("references/pipe") && $0.isIncomplete })
     }
+
+    /// The Terminal's files are never written through a writing folder that
+    /// is itself a link.
+    @Test func aLinkedWritingFolderIsNotWrittenThrough() throws {
+        let (root, server, _) = try workspace()
+        let link = root.deletingLastPathComponent().appendingPathComponent("link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root)
+        #expect(throws: (any Error).self) { try server.restoreProviderConfigurations(in: link) }
+    }
 }

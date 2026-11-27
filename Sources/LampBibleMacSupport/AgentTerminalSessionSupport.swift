@@ -240,7 +240,8 @@ public enum AgentTerminalCaptureStore {
         let base = workspace.standardizedFileURL.path
         let folder = terminalDirectory(in: workspace).standardizedFileURL.path
         guard folder.hasPrefix(base + "/") else { return }
-        var directory = open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        // The writing's own folder too, never a link to somewhere else.
+        var directory = open(base, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard directory >= 0 else { return }
         defer { close(directory) }
         for part in folder.dropFirst(base.count + 1).split(separator: "/") {
@@ -1222,7 +1223,7 @@ public enum AgentTerminalLaunchCheck {
             case S_IFREG:
                 // Hashed in pieces, never read whole: a skill or plugin can
                 // hold a large file, and only a small one is shown or parsed.
-                guard let (fingerprint, head, size) = read(url) else {
+                guard let (fingerprint, head, size) = readThroughWalk(relative, in: workspace) else {
                     found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be read"))
                     return
                 }
@@ -1264,10 +1265,26 @@ public enum AgentTerminalLaunchCheck {
         return (found, Array(Set(restrictionsRead)).sorted())
     }
 
+    /// As `read(from:)`, the file opened through the workspace's own walk:
+    /// each folder from the one before, following no link, the file itself
+    /// regular and opened without blocking (`LampWorkspaceFiles`), so one
+    /// swapped for a link or a pipe after it was looked at is never read.
+    static func readThroughWalk(_ relative: String, in workspace: URL) -> (fingerprint: String, head: Data, size: Int64)? {
+        let root = open(workspace.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard root >= 0 else { return nil }
+        defer { close(root) }
+        guard let file = try? LampWorkspaceFiles.openPlainFile(relative, in: root) else { return nil }
+        return read(from: FileHandle(fileDescriptor: file, closeOnDealloc: true))
+    }
+
     /// What a file's bytes hash to, read in pieces, with up to the first
     /// `settingsBytes` of them, and its size.
     static func read(_ url: URL) -> (fingerprint: String, head: Data, size: Int64)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        return read(from: handle)
+    }
+
+    static func read(from handle: FileHandle) -> (fingerprint: String, head: Data, size: Int64)? {
         defer { try? handle.close() }
         var hasher = SHA256()
         var head = Data()
@@ -1358,13 +1375,26 @@ public enum AgentTerminalLaunchCheck {
         var info = stat()
         guard lstat(directory.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return false }
         if WorkspaceSkillStore.bundledSkillNames.contains(name) {
-            guard let bundled,
+            // Within the scan's budget: a tree larger than any Lamp ships
+            // is walked like anything else, where the budget holds.
+            guard entryCount(directory, atMost: 1_000) <= 1_000, let bundled,
                   let mine = try? WorkspaceSkillStore.treeDigest(of: directory),
                   let theirs = try? WorkspaceSkillStore.treeDigest(of: bundled.appendingPathComponent(name, isDirectory: true))
             else { return false }
             return mine == theirs && !containsLinkOrHidden(directory)
         }
         return WorkspaceSkillStore.isPlainSkill(directory)
+    }
+
+    /// How many entries a folder holds, counting no further than past `limit`.
+    private static func entryCount(_ directory: URL, atMost limit: Int) -> Int {
+        guard let walk = FileManager.default.enumerator(atPath: directory.path) else { return limit + 1 }
+        var count = 0
+        while walk.nextObject() != nil {
+            count += 1
+            if count > limit { break }
+        }
+        return count
     }
 
     /// Whether a folder holds anything the digest doesn't account for: a

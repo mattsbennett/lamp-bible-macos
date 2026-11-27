@@ -102,8 +102,9 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         func refuse(_ words: String) -> Error {
             CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: words])
         }
-        let root = open(workspace.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard root >= 0 else { throw refuse("Lamp couldn’t open this writing’s folder.") }
+        // The writing's own folder too, never a link to somewhere else.
+        let root = open(workspace.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard root >= 0 else { throw refuse("Lamp couldn’t open this writing’s folder, or it is a link, so Lamp wrote nothing.") }
         defer { close(root) }
         for (relative, content) in files {
             // Each folder opened from the one before it, following no link,

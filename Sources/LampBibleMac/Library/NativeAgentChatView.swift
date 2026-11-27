@@ -4523,7 +4523,12 @@ struct NativeAgentChatView: View {
                     .help("What Always Allow saved for this writing (\(savedPermissions.count))")
                     .popover(isPresented: $showingSavedPermissions, arrowEdge: .bottom) {
                         SavedPermissionsList(rules: savedPermissions, replying: model.isRunning) { rule in
-                            try? AgentToolAllowRules.remove(rule, for: workspaceFolder)
+                            do {
+                                try AgentToolAllowRules.remove(rule, for: workspaceFolder)
+                            } catch {
+                                // Said, since the rule still holds.
+                                submissionError = "Lamp couldn’t remove \(rule), so Claude may still do it without asking: \(error.localizedDescription)"
+                            }
                             loadSavedPermissions()
                         }
                     }
