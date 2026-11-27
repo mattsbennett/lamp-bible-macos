@@ -242,7 +242,9 @@ public enum LampAgentRemoteHosting {
             isRunning: isRunning,
             failure: failure,
             askedBy: askedBy,
-            approvals: approvals.map { approval($0, provider: provider) }
+            // None while no turn can be named: an answer names the turn it
+            // was shown in, by its question.
+            approvals: messages.contains { $0.role == .user } ? approvals.map { approval($0, provider: provider) } : []
         )
     }
 

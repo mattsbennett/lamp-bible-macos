@@ -2194,7 +2194,11 @@ public enum AgentACPRun {
     /// Never its title or summary as the command, which are the agent's
     /// words about it. Nil for anything else, which `decide` answers by rule,
     /// and always in a reader chat, which never asks (`decisions/0039`).
-    public static func commandRequest(permission params: [String: Any], readOnly: Bool, id: String) -> AgentToolApprovalRequest? {
+    /// `sessionFolder`: where the session runs, the folder a command runs in
+    /// where the request names none, as `agy acp` 1.5.14's don't.
+    public static func commandRequest(
+        permission params: [String: Any], readOnly: Bool, id: String, sessionFolder: String? = nil
+    ) -> AgentToolApprovalRequest? {
         guard !readOnly,
               let call = params["toolCall"] as? [String: Any], call["kind"] as? String == "execute",
               let input = call["rawInput"] as? [String: Any],
@@ -2202,7 +2206,8 @@ public enum AgentACPRun {
               option("allow_once", in: params) != nil, option("reject_once", in: params) != nil
         else { return nil }
         var shown: [String: Any] = ["command": command]
-        if let folder = input["Cwd"] as? String ?? call["cwd"] as? String, !folder.isEmpty { shown["cwd"] = folder }
+        if let folder = (input["Cwd"] as? String ?? call["cwd"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? sessionFolder,
+           !folder.isEmpty { shown["cwd"] = folder }
         // The agent's own account of the command, kept as its words, never
         // as the command.
         if let reason = input["toolSummary"] as? String, !reason.isEmpty { shown["reason"] = reason }

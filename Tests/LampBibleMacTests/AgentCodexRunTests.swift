@@ -295,10 +295,17 @@ struct AgentCodexRunnerTests {
     @Test func allowedOnceTheCommandRunsAndTheTurnEnds() async throws {
         let fake = try fake()
         defer { try? FileManager.default.removeItem(at: fake.folder) }
+        let went = Locked<Bool?>(nil)
         let result = await run(fake) { runner, list in
             guard let request = list.first else { return }
-            DispatchQueue.global().async { runner.answerApproval(request.id, with: .allow) }
+            DispatchQueue.global().async {
+                runner.answerApproval(request.id, with: .allow)
+                Task { let sent = await runner.replyWentAsAnswered(request.id); went.mutate { $0 = sent } }
+            }
         }
+        for _ in 0..<40 where went.value == nil { try await Task.sleep(for: .milliseconds(50)) }
+        // The reply went as answered: what a device is told.
+        #expect(went.value == true)
         #expect(result.exitCode == 0)
         #expect(fake.ran)
         #expect(AgentChatRunSummary.summarize(output: result.output, provider: .codex).response == "Done.")
@@ -360,15 +367,24 @@ struct AgentCodexRunnerTests {
     @Test func allowRightAfterStopIsStillANo() async throws {
         let fake = try fake()
         defer { try? FileManager.default.removeItem(at: fake.folder) }
+        let went = Locked<Bool?>(nil)
         _ = await run(fake) { runner, list in
             guard let request = list.first else { return }
             DispatchQueue.global().async {
                 runner.cancel()
-                runner.answerApproval(request.id, with: .allow)
+                // Taken off the card, perhaps, but never sent as an Allow,
+                // and a device is not told it was.
+                if runner.answerApproval(request.id, with: .allow) {
+                    Task { let sent = await runner.replyWentAsAnswered(request.id, seconds: 2); went.mutate { $0 = sent } }
+                } else {
+                    went.mutate { $0 = false }
+                }
             }
         }
         #expect(!fake.ran)
         #expect(!fake.sent.contains(#""decision":"accept""#))
+        for _ in 0..<60 where went.value == nil { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(went.value == false)
     }
 
     /// A server that ends before the protocol says anything is explained by

@@ -505,6 +505,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 }
                 let entry = waiting.remove(at: index)
                 let outcome: [String: Any] = AgentACPRun.outcome(for: answer, permission: entry.params)
+                self.forgetReply(entry.key)
                 publish()
                 // Queued under the same lock that took it off the card, so a
                 // Stop's cancel can't be queued ahead of it; written off the
@@ -516,7 +517,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                         stateLock.lock()
                         let late = stopped
                         stateLock.unlock()
-                        return ["id": entry.id, "result": ["outcome": late || self.isCancelled ? ["outcome": "cancelled"] : outcome]]
+                        let refused = late || self.isCancelled
+                        self.noteReply(entry.key, asAnswered: !refused || answer == .deny)
+                        return ["id": entry.id, "result": ["outcome": refused ? ["outcome": "cancelled"] : outcome]]
                     }
                 }
                 stateLock.unlock()
@@ -616,7 +619,10 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     if let method = message["method"] as? String, let id = message["id"] {
                         // A request from the agent.
                         if method == "session/request_permission", let params = message["params"] as? [String: Any],
-                           let ask = AgentACPRun.commandRequest(permission: params, readOnly: mode.isReadOnly, id: "agy-\(UUID().uuidString)") {
+                           let ask = AgentACPRun.commandRequest(
+                               permission: params, readOnly: mode.isReadOnly, id: "agy-\(UUID().uuidString)",
+                               sessionFolder: workingDirectory.path
+                           ) {
                             // Keyed by a name of Lamp's own, never the agent's
                             // id: "1" and 1 spell the same, and an id used
                             // again after its answer would meet the old
@@ -767,6 +773,37 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         }
     }
 
+    /// What was written for each answered card, by its key: true where it
+    /// was the answer given, false where Stop turned it to a refusal first.
+    private var repliesSent: [String: Bool] = [:]
+
+    fileprivate func forgetReply(_ key: String) {
+        lock.lock()
+        repliesSent[key] = nil
+        lock.unlock()
+    }
+
+    fileprivate func noteReply(_ key: String, asAnswered: Bool) {
+        lock.lock()
+        repliesSent[key] = asAnswered
+        lock.unlock()
+    }
+
+    /// Whether the reply to a card answered with `answerApproval` went as
+    /// answered, once it has been written; false if it is not written within
+    /// `seconds`, or Stop turned an Allow to a refusal first.
+    func replyWentAsAnswered(_ key: String, seconds: Double = 10) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            lock.lock()
+            let sent = repliesSent[key]
+            lock.unlock()
+            if let sent { return sent }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
+    }
+
     /// Gives a waiting Codex request the person's answer. False when it is
     /// no longer waiting: answered by its timeout, or ended with the turn.
     @discardableResult
@@ -853,6 +890,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     return false
                 }
                 let entry = waiting.remove(at: index)
+                self.forgetReply(entry.key)
                 publish()
                 // Queued under the lock, written off the caller's thread, and
                 // judged again as it is written, as for Antigravity.
@@ -861,7 +899,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                         stateLock.lock()
                         let late = stopped
                         stateLock.unlock()
-                        return ["id": entry.id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : answer)]
+                        let refused = late || self.isCancelled
+                        self.noteReply(entry.key, asAnswered: !refused || answer == .deny)
+                        return ["id": entry.id, "result": AgentCodexRun.decision(refused ? .deny : answer)]
                     }
                 }
                 stateLock.unlock()
@@ -2981,6 +3021,9 @@ final class NativeAgentChatModel: ObservableObject {
             // Always Allow answers the hook took, kept before the channel's
             // folder, and the hook's marks in it, go.
             if let channel {
+                for waiting in answersAwaitingTheHook where channel.waitUntilTaken(waiting.id, answer: waiting.answer, seconds: 0) {
+                    answersTakenAtTheEnd.insert(waiting.id)
+                }
                 for grant in grantsAwaitingTheHook where channel.waitUntilTaken(grant.id, answer: .alwaysAllow(grant.rule), seconds: 0) {
                     do {
                         try AgentToolAllowRules.add(grant.rule.rules, for: workspace)
@@ -3313,10 +3356,20 @@ final class NativeAgentChatModel: ObservableObject {
     /// given; for Claude, once its hook has read it, which it may not before
     /// it gives up waiting.
     func answerTaken(_ request: AgentToolApprovalRequest, answer: AgentToolApprovalAnswer) async -> Bool {
-        if runnerApprovals { return true }
-        guard let approvalChannel else { return false }
-        return await Task.detached { approvalChannel.waitUntilTaken(request.id, answer: answer) }.value
+        if runnerApprovals { return await runner.replyWentAsAnswered(request.id) }
+        guard let approvalChannel else { return answersTakenAtTheEnd.contains(request.id) }
+        answersAwaitingTheHook.append((request.id, answer))
+        let taken = await Task.detached { approvalChannel.waitUntilTaken(request.id, answer: answer) }.value
+        answersAwaitingTheHook.removeAll { $0.id == request.id }
+        // The run may have ended, and its channel gone, between the hook
+        // taking it and the wait looking again: settled then.
+        return taken || answersTakenAtTheEnd.contains(request.id)
     }
+
+    /// A device's answers to Claude still being confirmed, and those the
+    /// hook had taken when the run ended and its channel went.
+    private var answersAwaitingTheHook: [(id: String, answer: AgentToolApprovalAnswer)] = []
+    private var answersTakenAtTheEnd: Set<String> = []
 
     /// Gives a waiting request the person's answer. False where it was no
     /// longer waiting, or the answer could not be given; said in the pane

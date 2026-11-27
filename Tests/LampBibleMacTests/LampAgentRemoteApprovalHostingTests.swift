@@ -27,7 +27,9 @@ struct LampAgentRemoteApprovalHostingTests {
         let claude = LampAgentRemoteHosting.approval(AgentToolApprovalRequest(
             id: UUID().uuidString, toolName: "Bash", toolInputJSON: input(["command": "npm test", "description": "Run the tests"])
         ), provider: "claude")
-        #expect(claude.canAllow && claude.command == "npm test" && claude.agentReason == "Run the tests")
+        // With no folder named, Deny-only: a relative path would be read
+        // from a folder the phone doesn't show.
+        #expect(!claude.canAllow && claude.command == "npm test" && claude.agentReason == "Run the tests")
     }
 
     /// What a device can't show whole, and every tool call but a command,
