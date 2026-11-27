@@ -1436,9 +1436,13 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     ///
     /// WebKit's caret is kept wherever this one could be wrong: beside right
     /// to left letters, where which side of a boundary it stands is WebKit's
-    /// to judge; in an empty block, or anywhere the rectangle is not one;
-    /// while an input method composes; and where it would leave a box that
-    /// clips it. The selection is WebKit's: drawing it as the system does
+    /// to judge; where a line wraps, whose end and the next line's start are
+    /// one place in the text, so that only WebKit knows which line the caret
+    /// is on (the place's own rectangle is always the next line's, and a
+    /// click past a line's end drew the caret at the start of the next line:
+    /// owner, 2026-11-26); in an empty block, or anywhere the rectangle is
+    /// not one; while an input method composes; and where it would leave a
+    /// box that clips it. The selection is WebKit's: drawing it as the system does
     /// needed a box a line, and the edge cases (tables, empty paragraphs,
     /// the footnote popover) outweighed the gain (owner, 2026-11-25).
     static let drawnCaretScript = #"""
@@ -1481,6 +1485,35 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         return clipper;
       }
 
+      // The rectangle of the letter on one side of a place in a text node, or
+      // of the nearest letter across the node's edge within the same block.
+      function letterBeside(node, offset, before) {
+        var text = node, at = offset;
+        if (before ? at === 0 : at >= text.data.length) {
+          var block = node.parentElement && node.parentElement.closest('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, pre, .footnote-definition');
+          if (!block) return null;
+          var walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+          walker.currentNode = node;
+          do { text = before ? walker.previousNode() : walker.nextNode(); } while (text && text.data.length === 0);
+          if (!text) return null;
+          at = before ? text.data.length : 0;
+        }
+        var letter = document.createRange();
+        letter.setStart(text, before ? at - 1 : at);
+        letter.setEnd(text, before ? at : at + 1);
+        var rects = letter.getClientRects();
+        return rects.length ? rects[before ? rects.length - 1 : 0] : null;
+      }
+
+      // Whether a place stands where a line wraps: the letters either side of
+      // it on different lines.
+      function atWrap(node, offset) {
+        var before = letterBeside(node, offset, true);
+        var after = before && letterBeside(node, offset, false);
+        if (!before || !after || before.height === 0 || after.height === 0) return false;
+        return (after.top + after.bottom) / 2 > before.bottom;
+      }
+
       function rootOf(node) {
         var element = node && (node.nodeType === 1 ? node : node.parentElement);
         return element ? element.closest('.ProseMirror') : null;
@@ -1516,7 +1549,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             : '';
           if (node.nodeType === 3 && !rtl.test(near)) {
             var rects = range.getClientRects();
-            if (rects.length === 1 && rects[0].height > 0) rect = rects[0];
+            if (rects.length === 1 && rects[0].height > 0 && !atWrap(node, range.startOffset)) rect = rects[0];
             // Scrolled out of a box that clips it, WebKit's caret is clipped
             // with the text; this one would float over whatever is there.
             var clipper = rect && clipperOf(root);
