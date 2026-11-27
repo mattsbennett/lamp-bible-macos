@@ -221,6 +221,64 @@ public enum AgentTerminalCaptureStore {
         terminalDirectory(in: workspace).appendingPathComponent("captured", isDirectory: true)
     }
 
+    /// Where the files the Terminal runs are written for a workspace: the
+    /// launch script, Claude's settings and the recap. In Lamp's own folder,
+    /// outside every workspace, so what Lamp runs is never a file an agent in
+    /// the writing could have written (`decisions/0032`). One folder per
+    /// workspace, by a digest of its path, written afresh at each launch.
+    public static func launchDirectory(for workspace: URL, in root: URL = launchRoot) -> URL {
+        let path = workspace.standardizedFileURL.path
+        let digest = SHA256.hash(data: Data(path.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+        return root.appendingPathComponent(digest, isDirectory: true)
+    }
+
+    /// Removes the launch files the Terminal used to have written in the
+    /// workspace, which nothing runs now: each only if it is a plain file,
+    /// reached through folders that are not links, so the clean-up never
+    /// leaves the workspace or takes a folder.
+    public static func removeRetiredLaunchFiles(in workspace: URL) {
+        let base = workspace.standardizedFileURL.path
+        let folder = terminalDirectory(in: workspace).standardizedFileURL.path
+        guard folder.hasPrefix(base + "/") else { return }
+        var directory = open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directory >= 0 else { return }
+        defer { close(directory) }
+        for part in folder.dropFirst(base.count + 1).split(separator: "/") {
+            let next = openat(directory, String(part), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { return }
+            close(directory)
+            directory = next
+        }
+        for name in ["launch.sh", "claude-settings.json", "earlier-conversation.md"] {
+            var info = stat()
+            guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
+            unlinkat(directory, name, 0)
+        }
+    }
+
+    /// Launch folders not used for a month go, with the recaps of
+    /// conversations they held: a writing moved or deleted leaves its folder
+    /// under a path no launch will name again. Only folders named as
+    /// `launchDirectory` names them, and none reached through a link.
+    public static func pruneLaunches(in root: URL, now: Date = Date(), olderThan days: Double = 30) {
+        let cutoff = now.addingTimeInterval(-days * 86_400)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [] {
+            guard name.count == 24, name.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { continue }
+            let folder = root.appendingPathComponent(name)
+            var info = stat()
+            guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+                  Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)) < cutoff
+            else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    public static var launchRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Lamp Bible", isDirectory: true)
+            .appendingPathComponent("Terminal Launches", isDirectory: true)
+    }
+
     public static func launchRecordURL(in workspace: URL) -> URL {
         terminalDirectory(in: workspace).appendingPathComponent("launch.json")
     }
@@ -365,6 +423,7 @@ public enum AgentTerminalLauncher {
         installID: String,
         openCodeConfigDirectory: URL,
         editorStateFile: URL? = nil,
+        launchRoot: URL = AgentTerminalCaptureStore.launchRoot,
         now: Date = Date()
     ) throws -> Prepared {
         guard let provider = AIProviderIdentity.wireProvider(forProviderID: providerID) else {
@@ -380,8 +439,16 @@ public enum AgentTerminalLauncher {
         let newSessionID = provider == .claude && resumeSessionID == nil
             ? UUID().uuidString.lowercased() : nil
 
-        let terminalDirectory = AgentTerminalCaptureStore.terminalDirectory(in: workspace)
-        try FileManager.default.createDirectory(at: terminalDirectory, withIntermediateDirectories: true)
+        // What the Terminal runs, outside the workspace; see `launchDirectory`.
+        AgentTerminalCaptureStore.pruneLaunches(in: launchRoot, now: now)
+        let terminalDirectory = AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot)
+        try FileManager.default.createDirectory(
+            at: terminalDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.createDirectory(
+            at: AgentTerminalCaptureStore.terminalDirectory(in: workspace), withIntermediateDirectories: true
+        )
+        AgentTerminalCaptureStore.removeRetiredLaunchFiles(in: workspace)
 
         let recapText = resumeSessionID == nil
             ? AgentChatContinuation.sessionInstructions(continuing: transcript.messages)
@@ -1009,5 +1076,242 @@ public enum AgentDeclaredWrites {
             try? fileManager.removeItem(at: url)
         }
         return written
+    }
+}
+
+/// What a writing's own settings hold that Lamp cannot vouch for, put to the
+/// person before a Terminal opens (`decisions/0032`).
+///
+/// The Terminal is the person's own session and keeps reading the writing's
+/// settings, so nothing they use there changes. But those files are in the
+/// workspace, where any provider's agent can write, and what is written there
+/// runs when the Terminal opens. So before it opens, Lamp writes its own
+/// provider files again, then looks at everything under the folders and
+/// files a provider reads (`roots`), and counts every entry it does not
+/// recognise: anything but Lamp's own files as it writes them, its skills as
+/// it installs them, and in `.claude/settings.local.json` the settings Claude
+/// writes there itself, with an allow rule recognised only if it was there
+/// when the last Terminal session ended. An allow-list, failing closed: a
+/// setting no one has seen yet counts. Each counted entry is fingerprinted
+/// by its bytes, and the person's answer holds for exactly those bytes.
+public enum AgentTerminalLaunchCheck {
+    public struct Finding: Equatable, Sendable, Identifiable, Codable {
+        /// Where, relative to the workspace.
+        public let path: String
+        /// What was approved: a digest of the bytes, or of the setting.
+        public let fingerprint: String
+        /// What is shown: the setting and its whole value, a small file's
+        /// text, a link's target, or a file's size.
+        public let detail: String
+        public var id: String { path + "\u{0}" + fingerprint }
+    }
+
+    /// What every provider reads from a workspace, matched without regard to
+    /// case: the union, since one reads another's (Codex `.agents/`,
+    /// OpenCode `.claude/skills`).
+    static let roots: Set<String> = [".mcp.json", ".claude", ".codex", ".opencode", ".agents", "opencode.json", "opencode.jsonc"]
+    /// Beyond these, the rest is one finding saying so.
+    static let largestCount = 5_000
+    static let shownBytes = 4_000
+
+    public static func findings(
+        in workspace: URL, lampServer: LampAgentMCPConfiguration?,
+        bundledSkills: URL?, baseline: [String]?
+    ) -> [Finding] {
+        var found: [Finding] = []
+        var counted = 0
+        let expected: [String: String] = lampServer.map { server in
+            [
+                ".mcp.json": server.answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON,
+                ".codex/config.toml": server.answering(provider: AgentChatWireProvider.codex.rawValue).codexTOML,
+                "opencode.json": server.answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON,
+            ]
+        } ?? [:]
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: workspace.path)) ?? []
+        func visit(_ relative: String) {
+            counted += 1
+            guard counted <= largestCount else { return }
+            let url = workspace.appendingPathComponent(relative)
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else { return }
+            switch info.st_mode & S_IFMT {
+            case S_IFLNK:
+                let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "?"
+                found.append(Finding(path: relative, fingerprint: digest("link:" + target), detail: "a link to \(target)"))
+            case S_IFDIR:
+                let children = ((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []).sorted()
+                let parts = relative.split(separator: "/")
+                for child in children {
+                    let path = relative + "/" + child
+                    // A skill Lamp put there, as Lamp puts it, is Lamp's.
+                    if parts.count == 2, parts[1] == "skills", ["claude", "agents"].contains(parts[0].dropFirst().lowercased()),
+                       isLampsSkill(workspace.appendingPathComponent(path), named: child, bundled: bundledSkills) {
+                        continue
+                    }
+                    visit(path)
+                }
+            case S_IFREG:
+                guard let data = try? Data(contentsOf: url) else {
+                    found.append(Finding(path: relative, fingerprint: digest("unreadable"), detail: "a file Lamp could not read"))
+                    return
+                }
+                if let lamps = expected[relative], data == Data(lamps.utf8) { return }
+                if relative == ".claude/settings.local.json", let settings = claudeLocalSettings(data, baseline: baseline) {
+                    found += settings.map { Finding(path: relative, fingerprint: digest($0), detail: $0) }
+                    return
+                }
+                let text = data.count <= shownBytes ? String(data: data, encoding: .utf8) : nil
+                found.append(Finding(
+                    path: relative, fingerprint: digest(data),
+                    detail: text ?? "\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)) of content"
+                ))
+            default:
+                found.append(Finding(path: relative, fingerprint: digest("special"), detail: "not a plain file or folder"))
+            }
+        }
+        for name in names.sorted() where roots.contains(name.lowercased()) { visit(name) }
+        if counted > largestCount {
+            found.append(Finding(path: ".", fingerprint: digest("count:\(counted)"), detail: "more than \(largestCount) entries, too many to check one by one"))
+        }
+        return found
+    }
+
+    /// The findings in Claude's local settings: each setting Claude does not
+    /// write there itself, with its value, and each allow rule or extra
+    /// folder not there when the last Terminal session ended. Nil when the
+    /// file is not a settings object, which is then a finding whole.
+    static func claudeLocalSettings(_ data: Data, baseline: [String]?) -> [String]? {
+        guard let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        var found: [String] = []
+        let harmless: Set<String> = ["permissions", "outputStyle", "enabledMcpjsonServers", "disabledMcpjsonServers", "enableAllProjectMcpServers"]
+        for key in settings.keys.sorted() where !harmless.contains(key) {
+            found.append("the setting \(key): \(shown(settings[key] as Any))")
+        }
+        if let permissions = settings["permissions"] {
+            guard let permissions = permissions as? [String: Any] else {
+                return found + ["the setting permissions: \(shown(permissions))"]
+            }
+            for key in permissions.keys.sorted() where !["allow", "ask", "deny", "additionalDirectories"].contains(key) {
+                found.append("the permission setting \(key): \(shown(permissions[key] as Any))")
+            }
+            let known = Set(baseline ?? [])
+            for rule in grants(in: settings) where !known.contains(rule) {
+                found.append("added outside a Terminal session: \(rule)")
+            }
+        }
+        return found
+    }
+
+    /// The allow rules and extra folders in Claude's local settings, as
+    /// `allow Bash(sw_vers)` and `folder /path`: what grants something.
+    public static func grants(in settings: [String: Any]) -> [String] {
+        let permissions = settings["permissions"] as? [String: Any] ?? [:]
+        return ((permissions["allow"] as? [Any]) ?? []).map { "allow \(shown($0))" }
+            + ((permissions["additionalDirectories"] as? [Any]) ?? []).map { "folder \(shown($0))" }
+    }
+
+    static func grants(inFile file: URL) -> [String] {
+        guard let data = try? Data(contentsOf: file),
+              let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return [] }
+        return grants(in: settings)
+    }
+
+    private static func shown(_ value: Any) -> String {
+        if let text = value as? String { return text }
+        guard JSONSerialization.isValidJSONObject(value) || value is NSNumber || value is NSNull,
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+        else { return String(describing: value) }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// A skill as Lamp installs it: a built-in equal to the bundle's copy, or
+    /// a custom one as plain as Lamp writes one, its `SKILL.md` alone.
+    static func isLampsSkill(_ directory: URL, named name: String, bundled: URL?) -> Bool {
+        var info = stat()
+        guard lstat(directory.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return false }
+        if WorkspaceSkillStore.bundledSkillNames.contains(name) {
+            guard let bundled,
+                  let mine = try? WorkspaceSkillStore.treeDigest(of: directory),
+                  let theirs = try? WorkspaceSkillStore.treeDigest(of: bundled.appendingPathComponent(name, isDirectory: true))
+            else { return false }
+            return mine == theirs && !containsLinkOrHidden(directory)
+        }
+        return WorkspaceSkillStore.isPlainSkill(directory)
+    }
+
+    /// Whether a folder holds a link, or a hidden entry the digest skips.
+    private static func containsLinkOrHidden(_ directory: URL) -> Bool {
+        guard let walk = FileManager.default.enumerator(atPath: directory.path) else { return true }
+        while let relative = walk.nextObject() as? String {
+            if relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { return true }
+            var info = stat()
+            if lstat(directory.appendingPathComponent(relative).path, &info) == 0, info.st_mode & S_IFMT == S_IFLNK { return true }
+        }
+        return false
+    }
+
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func digest(_ text: String) -> String { digest(Data(text.utf8)) }
+
+    // MARK: What the person said
+
+    public static var stateFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Lamp Bible", isDirectory: true)
+            .appendingPathComponent("TerminalChecks.json")
+    }
+
+    private struct Record: Codable {
+        /// Findings the person said to open with.
+        var approved: [String] = []
+        /// The allow rules and folders in Claude's local settings when the
+        /// last Terminal session ended.
+        var baseline: [String]?
+    }
+
+    private static func key(_ workspace: URL) -> String { workspace.standardizedFileURL.path }
+
+    private static func load(_ file: URL) -> [String: Record] {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String: Record].self, from: $0) } ?? [:]
+    }
+
+    private static func save(_ records: [String: Record], to file: URL) throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(records).write(to: file, options: .atomic)
+    }
+
+    /// The rules counted as Claude's own for this writing. Nil before any is
+    /// kept: the first check takes what is there as its start, since rules
+    /// from before this check have no session end to compare with.
+    public static func baseline(for workspace: URL, in file: URL = stateFile) -> [String]? {
+        load(file)[key(workspace)]?.baseline
+    }
+
+    /// Keeps the rules Claude's local settings hold now as this writing's
+    /// own: as a Terminal session ends, when only it has been writing them,
+    /// and on the first check.
+    public static func recordBaseline(in workspace: URL, file: URL = stateFile) throws {
+        var records = load(file)
+        records[key(workspace), default: Record()].baseline =
+            grants(inFile: workspace.appendingPathComponent(".claude/settings.local.json"))
+        try save(records, to: file)
+    }
+
+    /// Whether every finding is one the person already said to open with.
+    public static func isApproved(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) -> Bool {
+        let approved = Set(load(file)[key(workspace)]?.approved ?? [])
+        return findings.allSatisfy { approved.contains($0.id) }
+    }
+
+    /// The person said to open with exactly these: replacing what was
+    /// approved before, so one that has gone is not approved for ever.
+    public static func approve(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) throws {
+        var records = load(file)
+        records[key(workspace), default: Record()].approved = findings.map(\.id).sorted()
+        try save(records, to: file)
     }
 }

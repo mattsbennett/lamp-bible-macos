@@ -550,6 +550,18 @@ public enum WorkspaceSkillStore {
         try encoder.encode(selection).write(to: selectionURL(in: workspaceURL), options: .atomic)
     }
 
+    /// Whether a skill folder is as plain as Lamp writes one: its `SKILL.md`
+    /// alone, a plain file, saying what `skillDocument` would make of its
+    /// own name, description and instructions, so no other frontmatter (no
+    /// hooks, no allowed tools) and no other file.
+    public static func isPlainSkill(_ directory: URL) -> Bool {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path), entries == ["SKILL.md"],
+              let skill = try? definition(in: directory),
+              let written = try? Data(contentsOf: directory.appendingPathComponent("SKILL.md"))
+        else { return false }
+        return written == Data(skillDocument(name: skill.name, description: skill.description, instructions: skill.instructions).utf8)
+    }
+
     private static func definition(in directory: URL) throws -> WorkspaceSkillDefinition? {
         guard isValidSkillName(directory.lastPathComponent) else { return nil }
         let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])

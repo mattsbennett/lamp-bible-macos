@@ -561,18 +561,28 @@ struct AgentTerminalLauncherTests {
         return workspace
     }
 
+    /// A launch folder beside the test's workspace, not Lamp's real one.
+    private func launchRoot(for workspace: URL) -> URL {
+        workspace.deletingLastPathComponent().appendingPathComponent("launches-\(workspace.lastPathComponent)", isDirectory: true)
+    }
+
     private func prepare(_ providerID: String, in workspace: URL) throws -> (AgentTerminalLauncher.Prepared, String) {
         let prepared = try AgentTerminalLauncher.prepare(
             providerID: providerID,
             executable: providerID.lowercased(),
             workspace: workspace,
             installID: "mac-a",
-            openCodeConfigDirectory: workspace.appendingPathComponent("opencode-config")
+            openCodeConfigDirectory: workspace.appendingPathComponent("opencode-config"),
+            launchRoot: launchRoot(for: workspace)
         )
         let script = try String(
-            contentsOf: AgentTerminalCaptureStore.terminalDirectory(in: workspace).appendingPathComponent("launch.sh"),
+            contentsOf: AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot(for: workspace))
+                .appendingPathComponent("launch.sh"),
             encoding: .utf8
         )
+        // What the Terminal runs is never in the workspace, where an agent
+        // could have written it.
+        #expect(!prepared.command.contains(workspace.path))
         return (prepared, script)
     }
 
@@ -623,7 +633,8 @@ struct AgentTerminalLauncherTests {
         #expect(prepared.resumedSessionID == nil)
         #expect(prepared.carriesRecap)
         let recap = try String(
-            contentsOf: AgentTerminalCaptureStore.terminalDirectory(in: workspace).appendingPathComponent("earlier-conversation.md"),
+            contentsOf: AgentTerminalCaptureStore.launchDirectory(for: workspace, in: launchRoot(for: workspace))
+                .appendingPathComponent("earlier-conversation.md"),
             encoding: .utf8
         )
         #expect(recap.contains("MANGO"))
@@ -755,7 +766,8 @@ struct AgentTerminalIntegrationMemoryTests {
         func launch() throws -> Bool {
             try AgentTerminalLauncher.prepare(
                 providerID: "openCode", executable: "opencode", workspace: workspace,
-                installID: "mac-a", openCodeConfigDirectory: integrations
+                installID: "mac-a", openCodeConfigDirectory: integrations,
+                launchRoot: workspace.appendingPathComponent("launches", isDirectory: true)
             ).integrationWrittenAfresh
         }
 
@@ -771,7 +783,40 @@ struct AgentTerminalIntegrationMemoryTests {
         // Other CLIs write nothing that needs installing.
         #expect(!(try AgentTerminalLauncher.prepare(
             providerID: "codex", executable: "codex", workspace: workspace,
-            installID: "mac-a", openCodeConfigDirectory: integrations
+            installID: "mac-a", openCodeConfigDirectory: integrations,
+            launchRoot: workspace.appendingPathComponent("launches", isDirectory: true)
         ).integrationWrittenAfresh))
+    }
+
+    /// The old launch files go from the workspace, and only they: never
+    /// through a link out of it, and never a folder of the same name.
+    @Test func retiredLaunchFilesAreRemovedOnlyInsideTheWorkspace() throws {
+        func makeWorkspace() throws -> URL {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("lamp-terminal-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            return folder
+        }
+        let workspace = try makeWorkspace()
+        let outside = workspace.deletingLastPathComponent().appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let terminal = AgentTerminalCaptureStore.terminalDirectory(in: workspace)
+        try FileManager.default.createDirectory(at: terminal, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: terminal.appendingPathComponent("launch.sh"))
+        try FileManager.default.createDirectory(at: terminal.appendingPathComponent("claude-settings.json"), withIntermediateDirectories: true)
+        AgentTerminalCaptureStore.removeRetiredLaunchFiles(in: workspace)
+        #expect(!FileManager.default.fileExists(atPath: terminal.appendingPathComponent("launch.sh").path))
+        #expect(FileManager.default.fileExists(atPath: terminal.appendingPathComponent("claude-settings.json").path))
+
+        // A workspace whose folder for them is a link elsewhere.
+        let linked = try makeWorkspace()
+        let away = outside.appendingPathComponent(String(terminal.path.dropFirst(workspace.path.count + 1)), isDirectory: true)
+        try FileManager.default.createDirectory(at: away, withIntermediateDirectories: true)
+        try Data("theirs".utf8).write(to: away.appendingPathComponent("launch.sh"))
+        let first = String(terminal.path.dropFirst(workspace.path.count + 1).split(separator: "/")[0])
+        try FileManager.default.createSymbolicLink(
+            at: linked.appendingPathComponent(first), withDestinationURL: outside.appendingPathComponent(first)
+        )
+        AgentTerminalCaptureStore.removeRetiredLaunchFiles(in: linked)
+        #expect(FileManager.default.fileExists(atPath: away.appendingPathComponent("launch.sh").path))
     }
 }

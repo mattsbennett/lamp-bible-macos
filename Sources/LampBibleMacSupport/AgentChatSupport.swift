@@ -444,7 +444,9 @@ public enum AgentChatLaunchArguments {
         effort: String? = nil,
         providerMajorVersion: Int? = nil,
         codexIgnoresRules: Bool = true,
-        writingServer: LampAgentMCPConfiguration? = nil
+        writingServer: LampAgentMCPConfiguration? = nil,
+        writingInstructionsFile: URL? = nil,
+        claudeSnapshots: Bool = true
     ) -> [String] {
         // The effort is given to both: one of them takes it. A provider with a
         // setting of its own gets a flag for it, and OpenCode, which has none,
@@ -494,10 +496,37 @@ public enum AgentChatLaunchArguments {
                     configuration.answering(provider: provider.rawValue).claudeJSON,
                     "--disable-slash-commands",
                 ]
-            } else if let permissionHookSettings {
-                // Asks the person about a tool call the run would otherwise
-                // deny; see `ClaudePermissionHook`.
-                arguments += ["--settings", permissionHookSettings]
+            } else {
+                // Started from the person's own settings and Lamp's, never
+                // the workspace's: under `-p`, a project's `.mcp.json`
+                // servers connect unasked and its settings' hooks run, and
+                // another provider's agent in the same writing can write
+                // either (tried, 2026-11-26: a planted server and hook ran,
+                // and with this flag neither did). The person's own servers
+                // stay; Lamp's is given here, and the instructions the
+                // workspace's `CLAUDE.md` holds, which this leaves unread,
+                // from a file of Lamp's: a writing's list of sources can be
+                // longer than a command line holds.
+                arguments += ["--setting-sources", "user"]
+                if let writingServer {
+                    arguments += ["--mcp-config", writingServer.answering(provider: provider.rawValue).claudeJSON]
+                }
+                if let writingInstructionsFile {
+                    // Rendered afresh each request: by default Claude Code
+                    // keeps a conversation's first prompt and resends it on
+                    // every resume, whatever a later launch says, and the
+                    // instructions follow the workspace (its sources, its
+                    // skills, review marks).
+                    arguments += ["--append-system-prompt-file", writingInstructionsFile.path]
+                    // A Claude Code with no snapshot renders the prompt every
+                    // request already, and refuses the flag.
+                    if claudeSnapshots { arguments += ["--system-prompt-snapshot", "off"] }
+                }
+                if let permissionHookSettings {
+                    // Asks the person about a tool call the run would
+                    // otherwise deny; see `ClaudePermissionHook`.
+                    arguments += ["--settings", permissionHookSettings]
+                }
             }
             if let sessionID {
                 arguments += ["--resume", sessionID]
@@ -2149,10 +2178,68 @@ public enum AgentACPRun {
             allowed = inside(workspace) || inside(agentFolder)
         } else if kind == "edit" {
             allowed = !readOnly && inside(workspace)
+                && !paths.contains { startsAProvider($0, in: workspace) }
         } else {
             allowed = false
         }
         return allowed ? option("allow_once") : reject
+    }
+
+    /// The tool name an Antigravity command carries on Lamp's approval card.
+    public static let commandToolName = "agy.command"
+
+    /// A writing chat's request to run a command, to put to the person: one
+    /// of kind `execute` whose command is given whole (`rawInput.CommandLine`,
+    /// as `agy acp` 1.5.14 sends it; recorded), offering a once-only allow.
+    /// Never its title or summary as the command, which are the agent's
+    /// words about it. Nil for anything else, which `decide` answers by rule,
+    /// and always in a reader chat, which never asks (`decisions/0033`).
+    public static func commandRequest(permission params: [String: Any], readOnly: Bool, id: String) -> AgentToolApprovalRequest? {
+        guard !readOnly,
+              let call = params["toolCall"] as? [String: Any], call["kind"] as? String == "execute",
+              let input = call["rawInput"] as? [String: Any],
+              let command = input["CommandLine"] as? String, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              option("allow_once", in: params) != nil, option("reject_once", in: params) != nil
+        else { return nil }
+        var shown: [String: Any] = ["command": command]
+        if let folder = input["Cwd"] as? String ?? call["cwd"] as? String, !folder.isEmpty { shown["cwd"] = folder }
+        let data = (try? JSONSerialization.data(withJSONObject: shown, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+        return AgentToolApprovalRequest(id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self))
+    }
+
+    /// The answer to a command put to the person: its once-only option, never
+    /// "always", which Antigravity saves as a rule in the person's settings
+    /// (and which would then refuse every Antigravity reader chat).
+    public static func outcome(for answer: AgentToolApprovalAnswer, permission params: [String: Any]) -> [String: Any] {
+        let kind: String
+        if case .allow = answer { kind = "allow_once" } else { kind = "reject_once" }
+        guard let option = option(kind, in: params) else { return ["outcome": "cancelled"] }
+        return ["outcome": "selected", "optionId": option]
+    }
+
+    private static func option(_ kind: String, in params: [String: Any]) -> String? {
+        (params["options"] as? [[String: Any]])?.first { $0["kind"] as? String == kind }?["optionId"] as? String
+    }
+
+    /// Whether an edit at `path` would write what a provider is started
+    /// from, by name: anything under a hidden name at the top of the
+    /// workspace (`.mcp.json`, `.claude/`, `.agents/`, `.codex/`,
+    /// `.opencode/`, Lamp's `.lamp/`), or OpenCode's `opencode.json`,
+    /// judged where the path lands, so `alias/settings.json` with `alias` a
+    /// link to `.claude` counts. Only `.lamp-renders`, the agent's scratch
+    /// folder, is free.
+    ///
+    /// The boundary: this stops Antigravity's edit tool writing launch
+    /// configuration. It does not follow links out of a guarded folder to
+    /// what they lead to, and need not: making such a link takes a command,
+    /// which is never allowed by rule (it is put to the person), and a writer
+    /// able to make one could have written the file itself (`decisions/0032`).
+    static func startsAProvider(_ path: String, in workspace: URL) -> Bool {
+        guard let landing = resolved(path), let root = resolved(workspace.path) else { return true }
+        let inside = root == "/" ? landing : String(landing.dropFirst(root.count))
+        guard let first = inside.split(separator: "/").first.map(String.init) else { return true }
+        if first == ".lamp-renders" { return false }
+        return first.hasPrefix(".") || ["opencode.json", "opencode.jsonc"].contains(first.lowercased())
     }
 
     /// Whether `path`, as the filesystem will treat it, stays within

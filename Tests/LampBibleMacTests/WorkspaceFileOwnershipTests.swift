@@ -52,6 +52,7 @@ struct WorkspaceFileOwnershipTests {
                 "claudeSkillsDirectory": "builds a path",
                 "presentationImportMarkerURL": "builds a path",
                 "instructions": "builds the instructions' text, touching nothing",
+                "shownName": "writes a file's name for the instructions, touching nothing",
             ]
         ),
         Surface(
@@ -63,6 +64,7 @@ struct WorkspaceFileOwnershipTests {
                 "catalogDirectory": "builds a path",
                 "selectionURL": "builds a path",
                 "isValidSkillName": "checks a name, touching nothing",
+                "isPlainSkill": "reads a skill folder to compare it, writing nothing; the Terminal check calls it on the owner",
                 "codexSkillsDirectory": "builds a path",
                 "claudeSkillsDirectory": "builds a path",
                 "installBundledSkills": """

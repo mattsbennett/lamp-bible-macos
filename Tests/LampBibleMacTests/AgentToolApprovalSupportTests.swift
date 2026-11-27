@@ -78,16 +78,38 @@ struct AgentToolApprovalSupportTests {
             ],
         ]))?.alwaysAllowRule)
         #expect(suggested.ruleText == "Bash(npm run *)")
+        #expect(suggested.rules == ["Bash(npm run *)"])
         #expect(suggested.description == "running any command that starts with “npm run”")
-        let entry = try #require(json(Data(suggested.entryJSON.utf8)))
-        // Each message is its own run, so a session rule would end with it.
-        #expect(entry["destination"] as? String == "localSettings")
-        #expect(entry["type"] as? String == "addRules")
 
+        // Allowed now and for the rest of this run, and nothing written by
+        // Claude Code: the lasting rule is Lamp's to keep, outside the
+        // workspace.
         let output = json(AgentToolApprovalAnswer.alwaysAllow(suggested).hookOutput)
         let decision = (output?["hookSpecificOutput"] as? NSDictionary)?["decision"] as? NSDictionary
         #expect(decision?["behavior"] as? String == "allow")
-        #expect((decision?["updatedPermissions"] as? [NSDictionary])?.first == entry)
+        let update = try #require((decision?["updatedPermissions"] as? [NSDictionary])?.first)
+        #expect(update["destination"] as? String == "session")
+        #expect(update["type"] as? String == "addRules")
+    }
+
+    /// Kept by writing, in Lamp's own file, and handed to the next run.
+    @Test func alwaysAllowRulesAreKeptByWritingOutsideTheWorkspace() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("rules-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let one = URL(fileURLWithPath: "/tmp/library/AgentWorkspaces/Writing/one")
+        let two = URL(fileURLWithPath: "/tmp/library/AgentWorkspaces/Writing/two")
+        try AgentToolAllowRules.add(["Bash(sw_vers)"], for: one, in: file)
+        try AgentToolAllowRules.add(["Bash(sw_vers)", "WebSearch"], for: one, in: file)
+        #expect(AgentToolAllowRules.rules(for: one, in: file) == ["Bash(sw_vers)", "WebSearch"])
+        #expect(AgentToolAllowRules.rules(for: two, in: file).isEmpty)
+
+        let channel = AgentToolApprovalChannel(directory: URL(fileURLWithPath: "/tmp/run"))
+        let settings = try #require(json(Data(ClaudePermissionHook.settingsJSON(
+            for: channel, allowing: AgentToolAllowRules.rules(for: one, in: file)
+        ).utf8)))
+        #expect((settings["permissions"] as? NSDictionary)?["allow"] as? [String] == ["Bash(sw_vers)", "WebSearch"])
+        // None kept, none given.
+        #expect(json(Data(ClaudePermissionHook.settingsJSON(for: channel).utf8))?["permissions"] == nil)
     }
 
     @Test func withoutASuggestionOnlyANarrowRuleIsOffered() {
@@ -235,10 +257,14 @@ struct AgentToolApprovalSupportTests {
         let request = try await waitForRequest(in: channel)
         #expect(AgentToolApprovalSummary.of(request) == .init(title: "Run a command", detail: "echo 'hi'"))
 
+        #expect(!channel.waitUntilTaken(request.id, seconds: 0.1))
         try channel.answer(request.id, with: .allow)
         try await waitForExit(hook.process)
         #expect(hook.process.terminationStatus == 0)
         #expect(hook.output.fileHandleForReading.readDataToEndOfFile() == AgentToolApprovalAnswer.allow.hookOutput)
+        // It marks what it took, so Lamp keeps a rule only for an answer
+        // that was heard.
+        #expect(channel.waitUntilTaken(request.id))
     }
 
     @Test func theHookGivesNoDecisionOnceLampStopsListening() async throws {

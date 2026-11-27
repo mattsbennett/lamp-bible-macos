@@ -645,6 +645,42 @@ struct AgentACPTests {
         ]]
     }
 
+    /// An Antigravity writing agent edits its writing, never what any
+    /// provider is started from, nor through a link to it.
+    @Test func aWritingsAgentCannotEditWhatAProviderStartsFrom() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("acp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("alias"), withDestinationURL: root.appendingPathComponent(".claude"))
+        // A scratch path that leads into a guarded folder is guarded.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".lamp-renders"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent(".lamp-renders/x"), withDestinationURL: root.appendingPathComponent(".claude"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        func decide(_ relative: String) -> String? {
+            AgentACPRun.decide(
+                permission: request(["toolCallId": "c", "name": "edit_file", "kind": "edit",
+                                     "locations": [["path": root.appendingPathComponent(relative).path]]]),
+                readOnly: false, workspace: root, home: home, sessionID: "s"
+            )
+        }
+        for refused in [".mcp.json", ".MCP.json", ".claude/settings.json", ".agents/hooks.json", ".agents/mcp_config.json",
+                        ".codex/config.toml", "opencode.json", "OpenCode.jsonc", ".opencode/plugins/x.js", ".lamp/terminal/launch.sh",
+                        "alias/settings.json", ".lamp-renders/x/settings.json"] {
+            #expect(decide(refused) == "deny", "\(refused)")
+        }
+        for allowed in ["draft.md", "notes/outline.md", ".lamp-renders/scene.py", ".lamp-renders/out.mp4"] {
+            #expect(decide(allowed) == "allow", "\(allowed)")
+        }
+        // What the guard rests on: making a link takes a command, and a
+        // command is never allowed by rule.
+        let link = AgentACPRun.decide(
+            permission: request(["toolCallId": "c", "name": "run_command", "kind": "execute",
+                                 "rawInput": ["command": "ln -s notes/x.json .claude/settings.json"]]),
+            readOnly: false, workspace: root, home: home, sessionID: "s"
+        )
+        #expect(link != "allow" && link != "always")
+    }
+
     @Test func onlyLampsToolsAndOwnReadsAreAllowedInAReaderChat() {
         func decide(_ call: [String: Any], readOnly: Bool = true) -> String? {
             AgentACPRun.decide(

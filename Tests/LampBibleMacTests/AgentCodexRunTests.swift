@@ -297,7 +297,7 @@ struct AgentCodexRunnerTests {
         defer { try? FileManager.default.removeItem(at: fake.folder) }
         let result = await run(fake) { runner, list in
             guard let request = list.first else { return }
-            DispatchQueue.global().async { runner.answerCodexApproval(request.id, with: .allow) }
+            DispatchQueue.global().async { runner.answerApproval(request.id, with: .allow) }
         }
         #expect(result.exitCode == 0)
         #expect(fake.ran)
@@ -315,7 +315,7 @@ struct AgentCodexRunnerTests {
         defer { try? FileManager.default.removeItem(at: fake.folder) }
         let result = await run(fake) { runner, list in
             guard let request = list.first else { return }
-            DispatchQueue.global().async { runner.answerCodexApproval(request.id, with: .deny) }
+            DispatchQueue.global().async { runner.answerApproval(request.id, with: .deny) }
         }
         #expect(result.exitCode == 0)
         #expect(!fake.ran)
@@ -345,7 +345,7 @@ struct AgentCodexRunnerTests {
                 runner.cancel()
                 // An Allow pressed after Stop finds nothing waiting.
                 Thread.sleep(forTimeInterval: 0.3)
-                late.mutate { $0 = runner.answerCodexApproval(request.id, with: .allow) }
+                late.mutate { $0 = runner.answerApproval(request.id, with: .allow) }
             }
         }
         #expect(!fake.ran)
@@ -364,7 +364,7 @@ struct AgentCodexRunnerTests {
             guard let request = list.first else { return }
             DispatchQueue.global().async {
                 runner.cancel()
-                runner.answerCodexApproval(request.id, with: .allow)
+                runner.answerApproval(request.id, with: .allow)
             }
         }
         #expect(!fake.ran)

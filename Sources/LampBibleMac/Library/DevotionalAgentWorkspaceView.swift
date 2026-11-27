@@ -780,22 +780,80 @@ enum DevotionalAgentWorkspaceStore {
         try updateInstructions(in: workspace)
     }
 
+    /// Writes Lamp's provider files again (`.mcp.json`, `.codex/config.toml`,
+    /// `opencode.json`), whole, as preparing the workspace does: run before
+    /// a Terminal opens, so a server an agent wrote into one is gone before
+    /// a provider reads it.
     @WritingWorkspaceFiles
-    private static func updateInstructions(in workspace: URL) throws {
+    static func restoreProviderFiles(in workspace: URL, configuration: LampAgentMCPConfiguration) throws {
+        try configuration.restoreProviderConfigurations(in: workspace)
+    }
+
+    /// What the writing's settings hold that Lamp can't vouch for; see
+    /// `AgentTerminalLaunchCheck`. The first check takes the rules Claude's
+    /// local settings hold now as its start.
+    @WritingWorkspaceFiles
+    static func terminalFindings(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> [AgentTerminalLaunchCheck.Finding] {
+        if AgentTerminalLaunchCheck.baseline(for: workspace) == nil {
+            try? AgentTerminalLaunchCheck.recordBaseline(in: workspace)
+        }
+        // Lamp's skills brought up to the ones this build ships first, as
+        // opening the writing does, so a copy from an older Lamp is Lamp's
+        // again rather than a finding.
+        try? installBundledSkillsIfNeeded(in: workspace)
+        try? synchronizeClaudeSkills(in: workspace)
+        return AgentTerminalLaunchCheck.findings(
+            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
+            baseline: AgentTerminalLaunchCheck.baseline(for: workspace)
+        )
+    }
+
+    /// As a Terminal session ends, the rules Claude saved in it become the
+    /// writing's own.
+    @WritingWorkspaceFiles
+    static func recordTerminalBaseline(in workspace: URL) {
+        try? AgentTerminalLaunchCheck.recordBaseline(in: workspace)
+    }
+
+    /// What a Claude writing run is told in place of the workspace's
+    /// `CLAUDE.md`, which it no longer reads (its project settings, and so
+    /// the workspace's own files, are left out; see
+    /// `AgentChatLaunchArguments`): the same instructions, made from the
+    /// workspace as it is, and the skills it holds, which reach Claude
+    /// through Lamp's `read_skill`.
+    @WritingWorkspaceFiles
+    static func chatInstructions(in workspace: URL) -> String {
+        let skills = [".claude/skills", ".agents/skills"].flatMap { folder in
+            (try? FileManager.default.contentsOfDirectory(atPath: workspace.appendingPathComponent(folder).path)) ?? []
+        }
+        let names = Array(Set(skills.filter { isValidSkillName($0) })).sorted()
+        let skillLine = names.isEmpty ? "" : """
+
+
+            ## Skills
+
+            This writing's skills: \(names.map { "`\($0)`" }.joined(separator: ", ")). Read the one that covers a task before doing it, with Lamp's `read_skill` tool, or, where that is off, from its `SKILL.md` in `.claude/skills/` or `.agents/skills/` here.
+            """
+        return currentInstructions(in: workspace) + skillLine
+    }
+
+    /// The instructions as the workspace stands now.
+    @WritingWorkspaceFiles
+    private static func currentInstructions(in workspace: URL) -> String {
         // The same rows the pane draws, so the agent and the reader are told
         // the same thing. A source on its way counts as not downloaded, as
         // one on the server does: told nothing, the agent would treat it as
-        // missing.
+        // missing. Not one the server no longer names: there is no Download
+        // for it, and the agent would send the reader looking for one.
         let rows = WorkspaceSourceOffload.rows(inWorkspaceAt: workspace)
         let here = rows.filter(\.isHere).map(\.relativePath)
-        // Not one the server no longer names: there is no Download for it,
-        // and the agent would send the reader looking for one.
         let offloaded = rows.filter { !$0.isHere && $0.state != .noLongerOnTheServer }.map(\.relativePath)
-        let instructions = instructions(
-            contextFiles: here,
-            offloadedSources: offloaded,
-            reviewMarks: WritingReviewMarks.isEnabledNow
-        )
+        return instructions(contextFiles: here, offloadedSources: offloaded, reviewMarks: WritingReviewMarks.isEnabledNow)
+    }
+
+    @WritingWorkspaceFiles
+    private static func updateInstructions(in workspace: URL) throws {
+        let instructions = currentInstructions(in: workspace)
         try instructions.write(
             to: workspace.appendingPathComponent("AGENTS.md"),
             atomically: true,
@@ -825,18 +883,35 @@ enum DevotionalAgentWorkspaceStore {
     ///   they were never added — and then work without a source the writer
     ///   deliberately kept (`lamp-bible-core/Documentation/decisions/0018`).
     ///   An agent may ask for one back; it may not delete one.
+    /// A file's name as the instructions list it: on one line, and unable
+    /// to end the code span it sits in, so no name reads as Lamp's words. A
+    /// backtick, a line break or any other control character is written as
+    /// `%` and its hex, and so is `%` itself, so every name can still be
+    /// told from every other and read back exactly.
+    static func shownName(_ name: String) -> String {
+        name.unicodeScalars.map { scalar -> String in
+            if scalar == "`" || scalar == "%" || CharacterSet.newlines.contains(scalar)
+                || CharacterSet.controlCharacters.contains(scalar) {
+                return String(scalar.utf8.map { String(format: "%%%02X", $0) }.joined())
+            }
+            return String(scalar)
+        }.joined()
+    }
+
     static func instructions(
         contextFiles: [String],
         offloadedSources: [String] = [],
         reviewMarks: Bool
     ) -> String {
-        let here = contextFiles.map { "- `context/\($0)`" }
+        let here = contextFiles.map { "- `context/\(shownName($0))`" }
         let away = offloadedSources.map {
-            "- `context/\($0)` — **not downloaded**: on the server to save space here."
+            "- `context/\(shownName($0))` — **not downloaded**: on the server to save space here."
         }
+        let encoded = (contextFiles + offloadedSources).contains { shownName($0) != $0 }
         let inventory = (here + away).isEmpty
             ? "- No user context files have been added yet."
             : (here + away).joined(separator: "\n")
+            + (encoded ? "\n\nIn these names a backtick, a line break or a `%` is written as `%` and its hex (`%60`, `%0A`, `%25`)." : "")
             + (offloadedSources.isEmpty ? "" : """
 
 
@@ -1247,6 +1322,9 @@ struct DevotionalAgentWorkspaceView: View {
     /// first and reads only when the history has actually moved.
     @State private var loadedRevisionsToken: DevotionalAgentRevisionStore.HistoryToken?
     @State private var errorMessage: String?
+    /// Settings in the writing that would run something on opening the
+    /// Terminal, waiting on the person's answer.
+    @State private var terminalLaunchCheck: TerminalLaunchCheck?
     /// Kept apart from `errorMessage`: the refresh loop runs every 400ms, so
     /// clearing one state for both would erase what a failed add just reported
     /// before anyone could read it.
@@ -1402,6 +1480,17 @@ struct DevotionalAgentWorkspaceView: View {
         }
         .onDisappear {
             WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
+        }
+        .sheet(item: $terminalLaunchCheck) { check in
+            TerminalLaunchCheckSheet(check: check) {
+                terminalLaunchCheck = nil
+            } open: {
+                if let workspaceURL { try? AgentTerminalLaunchCheck.approve(check.findings, for: workspaceURL) }
+                terminalLaunchCheck = nil
+                // Checked again before it opens: what changed while this was
+                // up is asked about afresh.
+                Task { await launch(check.provider, checked: true) }
+            }
         }
         .onChange(of: errorMessage) { _, message in
             if message != nil { showsSetup = true }
@@ -1999,6 +2088,7 @@ struct DevotionalAgentWorkspaceView: View {
                         guard launch == terminalID else { return }
                         terminalExitCode = exitCode
                         terminalDidExit(exitStatus: exitCode)
+                        Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
                 )
@@ -2968,10 +3058,33 @@ struct DevotionalAgentWorkspaceView: View {
         }
     }
 
-    private func launch(_ provider: AIProviderCLI) async {
+    private func launch(_ provider: AIProviderCLI, checked: Bool = false) async {
         // No Terminal session for Antigravity; see `sessionMode`.
         guard provider != .antigravity else { return }
         guard let workspaceURL else { return }
+        // What the writing's own settings would run on opening that Lamp did
+        // not put there, put to the person first; see
+        // `AgentTerminalLaunchCheck`.
+        // Lamp's own files first, written again whole: whatever an agent put
+        // in them goes without asking anyone. A writing they can't be written
+        // into doesn't open.
+        let lampServer = WritingChatTurns.mcpConfiguration(forWorkspace: workspaceURL)
+        if let lampServer {
+            do {
+                try await DevotionalAgentWorkspaceStore.restoreProviderFiles(in: workspaceURL, configuration: lampServer)
+            } catch {
+                errorMessage = "Lamp didn’t open the Terminal: \(error.localizedDescription)"
+                return
+            }
+        }
+        // Checked every time, after an answer too: what was shown is what was
+        // approved, and anything changed since is asked about again.
+        let findings = await DevotionalAgentWorkspaceStore.terminalFindings(in: workspaceURL, lampServer: lampServer)
+        if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspaceURL) {
+            terminalLaunchCheck = TerminalLaunchCheck(provider: provider, findings: findings)
+            return
+        }
+        _ = checked
         try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
         scheduleEditorSync(draftMarkdown)
         do {
@@ -3620,5 +3733,56 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             let status = exitCode.map(TerminalWaitStatus.exitStatus)
             DispatchQueue.main.async { [weak self] in self?.reportExit(status) }
         }
+    }
+}
+
+/// A Terminal launch held for the person's answer to what the writing's
+/// settings hold that Lamp can't vouch for.
+struct TerminalLaunchCheck: Equatable, Identifiable {
+    let provider: AIProviderCLI
+    let findings: [AgentTerminalLaunchCheck.Finding]
+    var id: String { provider.rawValue + findings.map(\.id).joined() }
+}
+
+/// Each finding whole, path and content, scrollable; Don't Open the default.
+private struct TerminalLaunchCheckSheet: View {
+    let check: TerminalLaunchCheck
+    let cancel: () -> Void
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("This writing’s settings hold things Lamp didn’t put there")
+                .font(.headline)
+            Text("\(check.provider.shortName) reads these when the Terminal opens, and an agent working in this writing could have written them. Open only if you added them yourself; Lamp asks again if any of them changes.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(check.findings) { finding in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(finding.path).font(.callout.weight(.semibold))
+                            Text(finding.detail)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(10)
+            }
+            .frame(minHeight: 120, maxHeight: 360)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
+            HStack {
+                Spacer()
+                Button("Open Anyway", action: open)
+                Button("Don’t Open", action: cancel)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.lampProminent)
+            }
+        }
+        .padding(18)
+        .frame(width: 520)
     }
 }

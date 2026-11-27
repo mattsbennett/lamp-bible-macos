@@ -157,9 +157,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Set while an ACP turn runs: how to ask the agent to stop, which is
     /// its own `session/cancel` rather than a signal.
     private var acpCancel: (() -> Void)?
-    /// Set while a Codex app-server turn runs: how the card's answer reaches
-    /// the request waiting on it.
-    private var codexAnswer: ((String, AgentToolApprovalAnswer) -> Bool)?
+    /// Set while a Codex app-server or Antigravity turn runs: how the card's
+    /// answer reaches the request waiting on it.
+    private var runnerAnswer: ((String, AgentToolApprovalAnswer) -> Bool)?
 
     /// How long a run may say nothing before Lamp stops it. A provider in
     /// trouble — retrying an overloaded API, or held at a usage limit — can
@@ -406,14 +406,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         model: String?,
         effort: String?,
         prompt: String,
-        onLine: (@Sendable (String) -> Void)? = nil
+        answerSeconds: Double = AgentCodexRun.answerSeconds,
+        onLine: (@Sendable (String) -> Void)? = nil,
+        onApprovals: (@Sendable ([AgentToolApprovalRequest]) -> Void)? = nil
     ) async -> AgentCLIProcessResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 continuation.resume(returning: runACPSynchronously(
                     executableName: executableName, workingDirectory: workingDirectory, mode: mode,
                     writingServer: writingServer,
-                    sessionID: sessionID, model: model, effort: effort, prompt: prompt, onLine: onLine
+                    sessionID: sessionID, model: model, effort: effort, prompt: prompt,
+                    answerSeconds: answerSeconds, onLine: onLine, onApprovals: onApprovals
                 ))
             }
         }
@@ -428,7 +431,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         model: String?,
         effort: String?,
         prompt: String,
-        onLine: (@Sendable (String) -> Void)?
+        answerSeconds: Double,
+        onLine: (@Sendable (String) -> Void)?,
+        onApprovals: (@Sendable ([AgentToolApprovalRequest]) -> Void)?
     ) -> AgentCLIProcessResult {
         if mode.isReadOnly {
             let settings = FileManager.default.homeDirectoryForCurrentUser
@@ -474,17 +479,53 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             var session: String?
             var promptID: Int?
             var cancelSent = false
+            var stopped = false
+            // Commands on the card, by Lamp's key: the agent's own id to
+            // answer with, its request (for the options), and as shown.
+            var waiting: [(key: String, id: Any, params: [String: Any], request: AgentToolApprovalRequest)] = []
+            func publish() {
+                // Called with `stateLock` held, so the list goes out in order.
+                onApprovals?(waiting.map(\.request))
+                setWaitingOnPerson(!waiting.isEmpty)
+            }
+            /// Answers one waiting command, once. After Stop it is cancelled,
+            /// whatever the answer, as ACP answers an outstanding request
+            /// then.
+            func settle(_ key: String, _ answer: AgentToolApprovalAnswer) -> Bool {
+                stateLock.lock()
+                guard let index = waiting.firstIndex(where: { $0.key == key }) else {
+                    stateLock.unlock()
+                    return false
+                }
+                let entry = waiting.remove(at: index)
+                let outcome: [String: Any] = stopped || isCancelled
+                    ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: answer, permission: entry.params)
+                publish()
+                stateLock.unlock()
+                send(["id": entry.id, "result": ["outcome": outcome]])
+                return true
+            }
+            func declineAll() {
+                stateLock.lock()
+                let keys = waiting.map(\.key)
+                stateLock.unlock()
+                for key in keys { _ = settle(key, .deny) }
+            }
             lock.lock()
             activeProcess = process
+            runnerAnswer = { settle($0, $1) }
             acpCancel = { [weak self] in
-                // Asked of the agent while it is answering, which ends the
-                // prompt as cancelled and lets it save; and if it does not
-                // end, the process and what it started are stopped.
+                // Nothing waiting is allowed after Stop. Then it is asked of
+                // the agent while it is answering, which ends the prompt as
+                // cancelled and lets it save; and if it does not end, the
+                // process and what it started are stopped.
                 stateLock.lock()
+                stopped = true
                 let sessionToCancel = promptID != nil ? session : nil
                 let first = !cancelSent
                 cancelSent = true
                 stateLock.unlock()
+                declineAll()
                 if let sessionToCancel, first {
                     // Armed before the write, which can block on a full pipe
                     // if the agent has stopped reading.
@@ -501,6 +542,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 lock.lock()
                 if activeProcess === process { activeProcess = nil }
                 acpCancel = nil
+                runnerAnswer = nil
                 lock.unlock()
             }
 
@@ -552,7 +594,24 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     guard let message else { continue }
                     if let method = message["method"] as? String, let id = message["id"] {
                         // A request from the agent.
-                        if method == "session/request_permission", let params = message["params"] as? [String: Any] {
+                        if method == "session/request_permission", let params = message["params"] as? [String: Any],
+                           let ask = AgentACPRun.commandRequest(permission: params, readOnly: mode.isReadOnly, id: "agy-\(id)") {
+                            // A command, put to the person; see `commandRequest`.
+                            stateLock.lock()
+                            let refuse = stopped || isCancelled
+                            if !refuse {
+                                waiting.append((ask.id, id, params, ask))
+                                publish()
+                            }
+                            stateLock.unlock()
+                            if refuse {
+                                send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]])
+                            } else {
+                                DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) {
+                                    _ = settle(ask.id, .deny)
+                                }
+                            }
+                        } else if method == "session/request_permission", let params = message["params"] as? [String: Any] {
                             stateLock.lock()
                             let currentSession = session
                             stateLock.unlock()
@@ -625,6 +684,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 }
             }
             if let onLine, let last = reader.flush() { onLine(last) }
+            // Nothing outlives the turn on the card.
+            stateLock.lock(); stopped = true; stateLock.unlock()
+            declineAll()
             // The turn is over: closing its input ends `agy acp`, which then
             // saves and exits; one that does not is stopped.
             try? input.fileHandleForWriting.close()
@@ -653,7 +715,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// What Codex sent, but for its commentary, is the output, line by line,
     /// as for any provider. A command it asks to run outside its sandbox is
     /// handed to `onApprovals` for the card, and answered by
-    /// `answerCodexApproval`; unanswered, it is declined after
+    /// `answerApproval`; unanswered, it is declined after
     /// `AgentCodexRun.answerSeconds`, and on Stop, never allowed.
     func runCodexAppServer(
         executableName: String,
@@ -681,9 +743,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Gives a waiting Codex request the person's answer. False when it is
     /// no longer waiting: answered by its timeout, or ended with the turn.
     @discardableResult
-    func answerCodexApproval(_ id: String, with answer: AgentToolApprovalAnswer) -> Bool {
+    func answerApproval(_ id: String, with answer: AgentToolApprovalAnswer) -> Bool {
         lock.lock()
-        let answering = codexAnswer
+        let answering = runnerAnswer
         lock.unlock()
         return answering?(id, answer) ?? false
     }
@@ -774,7 +836,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             lock.lock()
             activeProcess = process
-            codexAnswer = { settle($0, $1) }
+            runnerAnswer = { settle($0, $1) }
             acpCancel = { [weak self] in
                 // Nothing waiting is allowed after Stop; then the turn is
                 // interrupted, which lets Codex save, and a server that does
@@ -801,7 +863,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 lock.lock()
                 if activeProcess === process { activeProcess = nil }
                 acpCancel = nil
-                codexAnswer = nil
+                runnerAnswer = nil
                 lock.unlock()
             }
 
@@ -1040,7 +1102,13 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Whether `codex exec --help` lists `flag`, asked once per executable
     /// and kept; nil where the help could not be read.
     func codexExecTakes(_ flag: String, executableNamed name: String) -> Bool? {
-        let key = "\(name) exec \(flag)"
+        helpLists(flag, executableNamed: name, asking: ["exec", "--help"])
+    }
+
+    /// Whether a CLI's help, asked with `asking`, lists `flag`; asked once
+    /// per executable and kept, nil where the help could not be read.
+    func helpLists(_ flag: String, executableNamed name: String, asking: [String] = ["--help"]) -> Bool? {
+        let key = "\(name) \(asking.joined(separator: " ")) \(flag)"
         Self.versionLock.lock()
         let known = Self.flagsByKey[key]
         Self.versionLock.unlock()
@@ -1049,7 +1117,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = url
-        process.arguments = ["exec", "--help"]
+        process.arguments = asking
         process.standardOutput = output
         guard (try? AgentHelperProcesses.launch(process)) != nil else { return nil }
         Self.giveUp(on: process, after: 20)
@@ -2372,9 +2440,11 @@ final class NativeAgentChatModel: ObservableObject {
     private var cancelRequested = false
     private var loadingMessageID: UUID?
     private var approvalChannel: AgentToolApprovalChannel?
-    /// Whether the card's requests are a Codex turn's, answered over its
-    /// protocol rather than through a hook's folder.
-    private var codexApprovals = false
+    /// Whether the card's requests are a Codex or Antigravity turn's,
+    /// answered over its protocol rather than through a hook's folder.
+    private var runnerApprovals = false
+    /// Always Allow answers given and not yet known to be taken by the hook.
+    private var grantsAwaitingTheHook: [(id: String, rule: AgentToolAlwaysAllowRule)] = []
     /// The reply as it arrives, and as much of it as the pane has been shown.
     /// Shown on a timer rather than per fragment: a reply arrives as hundreds
     /// of small deltas, and redrawing the transcript for each one would put
@@ -2701,6 +2771,14 @@ final class NativeAgentChatModel: ObservableObject {
         let watching = channel.map { watchForApprovals(in: $0) }
         defer {
             watching?.cancel()
+            // Always Allow answers the hook took, kept before the channel's
+            // folder, and the hook's marks in it, go.
+            if let channel {
+                for grant in grantsAwaitingTheHook where channel.waitUntilTaken(grant.id, seconds: 0) {
+                    try? AgentToolAllowRules.add(grant.rule.rules, for: workspace)
+                }
+            }
+            grantsAwaitingTheHook = []
             channel?.close()
             approvalChannel = nil
             pendingApprovals = []
@@ -2760,6 +2838,12 @@ final class NativeAgentChatModel: ObservableObject {
         let codexIgnoresRules = wire == .codex && mode.isReadOnly
             ? (await Task.detached { runner.codexExecTakes("--ignore-rules", executableNamed: executable) }.value ?? true)
             : true
+        // Claude Code before 2.1.257 has no prompt snapshot to turn off, and
+        // refuses the flag, and every writing chat with it; unknown is taken
+        // as the current one, which has it.
+        let claudeSnapshots = wire == .claude && mode == .writing
+            ? (await Task.detached { runner.helpLists("--system-prompt-snapshot", executableNamed: executable) }.value ?? true)
+            : true
         // Read as the run starts rather than held on the model: the picker
         // writes straight to this chat's own choices, and a chat left open
         // while they changed would otherwise keep launching the old one. This
@@ -2779,6 +2863,42 @@ final class NativeAgentChatModel: ObservableObject {
             guard !parsed.isEmpty else { return }
             lines.yield(parsed)
         }
+        // What the workspace's `CLAUDE.md` says, made afresh for a Claude
+        // writing run, which no longer reads the workspace's own files; in a
+        // file of Lamp's for the run, outside every workspace.
+        // Without it the run would be told nothing at all, so the turn stops
+        // and says why.
+        var writingInstructionsFile: URL?
+        if wire == .claude, mode == .writing {
+            do {
+                writingInstructionsFile = try AgentChatInstructionFiles.write(
+                    await DevotionalAgentWorkspaceStore.chatInstructions(in: workspace)
+                )
+            } catch {
+                // The stream the run's lines would have come through ends
+                // here too, so nothing is left waiting on it.
+                lines.finish()
+                await absorbing.value
+                return RunOutcome(
+                    result: AgentCLIProcessResult(
+                        exitCode: -1, output: "",
+                        launchError: "Lamp could not write this chat's instructions, so it did not start Claude: \(error.localizedDescription)"
+                    ),
+                    proposedSessionID: proposedSessionID,
+                    resumedSessionID: resumedSessionID
+                )
+            }
+        }
+        defer { writingInstructionsFile.map(AgentChatInstructionFiles.remove) }
+        // The hook and the rules kept for this writing, in a file of Lamp's,
+        // which `--settings` takes as well as JSON.
+        let writingSettingsFile: URL? = channel.flatMap {
+            try? AgentChatInstructionFiles.write(
+                ClaudePermissionHook.settingsJSON(for: $0, allowing: AgentToolAllowRules.rules(for: workspace)),
+                extension: "json"
+            )
+        }
+        defer { writingSettingsFile.map(AgentChatInstructionFiles.remove) }
         let result: AgentCLIProcessResult
         if wire == .codex, !mode.isReadOnly {
             // In order, on the main thread: each list replaces the last.
@@ -2790,7 +2910,7 @@ final class NativeAgentChatModel: ObservableObject {
                     }
                 }
             }
-            codexApprovals = true
+            runnerApprovals = true
             result = await runner.runCodexAppServer(
                 executableName: provider.executable,
                 workingDirectory: workspace,
@@ -2802,8 +2922,18 @@ final class NativeAgentChatModel: ObservableObject {
                 onLine: onLine,
                 onApprovals: showApprovals
             )
-            codexApprovals = false
+            runnerApprovals = false
         } else if provider == .antigravity {
+            let showApprovals: @Sendable ([AgentToolApprovalRequest]) -> Void = { [weak self] pending in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, self.isRunning else { return }
+                        if pending != self.pendingApprovals { self.pendingApprovals = pending }
+                    }
+                }
+            }
+            runnerApprovals = true
+            defer { runnerApprovals = false }
             result = await runner.runACP(
                 executableName: provider.executable,
                 workingDirectory: workspace,
@@ -2814,7 +2944,8 @@ final class NativeAgentChatModel: ObservableObject {
                 model: chosenModel,
                 effort: chosenEffort,
                 prompt: prompt,
-                onLine: onLine
+                onLine: onLine,
+                onApprovals: showApprovals
             )
         } else {
             result = await runner.run(
@@ -2825,14 +2956,16 @@ final class NativeAgentChatModel: ObservableObject {
                     sessionID: resumedSessionID,
                     proposedSessionID: proposedSessionID,
                     mode: mode,
-                    permissionHookSettings: channel.map { ClaudePermissionHook.settingsJSON(for: $0) },
+                    permissionHookSettings: writingSettingsFile?.path,
                     model: chosenModel,
                     effort: chosenEffort,
                     providerMajorVersion: providerMajorVersion,
                     codexIgnoresRules: codexIgnoresRules,
                     // Made by Lamp from the workspace's path, never read
                     // from a file the agent can change.
-                    writingServer: mode == .writing ? WritingChatTurns.mcpConfiguration(forWorkspace: workspace) : nil
+                    writingServer: mode == .writing ? WritingChatTurns.mcpConfiguration(forWorkspace: workspace) : nil,
+                    writingInstructionsFile: writingInstructionsFile,
+                    claudeSnapshots: claudeSnapshots
                 ),
                 workingDirectory: workspace,
                 onLine: onLine
@@ -2936,10 +3069,10 @@ final class NativeAgentChatModel: ObservableObject {
     }
 
     /// Gives the waiting hook, or the waiting Codex request, the person's
-    /// answer.
+    /// answer. Always Allow's rules are kept for this writing's next runs.
     func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer) {
-        if codexApprovals {
-            if !runner.answerCodexApproval(request.id, with: answer) {
+        if runnerApprovals {
+            if !runner.answerApproval(request.id, with: answer) {
                 errorMessage = "That request had already ended, and the command did not run."
             }
             pendingApprovals.removeAll { $0.id == request.id }
@@ -2948,6 +3081,30 @@ final class NativeAgentChatModel: ObservableObject {
         guard let approvalChannel else { return }
         do {
             try approvalChannel.answer(request.id, with: answer)
+            // Kept only once the hook has taken the answer: one that timed
+            // out first denied the call, and nothing is saved for it.
+            if case .alwaysAllow(let rule) = answer {
+                // Settled when the run ends too, before its channel goes, so
+                // an answer taken just before is not lost with it.
+                grantsAwaitingTheHook.append((request.id, rule))
+                let workspace = workspace
+                Task { [weak self] in
+                    let taken = await Task.detached { approvalChannel.waitUntilTaken(request.id) }.value
+                    guard let self else { return }
+                    // Settled already, as the run ended.
+                    guard self.grantsAwaitingTheHook.contains(where: { $0.id == request.id }) else { return }
+                    self.grantsAwaitingTheHook.removeAll { $0.id == request.id }
+                    guard taken else {
+                        self.errorMessage = "That request had already timed out, so nothing was allowed or kept."
+                        return
+                    }
+                    do {
+                        try AgentToolAllowRules.add(rule.rules, for: workspace)
+                    } catch {
+                        self.errorMessage = "Lamp allowed this, but could not keep the rule for next time: \(error.localizedDescription)"
+                    }
+                }
+            }
         } catch let error as AgentToolApprovalChannel.AnswerError {
             errorMessage = error.localizedDescription
         } catch {

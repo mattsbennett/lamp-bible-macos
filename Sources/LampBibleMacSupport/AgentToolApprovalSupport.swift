@@ -65,10 +65,11 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
     }
 }
 
-/// What Always Allow saves: a permission rule, written to the workspace's
-/// own `.claude/settings.local.json`, so it holds for that writing on this
-/// Mac and nowhere else. Sync carries a workspace's documents and context,
-/// not its `.claude` folder.
+/// What Always Allow saves: permission rules, kept by Lamp for that writing
+/// on this Mac (`AgentToolAllowRules`), and handed to each of its runs in
+/// the `--settings` Lamp passes. Never in the workspace's own
+/// `.claude/settings.local.json`, which a chat's run no longer reads, and
+/// which an agent in the writing could write to. Sync carries none of it.
 ///
 /// Claude Code's own suggestion for the request is used when it makes one,
 /// as its permission dialog would, but only if every rule in it is narrow
@@ -86,12 +87,16 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
 /// a card, and in a writing chat a file call only asks when it reaches
 /// outside the workspace, which is where a lasting grant matters most.
 public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
-    /// The `addRules` permission update entry, as JSON text.
-    public let entryJSON: String
     /// What the rules permit, in words: running “sw_vers -productVersion”.
     public let description: String
     /// The rules as Claude Code's settings write them: `Bash(sw_vers)`.
-    public let ruleText: String
+    public let rules: [String]
+    /// The rules as a permission update for the rest of this run only
+    /// (`destination: session`), so the same call in this turn is not asked
+    /// about again; written nowhere.
+    let sessionEntryJSON: String
+    /// The rules on one line, as the card's help shows them.
+    public var ruleText: String { rules.joined(separator: ", ") }
 
     init?(toolName: String, toolInput: [String: Any], suggestions: [[String: Any]]?) {
         let suggested = suggestions?.first {
@@ -100,22 +105,19 @@ public struct AgentToolAlwaysAllowRule: Equatable, Sendable {
                 && Self.plainDescriptions(of: $0["rules"]) != nil
         }
         guard var entry = suggested ?? Self.narrowEntry(toolName: toolName, toolInput: toolInput),
-              let rules = entry["rules"] as? [[String: Any]],
-              let descriptions = Self.plainDescriptions(of: rules)
+              let listed = entry["rules"] as? [[String: Any]],
+              let descriptions = Self.plainDescriptions(of: listed)
         else { return nil }
-        // A session rule would end with the run, and each message is a run.
-        entry["destination"] = "localSettings"
-        guard let data = try? JSONSerialization.data(
-            withJSONObject: entry,
-            options: [.sortedKeys, .withoutEscapingSlashes]
-        ) else { return nil }
-        entryJSON = String(decoding: data, as: UTF8.self)
+        entry["destination"] = "session"
+        guard let data = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys, .withoutEscapingSlashes])
+        else { return nil }
+        sessionEntryJSON = String(decoding: data, as: UTF8.self)
         description = ListFormatter.localizedString(byJoining: descriptions)
-        ruleText = rules.compactMap { rule -> String? in
+        rules = listed.compactMap { rule -> String? in
             guard let tool = rule["toolName"] as? String else { return nil }
             guard let content = rule["ruleContent"] as? String, !content.isEmpty else { return tool }
             return "\(tool)(\(content))"
-        }.joined(separator: ", ")
+        }
     }
 
     /// The narrowest rule the documented syntax gives for this call, or none.
@@ -202,8 +204,11 @@ public enum AgentToolApprovalAnswer: Equatable, Sendable {
         case .allow:
             decision = ["behavior": "allow"]
         case .alwaysAllow(let rule):
+            // Allowed now, and for the rest of this run; Lamp keeps the rule
+            // for the writing's next runs (`AgentToolAllowRules`), rather
+            // than Claude Code writing it into the workspace.
             decision = ["behavior": "allow"]
-            if let entry = try? JSONSerialization.jsonObject(with: Data(rule.entryJSON.utf8)) {
+            if let entry = try? JSONSerialization.jsonObject(with: Data(rule.sessionEntryJSON.utf8)) {
                 decision["updatedPermissions"] = [entry]
             }
         case .deny:
@@ -284,6 +289,22 @@ public struct AgentToolApprovalChannel: Sendable {
         try answer.hookOutput.write(to: answerURL(id), options: .atomic)
     }
 
+    /// Whether the hook took the answer to `id`, waiting for it to settle:
+    /// it looks five times a second and marks what it took, and one whose
+    /// wait ended took its request back without it. Gone with the channel's
+    /// folder, or after `seconds`, it was not taken.
+    public func waitUntilTaken(_ id: String, seconds: Double = Double(ClaudePermissionHook.timeoutSeconds)) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        let fileManager = FileManager.default
+        repeat {
+            // Looked at once at least, a wait of nothing included.
+            if fileManager.fileExists(atPath: directory.appendingPathComponent("taken-\(id)").path) { return true }
+            if !fileManager.fileExists(atPath: requestURL(id).path) { return false }
+            Thread.sleep(forTimeInterval: 0.05)
+        } while Date() < end
+        return false
+    }
+
     /// Ends the channel. A hook still waiting gives Claude Code no decision,
     /// and the call is denied.
     public func close() {
@@ -299,24 +320,89 @@ public struct AgentToolApprovalChannel: Sendable {
     }
 }
 
+/// What the person chose Always Allow for, by writing, on this Mac: in one
+/// file of Lamp's, outside every workspace, so no agent writes it.
+public enum AgentToolAllowRules {
+    public static var defaultFile: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Lamp Bible", isDirectory: true)
+            .appendingPathComponent("AgentAllowRules.json")
+    }
+
+    /// A workspace by its folder's path, which names its writing.
+    private static func key(_ workspace: URL) -> String {
+        workspace.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func load(_ file: URL) -> [String: [String]] {
+        guard let data = try? Data(contentsOf: file),
+              let stored = try? JSONDecoder().decode([String: [String]].self, from: data)
+        else { return [:] }
+        return stored
+    }
+
+    public static func rules(for workspace: URL, in file: URL = defaultFile) -> [String] {
+        load(file)[key(workspace)] ?? []
+    }
+
+    public static func add(_ rules: [String], for workspace: URL, in file: URL = defaultFile) throws {
+        var stored = load(file)
+        var kept = stored[key(workspace)] ?? []
+        for rule in rules where !kept.contains(rule) { kept.append(rule) }
+        stored[key(workspace)] = kept
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(stored).write(to: file, options: .atomic)
+    }
+}
+
+/// The instructions and settings a Claude writing run is given, one file
+/// each per run in Lamp's own folder, outside every workspace, removed when
+/// the run ends: either can outgrow a command line (a writing's sources, its
+/// saved rules).
+public enum AgentChatInstructionFiles {
+    public static var folder: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Lamp Bible", isDirectory: true)
+            .appendingPathComponent("Chat Instructions", isDirectory: true)
+    }
+
+    /// Writes `text` to a new file, named with `extension`.
+    public static func write(_ text: String, in folder: URL = folder, extension kind: String = "md") throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = folder.appendingPathComponent(UUID().uuidString + "." + kind)
+        // A new name each time, never written over; Foundation refuses this
+        // together with `.atomic`.
+        try Data(text.utf8).write(to: file, options: [.withoutOverwriting])
+        return file
+    }
+
+    public static func remove(_ file: URL) {
+        try? FileManager.default.removeItem(at: file)
+    }
+}
+
 /// The hook Lamp gives a Claude Code chat run.
 public enum ClaudePermissionHook {
     /// How long Claude Code lets the hook run, in seconds: its default for a
     /// command hook, stated rather than assumed.
-    static let timeoutSeconds = 600
+    public static let timeoutSeconds = 600
     /// How long the hook waits for the person, by the clock: a margin under
     /// the timeout, so the hook ends of its own accord and takes its request
     /// back before Claude Code would stop it.
     static let waitSeconds = 580
 
-    /// The `--settings` JSON that adds the hook for every tool.
-    public static func settingsJSON(for channel: AgentToolApprovalChannel) -> String {
+    /// The `--settings` JSON that adds the hook for every tool, and allows
+    /// what the person chose Always Allow for in this writing.
+    public static func settingsJSON(for channel: AgentToolApprovalChannel, allowing rules: [String] = []) -> String {
         let hook: [String: Any] = [
             "type": "command",
             "command": command(for: channel),
             "timeout": timeoutSeconds,
         ]
-        let settings: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [hook]]]]]
+        var settings: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [hook]]]]]
+        if !rules.isEmpty { settings["permissions"] = ["allow": rules] }
         guard let data = try? JSONSerialization.data(
             withJSONObject: settings,
             options: [.sortedKeys, .withoutEscapingSlashes]
@@ -338,7 +424,7 @@ public enum ClaudePermissionHook {
             "id=$(/usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z')",
             "t=$(/usr/bin/mktemp \"$d/.request.XXXXXXXX\") && /bin/cat > \"$t\" && /bin/mv \"$t\" \"$d/request-$id.json\" || exit 0",
             "while [ \"$(/bin/date +%s)\" -lt \"$end\" ]; do",
-            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; exit 0; fi",
+            "  if [ -f \"$d/answer-$id.json\" ]; then /bin/cat \"$d/answer-$id.json\"; /usr/bin/touch \"$d/taken-$id\"; exit 0; fi",
             "  [ -d \"$d\" ] || exit 0",
             "  /bin/sleep 0.2",
             "done",
@@ -382,6 +468,12 @@ public struct AgentToolApprovalSummary: Equatable, Sendable {
                 title: "Run a command outside its sandbox",
                 detail: parts.isEmpty ? rawInput : parts.joined(separator: "\n\n"),
                 note: "Outside its sandbox the command can read and change anything your account can, and use the network. Allow lets it run this once."
+            )
+        case AgentACPRun.commandToolName:
+            return .init(
+                title: "Run a command",
+                detail: [string("command"), string("cwd").map { "In \($0)" }].compactMap { $0 }.joined(separator: "\n\n"),
+                note: "Lamp does not sandbox Antigravity. Unless your own Antigravity settings do, this command can read and change anything your account can, and use the network. Allow lets it run this once."
             )
         case "Bash":
             return .init(title: "Run a command", detail: string("command") ?? rawInput)

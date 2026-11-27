@@ -89,6 +89,38 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
         return result
     }
 
+    /// Writes the same files as `writeProviderConfigurations`, confined to
+    /// the workspace: each folder on the way must be a real folder, not a
+    /// link, and each file is written whole and renamed into place. Throws on
+    /// any failure, so a Terminal never opens over a half-restored set.
+    public func restoreProviderConfigurations(in workspace: URL) throws {
+        let files: [(String, String)] = [
+            (".codex/config.toml", answering(provider: AgentChatWireProvider.codex.rawValue).codexTOML),
+            (".mcp.json", answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON),
+            ("opencode.json", answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON),
+        ]
+        for (relative, content) in files {
+            var folder = workspace
+            for part in relative.split(separator: "/").dropLast() {
+                folder = folder.appendingPathComponent(String(part), isDirectory: true)
+                var info = stat()
+                if lstat(folder.path, &info) == 0 {
+                    guard info.st_mode & S_IFMT == S_IFDIR else {
+                        throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "\(part) in this writing is not a plain folder, so Lamp did not write into it."])
+                    }
+                } else {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                }
+            }
+            let file = workspace.appendingPathComponent(relative)
+            var info = stat()
+            if lstat(file.path, &info) == 0, info.st_mode & S_IFMT != S_IFREG {
+                throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "\(relative) in this writing is not a plain file, so Lamp did not replace it."])
+            }
+            try Data(content.utf8).write(to: file, options: .atomic)
+        }
+    }
+
     public func writeProviderConfigurations(to workspace: URL, readOnly: Bool = false) throws {
         let fileManager = FileManager.default
         let codexDirectory = workspace.appendingPathComponent(".codex", isDirectory: true)
