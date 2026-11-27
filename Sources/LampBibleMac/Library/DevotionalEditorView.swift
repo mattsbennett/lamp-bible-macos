@@ -785,6 +785,10 @@ struct DevotionalEditorView: View {
     @State private var heldRevision: Date?
     /// Whether a restore is being made and kept. One at a time.
     @State private var isRestoring = false
+    /// The newest request to offer a restore, or to say why one is refused.
+    /// Each is worked out off the main actor, and only the newest answers
+    /// the writer.
+    @State private var restoreAsking = 0
     /// Raised whenever the writing is replaced wholesale by something that
     /// is not the writer's own editing: a turn's draft, a newer copy from
     /// another device, a version put back from the history. A restore
@@ -2658,9 +2662,13 @@ struct DevotionalEditorView: View {
                 // by its words rather than by id, so the record gives the
                 // reason rather than this guessing at one — and refuses the
                 // lot rather than putting back the half it could.
-                refusedRestore = reasonRestoreRefused(
-                    of: answer.marked, in: answer.pageText
-                )
+                restoreAsking += 1
+                let asking = restoreAsking
+                Task {
+                    let reason = await reasonRestoreRefused(of: answer.marked, in: answer.pageText)
+                    guard askedIn == reviewKey, asking == restoreAsking else { return }
+                    refusedRestore = reason
+                }
                 return
             }
             guard !answer.ids.isEmpty else {
@@ -2678,11 +2686,12 @@ struct DevotionalEditorView: View {
     /// Why a restore of what the page marked is refused, in the record's
     /// own words. Nil is never expected here — the page asked about a
     /// passage it is drawing — so it reads as the general refusal.
-    private func reasonRestoreRefused(of marked: String?, in pageText: String?) -> String {
+    private func reasonRestoreRefused(of marked: String?, in pageText: String?) async -> String {
         guard let marked else { return Self.restoreNotExactReason }
         for base in [pageText, activeText].compactMap({ $0 }) {
             guard let range = LampWritingReview.markedRange(in: marked, of: base) else { continue }
-            switch reviewSession.restoring(range, in: base) {
+            switch await reviewSession.restoring(range, in: base) {
+            case nil: return Self.restoreMarksChangedReason
             case .notKept: return Self.restoreNotKeptReason
             case .nothingTouched:
                 return "Nothing the assistant changed is inside what you have selected."
@@ -2694,8 +2703,17 @@ struct DevotionalEditorView: View {
 
     private static let restoreNotExactReason =
         "This passage has been edited since the assistant changed it, so putting its wording back would take your own words with it. Mark it as reviewed instead."
+    private static let restoreMarksChangedReason =
+        "The marks changed while that was being worked out, so try again."
     private static let restoreNotKeptReason =
         "Lamp did not keep what this change replaced, so there is nothing to put back. It was made before Lamp kept it, or on a device whose Lamp does not."
+
+    /// Whether two texts hold the same UTF-16 units, which restore ranges
+    /// count in. Swift's `==` compares canonically, so it calls a composed
+    /// and a decomposed é the same, whose lengths differ.
+    private static func sameUnits(_ one: String, _ other: String) -> Bool {
+        one.utf16.elementsEqual(other.utf16)
+    }
 
     /// Offers a restore of passages the page named.
     private func offerRestore(of target: RestoreOffer.Target) {
@@ -2722,7 +2740,24 @@ struct DevotionalEditorView: View {
         // range means nothing — it was refused every time, whatever the
         // writer had picked.
         let text = activeText
-        let outcome = reviewSession.restoring(selection, in: text)
+        let askedIn = reviewKey
+        restoreAsking += 1
+        let asking = restoreAsking
+        Task {
+            let outcome = await reviewSession.restoring(selection, in: text)
+            // Worked out off the main actor; meanwhile the writer can
+            // open another document, type, or ask again.
+            guard askedIn == reviewKey, asking == restoreAsking else { return }
+            guard let outcome, Self.sameUnits(activeText, text) else {
+                restoreOffer = nil
+                refusedRestore = "The writing changed while that was being worked out, so try again."
+                return
+            }
+            offerRestore(of: selection, outcome: outcome)
+        }
+    }
+
+    private func offerRestore(of selection: NSRange, outcome: LampWritingReview.RestoreOutcome) {
         guard case .plan(let plan) = outcome else {
             restoreOffer = nil
             switch outcome {
@@ -3254,14 +3289,34 @@ struct DevotionalEditorView: View {
         // open. Against the writing's prose the plan would be worked out
         // in text the writer is not looking at.
         let text = activeText
-        guard case .plan(let plan) = reviewSession.restoring(selection, in: text),
-              Set(plan.marks) == offer.marks else {
-            refusedRestore = "The writing changed while that was open, so nothing was put back."
+        let askedIn = reviewKey
+        // As `restoreFromPage`: one plan at a time, and counted from the
+        // asking until `makeRestore` has taken its own count, so a quit
+        // meanwhile waits for it.
+        guard !isRestoring else {
+            refusedRestore = "One passage is being put back already. Try again in a moment."
             return
         }
-        makeRestore(WritingReviewSession.PageRestore(
-            base: text, restored: plan.applied(to: text), plan: plan
-        ))
+        isRestoring = true
+        LampPendingWrites.shared.begin()
+        Task {
+            defer { LampPendingWrites.shared.end() }
+            let outcome = await reviewSession.restoring(selection, in: text)
+            isRestoring = false
+            guard askedIn == reviewKey else { return }
+            // The plan was made in `text`, and in these marks, so it is put
+            // back only there. Typed into while it was worked out — even a
+            // character spelled another way, which Swift calls equal — its
+            // ranges would splice in the wrong place.
+            guard Self.sameUnits(activeText, text), case .plan(let plan)? = outcome,
+                  Set(plan.marks) == offer.marks else {
+                refusedRestore = "The writing changed while that was open, so nothing was put back."
+                return
+            }
+            makeRestore(WritingReviewSession.PageRestore(
+                base: text, restored: plan.applied(to: text), plan: plan
+            ))
+        }
     }
 
 

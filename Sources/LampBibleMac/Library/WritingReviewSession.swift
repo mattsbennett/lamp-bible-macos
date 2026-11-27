@@ -709,8 +709,25 @@ final class WritingReviewSession: ObservableObject {
     /// refusal is the record's own: a selection holding one passage the
     /// writer has typed into is refused, and that is not a thing the drawn
     /// list can say, holding only what can be put back.
-    func restoring(_ range: NSRange, in text: String? = nil) -> LampWritingReview.RestoreOutcome {
+    ///
+    /// Worked out off the main actor: it carries the marks into `text`,
+    /// which compares whole drafts, and on a long writing that was the
+    /// better part of a second each time the writer asked. Nil where the
+    /// record changed meanwhile — a clear landed, say — so that the answer
+    /// is about marks that are no longer these.
+    func restoring(_ range: NSRange, in text: String? = nil) async -> LampWritingReview.RestoreOutcome? {
         let text = text ?? self.text
+        guard let review else { return .nothingTouched }
+        let texts = texts
+        let outcome = await Task.detached(priority: .userInitiated) {
+            Self.restoring(range, in: text, review: review, texts: texts)
+        }.value
+        return self.review == review ? outcome : nil
+    }
+
+    private nonisolated static func restoring(
+        _ range: NSRange, in text: String, review: LampWritingReview, texts: [String]
+    ) -> LampWritingReview.RestoreOutcome {
         // The same reach back over a line's block syntax as a clear's.
         //
         // Not outward over emphasis delimiters. What the assistant
@@ -737,20 +754,14 @@ final class WritingReviewSession: ObservableObject {
         // examples. Until one of those is done, this reaches only for
         // block syntax. Do not add emphasis back by hand.
         let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
-        return live(in: text)?.restoring(asked, in: text) ?? .nothingTouched
-    }
-
-    /// The marks carried into `text`, as drawing carries them.
-    ///
-    /// A restore planned against the stored record rather than this one
-    /// can put words back in the wrong place: a mark whose own words the
-    /// writer has typed into is not found where it stands, and the same
-    /// words standing somewhere else — an untouched sentence that happens
-    /// to repeat them — are found instead, where they pass the digest and
-    /// are replaced. The carry is what ties a mark to its own place.
-    private func live(in text: String) -> LampWritingReview? {
-        guard let review else { return nil }
-        return review.carryingToText(text, from: texts)
+        // Planned against the marks carried into `text`, as drawing
+        // carries them. Against the stored record a restore can put words
+        // back in the wrong place: a mark whose own words the writer has
+        // typed into is not found where it stands, and the same words
+        // standing somewhere else — an untouched sentence that happens to
+        // repeat them — are found instead, where they pass the digest and
+        // are replaced. The carry is what ties a mark to its own place.
+        return review.carryingToText(text, from: texts).restoring(asked, in: text)
     }
 
     /// Records a restore the editor's own surface has just made, the text
@@ -803,7 +814,7 @@ final class WritingReviewSession: ObservableObject {
     ) -> PageRestore? {
         let wanted = Set(ids.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
         guard !wanted.isEmpty else { return nil }
-        // The marks carried into a text, as drawing carries them (`live`).
+        // The marks carried into a text, as drawing carries them (`restoring`).
         func live(in text: String) -> LampWritingReview { review.carryingToText(text, from: texts) }
         // The page's own text first, since a plan made in it needs no
         // carrying at all.
