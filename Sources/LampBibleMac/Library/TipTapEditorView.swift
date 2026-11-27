@@ -1284,7 +1284,7 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // middle is the middle of the line's lower-case letters: the lift was
         // the mark's alone, by padding, and left it high in its own circle
         // (owner, 2026-11-25; measured 1.6 and 2.4 points high).
-        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transform: translateY(-2px); box-sizing: border-box; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
+        'html .ProseMirror .review-clear, html .ProseMirror .review-restore { position: relative; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; transform: translateY(-2px); box-sizing: border-box; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: none; background: transparent; color: rgba(178, 120, 0, 0.8); font: inherit; cursor: pointer; user-select: none; }',
         'html .ProseMirror .review-clear { margin: -11px 8px -11px -30px; }',
         'html .ProseMirror .review-restore { margin: -11px 8px -11px 0; }',
         // With a ↺ beside it, which is shown only while editing, further out.
@@ -1295,8 +1295,9 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         'html .ProseMirror .review-clear::before, html .ProseMirror .review-restore::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: center / contain no-repeat; }',
         'html .ProseMirror .review-clear::before { -webkit-mask-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAxNiAxNic+PHBhdGggZD0nTTMuNiA4LjQgNi42IDExLjQgMTIuNCA0LjgnIGZpbGw9J25vbmUnIHN0cm9rZT0nYmxhY2snIHN0cm9rZS13aWR0aD0nMS45JyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4="); }',
         'html .ProseMirror .review-clear:hover, html .ProseMirror .review-restore:hover { background: rgba(232, 176, 44, 0.22); }',
-        // A focus ring round the circle, for a writer moving by keyboard.
-        'html .ProseMirror .review-clear:focus-visible, html .ProseMirror .review-restore:focus-visible { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
+        // A focus ring round the circle, for a writer moving by keyboard: on
+        // the button, which fills the circle (the page's reviewButton).
+        'html .ProseMirror :is(.review-clear, .review-restore) > button:focus-visible { outline: 2px solid -webkit-focus-ring-color; outline-offset: 1px; }',
         // A list item's buttons sit past its bullet, not on it: the list's
         // indent (1.35em) and the item's (0.15em) further into the margin,
         // in the item's own em, taken where the item is and handed down
@@ -1324,6 +1325,16 @@ final class TipTapEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         // item's: later than the item's rule, and as particular, so the ✓
         // does not take the item's offset and the ↺ the quote's.
         'html body.mode-edit .ProseMirror blockquote > .review-clear:has(~ .review-restore) { margin-left: -56px; }',
+        // In a quote, in the same column as the page's: the quote's rule and
+        // padding (3 + 16, set above) further out, or its ✓ stood inside it,
+        // 19 points in from every other (owner, 2026-11-26). Still taking no
+        // width. Only in a quote of the page's own, not one in a list item or
+        // a cell, which have offsets and sides of their own.
+        'html .ProseMirror > blockquote > :not(ul, ol, blockquote) > .review-clear { margin-left: -49px; margin-right: 27px; }',
+        'html body.mode-edit .ProseMirror > blockquote > :not(ul, ol, blockquote) > .review-clear:has(~ .review-restore) { margin-left: -75px; margin-right: 4px; }',
+        'html .ProseMirror > blockquote > :not(ul, ol, blockquote) > .review-restore { margin-right: 27px; }',
+        'html body .ProseMirror > blockquote > :is(.review-clear, .review-restore) { margin-left: -49px; }',
+        'html body.mode-edit .ProseMirror > blockquote > .review-clear:has(~ .review-restore) { margin-left: -75px; }',
         // In a cell, which has no margin to stand in: at its right instead,
         // the ✓ outermost, measured from the cell, which is placed for it.
         'html .tiptap :is(td, th) { position: relative; }',
