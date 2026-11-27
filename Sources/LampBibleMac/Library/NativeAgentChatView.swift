@@ -2381,6 +2381,12 @@ enum KeptAgentChats {
         noteTurnBegun(in: workspace)
     }
 
+    /// How many turns are in hand on this workspace.
+    @MainActor
+    static func turnsInHand(in workspace: URL) -> Int {
+        turnsInHand[workspace.standardizedFileURL.path] ?? 0
+    }
+
     @MainActor
     static func endTurn(in workspace: URL) {
         let key = workspace.standardizedFileURL.path
@@ -2971,6 +2977,10 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Lets messages held back after a failure go, as sending one does.
     func releaseQueue() { queueHeld = false }
+
+    /// Holds the waiting messages until the person sends, as a failure does:
+    /// a Claude Terminal held them (`AgentTerminalHolds`).
+    func holdQueue() { if !queueHeld { queueHeld = true } }
 
     /// Why Lamp, rather than the person, stopped the running reply.
     private var stoppedByLamp: String?
@@ -4144,8 +4154,13 @@ struct NativeAgentChatView: View {
         // Held by a Claude Terminal, the queue waits for the person's next
         // Send once it has ended; it isn't tried again until then.
         guard !isPreparing, !model.isRunning, !model.queueHeld, !KeptAgentChats.isQuitting,
-              !AgentTerminalHolds.shared.isHeld(in: workspaceFolder),
               model.hasWaitingMessage else { return }
+        // Held on the chat itself, which outlives this pane: a pane opened
+        // after the Terminal has ended would otherwise send it unasked.
+        if AgentTerminalHolds.shared.isHeld(in: workspaceFolder) {
+            model.holdQueue()
+            return
+        }
         guard let next = model.reserveNextQueued() else { return }
         startSending(next.text, queued: next.id)
     }
@@ -4581,7 +4596,7 @@ struct NativeAgentChatView: View {
     /// button to send without it. The host decides what is sent: dismissing
     /// asks it to leave the selection out.
     /// Where Show Terminal leads, in a pane that holds a Terminal.
-    func showsTerminal(_ show: @escaping () -> Void) -> NativeAgentChatView {
+    func showsTerminal(_ show: (() -> Void)?) -> NativeAgentChatView {
         var copy = self
         copy.showTerminal = show
         return copy

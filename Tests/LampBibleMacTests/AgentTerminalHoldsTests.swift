@@ -100,7 +100,7 @@ struct AgentTerminalHoldsTests {
     /// it is killed.
     @Test func endStopsEvenAProcessThatIgnoresTerm() async throws {
         let place = try workspace()
-        let process = try spawn("trap '' TERM; sleep 30 & wait")
+        let process = try spawn("trap '' TERM; exec sleep 30")
         defer { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
         // Its trap set before it is asked to stop.
         try await Task.sleep(for: .milliseconds(200))
@@ -115,12 +115,16 @@ struct AgentTerminalHoldsTests {
         #expect(!holds.isHeld(in: place))
     }
 
+    /// Ended before its process started, it isn't pending, so the Terminal
+    /// doesn't start it at all.
     @Test func endClearsALaunchNotStartedYet() throws {
         let place = try workspace()
         let launch = UUID()
         holds.begin(launch, in: place)
+        #expect(holds.isPending(launch))
         holds.end(in: place)
         #expect(!holds.isHeld(in: place))
+        #expect(!holds.isPending(launch))
     }
 
     /// The pid of a process gone and given to another doesn't hold.

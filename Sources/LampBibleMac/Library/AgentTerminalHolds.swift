@@ -74,6 +74,12 @@ final class AgentTerminalHolds: ObservableObject {
         if launches[id] != nil { launches[id] = nil }
     }
 
+    /// Whether this launch is still waiting for its process: false once it
+    /// was dropped or ended before it started, when it mustn't start at all.
+    func isPending(_ id: UUID) -> Bool {
+        launches[id]?.state == .starting
+    }
+
     /// A launch whose process never started: its view went, or was never
     /// made, or a newer launch replaced it. One that started is ended by its
     /// exit alone.

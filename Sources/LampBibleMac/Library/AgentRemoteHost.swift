@@ -833,6 +833,12 @@ final class AgentRemoteHost: ObservableObject {
             send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't on this Mac.", requestID: message.requestID), to: peer)
             return
         }
+        // Before a chat not yet followed is opened, which can write its
+        // choices and queue: a held writing is left as it is.
+        if peer.open?.chat != chat, let root = libraryRootURL,
+           !admitsTurn(in: workspace(of: chat, root: root), running: false, chatID: chatID, requestID: message.requestID, peer: peer) {
+            return
+        }
         let open = peer.open?.chat == chat ? peer.open : open(chatID, for: peer, requestID: nil)
         guard let open else { return }
         await run(
@@ -1074,6 +1080,11 @@ final class AgentRemoteHost: ObservableObject {
         // holds is left as it is.
         guard admitsTurn(in: workspace, running: false, chatID: chat.id, requestID: message.requestID, peer: peer)
         else { return }
+        // Held from here, so a Terminal can't open while the writing is
+        // prepared and its choices saved: its launch waits for no turn in
+        // hand.
+        KeptAgentChats.beginTurn(in: workspace)
+        defer { KeptAgentChats.endTurn(in: workspace) }
         do {
             if case .writing(let id) = chat {
                 // The workspace made before anything is chosen in it, as the
@@ -1092,7 +1103,9 @@ final class AgentRemoteHost: ObservableObject {
             let isWriting = if case .writing = chat { true } else { false }
             // New: nothing said in it, and no first turn on its way from a
             // window or another device, whose choices these would overwrite.
-            let isNew = summary(of: chat) == nil && !KeptAgentChats.isBusy(in: workspace)
+            // This request's own reservation is the one turn in hand.
+            let isNew = summary(of: chat) == nil && KeptAgentChats.turnsInHand(in: workspace) <= 1
+                && !KeptAgentChats.isRunning(in: workspace)
             if isNew, chosen != nil || !isWriting {
                 let provider = chosen
                     ?? AIProviderCLI(rawValue: Self.appProviderID(for: chat)) ?? .codex

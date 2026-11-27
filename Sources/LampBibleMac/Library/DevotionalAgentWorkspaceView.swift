@@ -1350,6 +1350,10 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var activeProvider: AIProviderCLI?
     @State private var terminalID = UUID()
     @State private var terminalExitCode: Int32?
+    /// Whether this pane has gone, read by a launch after its checks: the
+    /// launch's task outlives the pane, and a hold handed over then would
+    /// have no Terminal to end it.
+    @State private var paneLifetime = PaneLifetime()
     @State private var terminalCommand = ""
     @State private var terminalCapture = TerminalCaptureState()
     /// Whether this pane is seen, so a Terminal turn ending unwatched can
@@ -1477,8 +1481,13 @@ struct DevotionalAgentWorkspaceView: View {
                 WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
             }
         }
+        .onAppear { paneLifetime.isGone = false }
         .onDisappear {
             WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
+            // A launch still checking when the pane goes hands nothing over,
+            // and one handed over with no Terminal made for it holds nothing.
+            paneLifetime.isGone = true
+            AgentTerminalHolds.shared.dropIfNotStarted(terminalID)
         }
         .sheet(item: $terminalLaunchCheck) { check in
             TerminalLaunchCheckSheet(check: check) {
@@ -2034,7 +2043,11 @@ struct DevotionalAgentWorkspaceView: View {
                     dismiss: { dismissedFocus = editorFocus }
                 )
                 .turnNotifications(title: notificationTitle, route: .writing(devotionalID))
-                .showsTerminal { sessionModeID = AgentSessionDisplayMode.terminal.rawValue }
+                // Only in the pane whose Terminal holds the writing, and
+                // where it can be shown: another window's pane would show a
+                // Launch button, and Antigravity's has no Terminal.
+                .showsTerminal(ownsLiveTerminal && selectedProvider != .antigravity
+                    ? { sessionModeID = AgentSessionDisplayMode.terminal.rawValue } : nil)
                 .identityShownByHost()
                 .newChatShownByHost(asked: $newChatAsked) { chatCanStartNew = $0 }
                 .onConnectionChanged { state in providerConnection = state }
@@ -3139,6 +3152,7 @@ struct DevotionalAgentWorkspaceView: View {
         // (`AgentTerminalHolds`). Only Claude's: it reloads its settings
         // while it runs.
         AgentTerminalHolds.shared.dropIfNotStarted(terminalID)
+        guard !paneLifetime.isGone else { return }
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
@@ -3197,6 +3211,12 @@ struct DevotionalAgentWorkspaceView: View {
         // Assigned only on a real change: this runs several times a second, and
         // every assignment would redraw the terminal pane.
         if capture != terminalCapture { terminalCapture = capture }
+    }
+
+    /// Whether this pane's Terminal is the one holding the writing's chats.
+    private var ownsLiveTerminal: Bool {
+        activeProvider.map(AgentTerminalHolds.holds) == true && terminalExitCode == nil
+            && AgentTerminalHolds.shared.launches[terminalID] != nil
     }
 
     /// Whether this pane shows a running Terminal session, which is what a
@@ -3655,6 +3675,12 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
         let coordinator = context.coordinator
         DispatchQueue.main.async { [weak terminal] in
             guard let terminal else { return }
+            // Ended or replaced before its process started: it doesn't
+            // start, or Claude would run with no hold on the writing.
+            if let holdID = coordinator.holdID, !MainActor.assumeIsolated({ AgentTerminalHolds.shared.isPending(holdID) }) {
+                coordinator.reportNotStarted()
+                return
+            }
             terminal.startProcess(
                 executable: shell,
                 args: ["-l"],
@@ -3786,6 +3812,9 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             reportExit(TerminalWaitStatus.exitStatus(status))
         }
 
+        /// Its launch was ended before the process started.
+        func reportNotStarted() { reportExit(nil) }
+
         private func reportExit(_ status: Int32?) {
             guard !reportedExit else { return }
             reportedExit = true
@@ -3805,6 +3834,11 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in self?.reportExit(status) }
         }
     }
+}
+
+/// Whether a writing's pane is still there, for work that outlives it.
+final class PaneLifetime {
+    var isGone = false
 }
 
 /// A Terminal launch held for the person's answer to what the writing's
