@@ -397,6 +397,11 @@ extension LampSyncMacPassLibraryTests {
         #expect(sent != (try store.url(writingID: "w")))
         #expect(try Data(contentsOf: sent) == Data(contentsOf: store.url(writingID: "w")))
         #expect(try store.review(writingID: "w").isEmpty)
+        // Both clears are years past the 90 days a retirement is kept, and
+        // both are kept and sent: the copy downloaded still showed the
+        // mark this Mac cleared, and only that clear can take it away
+        // there (core 0041).
+        #expect(try store.review(writingID: "w").retired.count == 2)
     }
 
     // MARK: - A writing's documents
