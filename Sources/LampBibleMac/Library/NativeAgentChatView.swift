@@ -2368,7 +2368,9 @@ final class NativeAgentChatModel: ObservableObject {
     /// the colour — of a failure.
     @Published private(set) var stoppedNotice: String?
     /// Tool calls the running reply is waiting on the person for, oldest
-    /// first. Only a Claude writing chat asks; see `ClaudePermissionHook`.
+    /// first. A writing chat asks: Claude through `ClaudePermissionHook`,
+    /// Codex and Antigravity through their runners. A paired device may
+    /// answer too (`AgentRemoteHost`, `decisions/0040`).
     @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = [] {
         didSet {
             // Said as the turn's step, so wherever the turn is watched — a
@@ -3302,15 +3304,22 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Gives the waiting hook, or the waiting Codex request, the person's
     /// answer. Always Allow's rules are kept for this writing's next runs.
-    func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer) {
+    /// Gives a waiting request the person's answer. False where it was no
+    /// longer waiting, or the answer could not be given; said in the pane
+    /// unless `saysWhy` is false, as for a device, which is told itself
+    /// rather than have every follower shown the Mac's notice.
+    @discardableResult
+    func answer(_ request: AgentToolApprovalRequest, with answer: AgentToolApprovalAnswer, saysWhy: Bool = true) -> Bool {
         if runnerApprovals {
-            if !runner.answerApproval(request.id, with: answer) {
+            let taken = runner.answerApproval(request.id, with: answer)
+            if !taken, saysWhy {
                 errorMessage = "That request had already ended, and the command did not run."
             }
             pendingApprovals.removeAll { $0.id == request.id }
-            return
+            return taken
         }
-        guard let approvalChannel else { return }
+        guard let approvalChannel else { return false }
+        var taken = true
         do {
             try approvalChannel.answer(request.id, with: answer)
             // Kept only once the hook has taken the answer: one that timed
@@ -3338,11 +3347,14 @@ final class NativeAgentChatModel: ObservableObject {
                 }
             }
         } catch let error as AgentToolApprovalChannel.AnswerError {
-            errorMessage = error.localizedDescription
+            taken = false
+            if saysWhy { errorMessage = error.localizedDescription }
         } catch {
-            errorMessage = "Could not give \(provider.shortName) your answer: \(error.localizedDescription)"
+            taken = false
+            if saysWhy { errorMessage = "Could not give \(provider.shortName) your answer: \(error.localizedDescription)" }
         }
         pendingApprovals.removeAll { $0.id == request.id }
+        return taken
     }
 
     private func finish(_ outcome: RunOutcome) {

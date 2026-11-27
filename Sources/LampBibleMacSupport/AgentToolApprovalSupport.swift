@@ -60,7 +60,7 @@ public struct AgentToolApprovalRequest: Equatable, Sendable, Identifiable {
         )
     }
 
-    var toolInput: [String: Any] {
+    public var toolInput: [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(toolInputJSON.utf8))) as? [String: Any] ?? [:]
     }
 }

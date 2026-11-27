@@ -231,7 +231,9 @@ public enum LampAgentRemoteHosting {
         activity: AgentChatActivity?,
         isRunning: Bool,
         failure: String?,
-        askedBy: [UUID: UUID] = [:]
+        askedBy: [UUID: UUID] = [:],
+        approvals: [AgentToolApprovalRequest] = [],
+        provider: String = ""
     ) -> LampAgentRemoteChatState {
         LampAgentRemoteChatState(
             messages: messages.map(message),
@@ -239,8 +241,41 @@ public enum LampAgentRemoteHosting {
             activity: Self.activity(activity),
             isRunning: isRunning,
             failure: failure,
-            askedBy: askedBy
+            askedBy: askedBy,
+            approvals: approvals.map { approval($0, provider: provider) }
         )
+    }
+
+    /// A request on the Mac's card, as a paired device shows it
+    /// (`decisions/0040`): a command to run, from Codex, Antigravity or
+    /// Claude's shell, with where it runs and the agent's reason, which a
+    /// device may allow where it can show it whole; any other tool call with
+    /// what the Mac's card shows of it, which a device may only deny, since
+    /// the card itself shows a file's new text only in part.
+    public static func approval(_ request: AgentToolApprovalRequest, provider: String) -> LampAgentRemoteApproval {
+        let summary = AgentToolApprovalSummary.of(request)
+        let input = request.toolInput
+        func string(_ key: String) -> String? {
+            (input[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        switch request.toolName {
+        case AgentCodexRun.commandToolName, AgentACPRun.commandToolName, "Bash":
+            let command = string("command")
+            return LampAgentRemoteApproval(
+                id: request.id, provider: provider, kind: LampAgentRemoteApproval.command, title: summary.title,
+                command: command, folder: string("cwd"),
+                // Codex gives a reason; Claude's shell, a description of the
+                // command. Both are the agent's own words.
+                agentReason: string("reason") ?? string("description"),
+                note: summary.note,
+                canAllow: command.map(LampAgentRemoteApproval.canShowWhole) ?? false
+            )
+        default:
+            return LampAgentRemoteApproval(
+                id: request.id, provider: provider, kind: LampAgentRemoteApproval.tool, title: summary.title,
+                command: summary.detail, note: summary.note, canAllow: false
+            )
+        }
     }
 }
 

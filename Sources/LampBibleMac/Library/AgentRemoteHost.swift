@@ -462,11 +462,57 @@ final class AgentRemoteHost: ObservableObject {
             track(peer) { await self.sendSetup(to: peer, requestID: message.requestID) }
         case .setChoices:
             setChoices(message, from: peer)
+        case .answerApproval:
+            answerApproval(message, from: peer)
         case .ping:
             send(.pong, to: peer)
         default:
             // A kind from a newer phone, or one only a host sends.
             break
+        }
+    }
+
+    /// A device's answer to a request the open chat's turn waits on
+    /// (`decisions/0040`): taken only for the request it showed, still
+    /// waiting in the same turn and unchanged, Allow Once only where a device
+    /// may allow it, and only once, wherever the first answer came from.
+    private func answerApproval(_ message: LampAgentRemoteMessage, from peer: Peer) {
+        guard mayAct(peer), let open = peer.open, message.chatID == open.id else {
+            send(.failed(LampAgentRemoteFailure.notFound, "That chat isn't open.", requestID: message.requestID, chatID: message.chatID), to: peer)
+            return
+        }
+        let model = open.model
+        // Judged against the model as it is now, not as last told.
+        let now = Self.state(of: model, askedBy: askedBy)
+        let outcome = LampAgentRemoteApprovalAnswer.decide(
+            decision: message.decision, approvalID: message.approvalID, digest: message.approvalDigest,
+            shownTurn: message.turnID, chatID: open.id, currentTurn: now.runningTurn, waiting: now.approvals
+        )
+        let gone = LampAgentRemoteMessage.failed(
+            LampAgentRemoteFailure.approvalGone,
+            "That request is no longer waiting: it was answered elsewhere, ran out of time, or its turn ended.",
+            requestID: message.requestID, chatID: open.id
+        )
+        switch outcome {
+        case .gone:
+            send(gone, to: peer)
+        case .notAllowed:
+            send(.failed(
+                LampAgentRemoteFailure.notAllowed, "This one can only be allowed on the Mac.",
+                requestID: message.requestID, chatID: open.id
+            ), to: peer)
+        case .allowOnce, .deny:
+            guard let request = model.pendingApprovals.first(where: { $0.id == message.approvalID }),
+                  model.answer(request, with: outcome == .allowOnce ? .allow : .deny, saysWhy: false)
+            else {
+                send(gone, to: peer)
+                return
+            }
+            send(.approvalAnswered(
+                open.id, approvalID: request.id,
+                decision: outcome == .allowOnce ? LampAgentRemoteApprovalAnswer.allowOnce : LampAgentRemoteApprovalAnswer.deny,
+                requestID: message.requestID
+            ), to: peer)
         }
     }
 
@@ -703,13 +749,15 @@ final class AgentRemoteHost: ObservableObject {
     private static func state(of model: NativeAgentChatModel, askedBy: [UUID: UUID]) -> LampAgentRemoteChatState {
         state(
             messages: model.messages, arriving: model.arrivingReply, activity: model.activity,
-            isRunning: model.isRunning, failure: model.errorMessage, askedBy: askedBy
+            isRunning: model.isRunning, failure: model.errorMessage, askedBy: askedBy,
+            approvals: model.pendingApprovals, provider: model.provider.rawValue
         )
     }
 
     private static func state(
         messages: [NativeAgentChatMessage], arriving: String, activity: AgentChatActivity?,
-        isRunning: Bool, failure: String?, askedBy: [UUID: UUID]
+        isRunning: Bool, failure: String?, askedBy: [UUID: UUID],
+        approvals: [AgentToolApprovalRequest], provider: String
     ) -> LampAgentRemoteChatState {
         LampAgentRemoteHosting.state(
             // As the transcript is written: what has words, the arriving
@@ -725,7 +773,9 @@ final class AgentRemoteHost: ObservableObject {
             activity: activity,
             isRunning: isRunning,
             failure: failure,
-            askedBy: askedBy
+            askedBy: askedBy,
+            approvals: approvals,
+            provider: provider
         )
     }
 
@@ -736,7 +786,7 @@ final class AgentRemoteHost: ObservableObject {
         let model = open.model
         open.watching = Publishers.CombineLatest4(
             model.$messages, model.$isRunning, model.$activity,
-            Publishers.CombineLatest(model.$arrivingReply, model.$errorMessage)
+            Publishers.CombineLatest3(model.$arrivingReply, model.$errorMessage, model.$pendingApprovals)
         )
         .dropFirst()
         // The model changes its values one at a time — running before the
@@ -749,7 +799,7 @@ final class AgentRemoteHost: ObservableObject {
                 guard let self, let peer, let open, peer.open === open, self.isConnected(peer) else { return }
                 let next = Self.state(
                     messages: messages, arriving: rest.0, activity: activity, isRunning: isRunning, failure: rest.1,
-                    askedBy: self.askedBy
+                    askedBy: self.askedBy, approvals: rest.2, provider: model.provider.rawValue
                 )
                 if LampAgentRemoteChatUpdates.needsSnapshot(from: open.told, to: next),
                    let summary = self.summary(of: open.chat)
