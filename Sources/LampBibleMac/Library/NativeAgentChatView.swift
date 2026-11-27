@@ -1315,20 +1315,28 @@ private struct AgentWaitingBubble: View {
     }
 
     var body: some View {
-        // Each dot its own size, with a gap: left to fill a shared width,
-        // the three ran together into one bar.
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(Color.primary)
-                    .opacity(reduceMotion || lit == index ? 1 : 0.5)
-                    .frame(width: 8, height: 8)
+        // A line of a message's text, unseen, with the dots on it: the
+        // bubble is then a one-line message's, its padding a message's
+        // (PersonMessageView). It had far more room round the dots, then
+        // far less (owner, 2026-11-26).
+        Text(" ")
+            .font(.system(size: 14))
+            .hidden()
+            .frame(width: 34)
+            .overlay {
+                // Each dot its own size, with a gap: left to fill a shared
+                // width, the three ran together into one bar.
+                HStack(spacing: 5) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(Color.primary)
+                            .opacity(reduceMotion || lit == index ? 1 : 0.5)
+                            .frame(width: 8, height: 8)
+                    }
+                }
             }
-        }
-        // Half the room it had around the dots, which made the bubble
-        // twice the size of what it held (owner, 2026-11-26).
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
         .background(shape.fill(LampChatSurface.agentBubble))
         .overlay(shape.stroke(LampChatSurface.agentBubbleBorder, lineWidth: 1))
         .onReceive(tick) { _ in
