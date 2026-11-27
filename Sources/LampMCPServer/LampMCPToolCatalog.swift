@@ -393,15 +393,21 @@ public enum LampMCPToolCatalog {
             description: """
             Turn an animation into a looping video for a slide. Write an HTML \
             page in the workspace's Assets folder that draws a scene, with \
-            three.js imported as "three" (Lamp supplies it; nothing loads from \
-            the network), and sets window.lamp = { duration, render(t) }: \
-            render draws the frame at t seconds and may be async; render(duration) \
-            must look like render(0) so the loop closes. Lamp draws every frame \
+            three.js 0.187 imported as "three", its addons as \
+            "three/addons/..." and its WebGPU renderer as "three/webgpu" (Lamp \
+            supplies them; nothing loads from the network, and an addon Lamp \
+            lacks stops the render: the deck format lists them), and sets \
+            window.lamp = { duration, render(t) }: render draws the frame at t \
+            seconds and may be async; it must depend on t alone, since Lamp may \
+            draw a frame twice, and render(duration) must look like render(0) \
+            so the loop closes. Lamp draws every frame \
             itself and writes a video and its first frame beside the page, \
             named after the page and what was drawn (Assets/name-1a2b3c4d.mp4 \
             and .jpg), for an image block's video and assetPath. The names \
             change whenever the animation does, so write them into the deck \
-            again after every render. Returns frames from across the loop to look at. Needs a \
+            again after every render. Returns frames from across the loop to look at, \
+            and drewWith: webgpu or webgl, since a WebGPU page draws with WebGL \
+            on a Mac without WebGPU. Needs a \
             session opened on a writing's workspace.
             """,
             inputSchema: .object([
