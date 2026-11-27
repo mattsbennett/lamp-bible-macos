@@ -468,11 +468,16 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             let writeLock = NSLock()
             let stateLock = NSLock()
             func send(_ message: [String: Any]) {
-                var message = message
-                message["jsonrpc"] = "2.0"
-                guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+                sendDecided { message }
+            }
+            /// Writes what `make` decides, deciding it only once the write is
+            /// Lamp's to make, so a Stop pressed while it waited is seen.
+            func sendDecided(_ make: () -> [String: Any]) {
                 writeLock.lock()
                 defer { writeLock.unlock() }
+                var message = make()
+                message["jsonrpc"] = "2.0"
+                guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
                 try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
             }
 
@@ -507,10 +512,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 // again as it is written, so one pressed just before Stop is
                 // cancelled after all.
                 replies.async {
-                    stateLock.lock()
-                    let late = stopped
-                    stateLock.unlock()
-                    send(["id": entry.id, "result": ["outcome": late || self.isCancelled ? ["outcome": "cancelled"] : outcome]])
+                    sendDecided {
+                        stateLock.lock()
+                        let late = stopped
+                        stateLock.unlock()
+                        return ["id": entry.id, "result": ["outcome": late || self.isCancelled ? ["outcome": "cancelled"] : outcome]]
+                    }
                 }
                 stateLock.unlock()
                 return true
@@ -810,11 +817,15 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             let writeLock = NSLock()
             let stateLock = NSLock()
             func send(_ message: [String: Any]) {
-                // Slashes as written, so a method reads as itself in a log.
-                guard let data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes])
-                else { return }
+                sendDecided { message }
+            }
+            /// As for Antigravity: decided once the write is Lamp's to make.
+            func sendDecided(_ make: () -> [String: Any]) {
                 writeLock.lock()
                 defer { writeLock.unlock() }
+                // Slashes as written, so a method reads as itself in a log.
+                guard let data = try? JSONSerialization.data(withJSONObject: make(), options: [.withoutEscapingSlashes])
+                else { return }
                 try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
             }
 
@@ -846,10 +857,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 // Queued under the lock, written off the caller's thread, and
                 // judged again as it is written, as for Antigravity.
                 replies.async {
-                    stateLock.lock()
-                    let late = stopped
-                    stateLock.unlock()
-                    send(["id": entry.id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : answer)])
+                    sendDecided {
+                        stateLock.lock()
+                        let late = stopped
+                        stateLock.unlock()
+                        return ["id": entry.id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : answer)]
+                    }
                 }
                 stateLock.unlock()
                 return true
@@ -1107,11 +1120,16 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// under a running app, and this is a process launch per chat message
     /// otherwise.
     func majorVersion(ofExecutableNamed name: String) -> Int? {
+        guard let url = try? resolveExecutable(named: name) else { return nil }
+        // Kept by the program itself, as `helpLists` keeps its answers: one
+        // updated while Lamp is open is asked again.
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        let identity = "\(url.path) \(info.st_ino) \(info.st_mtimespec.tv_sec) \(info.st_size)"
         Self.versionLock.lock()
-        let known = Self.versionsByName[name]
+        let known = Self.versionsByName[identity]
         Self.versionLock.unlock()
         if let known { return known }
-        guard let url = try? resolveExecutable(named: name) else { return nil }
         let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = url
@@ -1127,7 +1145,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             fromVersionOutput: String(decoding: data, as: UTF8.self)
         )
         Self.versionLock.lock()
-        Self.versionsByName[name] = major
+        Self.versionsByName[identity] = major
         Self.versionLock.unlock()
         return major
     }
@@ -2962,7 +2980,11 @@ final class NativeAgentChatModel: ObservableObject {
             // folder, and the hook's marks in it, go.
             if let channel {
                 for grant in grantsAwaitingTheHook where channel.waitUntilTaken(grant.id, answer: .alwaysAllow(grant.rule), seconds: 0) {
-                    try? AgentToolAllowRules.add(grant.rule.rules, for: workspace)
+                    do {
+                        try AgentToolAllowRules.add(grant.rule.rules, for: workspace)
+                    } catch {
+                        errorMessage = "Lamp allowed this, but could not keep the rule for next time: \(error.localizedDescription)"
+                    }
                 }
             }
             grantsAwaitingTheHook = []

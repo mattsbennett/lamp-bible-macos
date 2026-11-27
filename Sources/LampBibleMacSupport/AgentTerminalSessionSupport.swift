@@ -1386,15 +1386,21 @@ public enum AgentTerminalLaunchCheck {
         return WorkspaceSkillStore.isPlainSkill(directory)
     }
 
-    /// How many entries a folder holds, counting no further than past `limit`.
+    /// How many entries a folder holds, counting no further than past
+    /// `limit`; past it too where any part of it can't be listed, so a skill
+    /// that can't be walked whole is scanned like anything else.
     private static func entryCount(_ directory: URL, atMost limit: Int) -> Int {
-        guard let walk = FileManager.default.enumerator(atPath: directory.path) else { return limit + 1 }
+        var failed = false
+        guard let walk = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: nil, options: [],
+            errorHandler: { _, _ in failed = true; return true }
+        ) else { return limit + 1 }
         var count = 0
         while walk.nextObject() != nil {
             count += 1
             if count > limit { break }
         }
-        return count
+        return failed ? limit + 1 : count
     }
 
     /// Whether a folder holds anything the digest doesn't account for: a
