@@ -2578,6 +2578,26 @@ final class NativeAgentChatModel: ObservableObject {
         inConversation expected: UUID? = nil,
         notifiesWhenDone: Bool = true
     ) async -> Bool {
+        await send(
+            rawPrompt, preparing: { contextualPrompt }, messageID: messageID,
+            inConversation: expected, notifiesWhenDone: notifiesWhenDone
+        )
+    }
+
+    /// Sends a message whose prompt is still to be made: the message and the
+    /// loader are shown at once, and `preparing` runs after, while they show.
+    /// A writing's preparation can wait seconds on its workspace (the draft
+    /// saved, its context and settings written, behind a sync pass), and the
+    /// pane sat unchanged through it, as if Send had not been pressed (owner,
+    /// 2026-11-26). Stop works through the wait; a preparation that fails is
+    /// the turn's failure, said under the message.
+    func send(
+        _ rawPrompt: String,
+        preparing: @escaping () async throws -> String,
+        messageID: UUID? = nil,
+        inConversation expected: UUID? = nil,
+        notifiesWhenDone: Bool = true
+    ) async -> Bool {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // Nothing new starts once Lamp is quitting: a message queued behind
         // the reply being stopped would otherwise go the moment it stopped,
@@ -2652,6 +2672,21 @@ final class NativeAgentChatModel: ObservableObject {
 
         streamTask?.cancel()
         streamTask = showReplyAsItArrives()
+
+        let contextualPrompt: String
+        do {
+            contextualPrompt = try await preparing()
+        } catch {
+            finish(RunOutcome(
+                result: AgentCLIProcessResult(
+                    exitCode: -1, output: "",
+                    launchError: "Lamp couldn’t prepare this message: \(error.localizedDescription)"
+                ),
+                proposedSessionID: nil,
+                resumedSessionID: sessionID
+            ))
+            return true
+        }
 
         let firstPrompt = sessionID == nil
             ? AgentChatContinuation.prompt(continuing: earlier, with: contextualPrompt)
@@ -3794,15 +3829,19 @@ struct NativeAgentChatView: View {
         let conversation = model.conversationID
         // Started now, and on the main actor until it first waits, so the
         // reader's place is read at Send and not after a navigation.
-        Task { [workspaceFolder] in
+        Task { [workspaceFolder, preparePrompt] in
             defer { isPreparing = false }
             defer { KeptAgentChats.endTurn(in: workspaceFolder) }
             do {
-                let contextualPrompt = try await preparePrompt(prompt)
                 submissionError = nil
-                isPreparing = false
+                // The message and the loader show at once; the prompt is
+                // made while they do (`send(_:preparing:)`).
                 let taken = await model.send(
-                    prompt, contextualPrompt: contextualPrompt,
+                    prompt, preparing: {
+                        let made = try await preparePrompt(prompt)
+                        isPreparing = false
+                        return made
+                    },
                     messageID: queued, inConversation: conversation
                 )
                 // Taken means it is in the transcript, which is where the
