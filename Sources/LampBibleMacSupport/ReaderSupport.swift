@@ -1008,8 +1008,17 @@ public enum LampDeepLink: Equatable, Sendable {
             self = .reader(reference: reference, translationID: translationID)
         case .reader:
             self = .section(.reader)
-        case .book(let moduleID, let sectionID):
+        case .book(let moduleID, let sectionID, _):
+            // The anchor waits for a reader that can scroll to one.
             self = .book(moduleID: moduleID, sectionID: sectionID)
+        case .commentaryPassage(_, let reference, _, _, _, _):
+            // The passage the note is on, in the reader, until a note can
+            // be opened by itself. A note on a psalm's title is on verse 0,
+            // which a translation keeps as a heading over verse 1.
+            self = .reader(reference: reference % 1_000 == 0 ? reference + 1 : reference, translationID: nil)
+        case .commentaryFrontMatter:
+            // Nothing opens a commentary's front matter yet.
+            return nil
         case .writing(let id):
             self = .writing(id: id)
         case .section(let section):

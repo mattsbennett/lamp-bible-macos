@@ -965,6 +965,21 @@ struct ReaderSupportTests {
         #expect(LampDeepLink(url: URL(fileURLWithPath: "/tmp/notes.json"))
             == .dataFile(URL(fileURLWithPath: "/tmp/notes.json")))
         #expect(LampDeepLink(url: try #require(URL(string: "https://example.com"))) == nil)
+        // A book's block: its section, the anchor waiting for a reader that
+        // scrolls to one.
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://books?module=TEST_BOOK&section=chapter-one&anchor=fig-2")))
+            == .book(moduleID: "TEST_BOOK", sectionID: "chapter-one"))
+        // A commentary's note opens its passage in the reader, until a note
+        // can be opened by itself; its front matter opens nothing yet.
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://commentary?module=ESVSB&sv=43003016&ev=43003018&unit=jn-3-16")))
+            == .reader(reference: 43_003_016, translationID: nil))
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://commentary?module=ESVSB&book=43&section=intro-author"))) == nil)
+        // A note on a psalm's title, verse 0, opens the psalm's first verse,
+        // under which the title stands.
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://commentary?module=ESVSB&sv=19003000")))
+            == .reader(reference: 19_003_001, translationID: nil))
+        // A malformed one is not opened.
+        #expect(LampDeepLink(url: try #require(URL(string: "lampbible://commentary?sv=43003016"))) == nil)
     }
 
     @Test func parsesDevotionalMarkdownMediaBlocks() throws {
