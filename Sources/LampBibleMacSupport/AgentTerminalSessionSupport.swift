@@ -1283,7 +1283,8 @@ public enum AgentTerminalLaunchCheck {
             folder = folder.deletingLastPathComponent()
         }
         var info = stat()
-        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+        // No larger than the scan parses; one larger is the scan's to report.
+        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= settingsBytes,
               let data = try? Data(contentsOf: file),
               let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return [] }

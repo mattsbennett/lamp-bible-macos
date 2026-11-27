@@ -3088,12 +3088,18 @@ struct DevotionalAgentWorkspaceView: View {
             errorMessage = "A chat is replying in this writing. Open the Terminal when it has finished, so what it reads is what Lamp checked."
             return
         }
+        // And none begins until the Terminal's CLI has read its settings:
+        // held from here, released if it doesn't open, and by time if it
+        // does, the CLI reading them within moments of starting.
+        KeptAgentChats.holdForTerminal(in: workspaceURL)
+        var opened = false
+        defer { if !opened { KeptAgentChats.releaseTerminalHold(in: workspaceURL) } }
         // A Claude session still running, being replaced by this launch,
         // saved its rules as it ran; they are its own, kept before the new
         // launch is checked, since its exit is no longer heard once the
         // launch changes. Not one that has already exited: its rules were
         // kept as it did, and what changed since is someone else's.
-        if activeProvider == .claude, terminalExitCode == nil {
+        if activeProvider == .claude, terminalExitCode == nil, !terminalCapture.processExited {
             await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL)
         }
         // The writing's context written first, so the check is the last
@@ -3134,6 +3140,7 @@ struct DevotionalAgentWorkspaceView: View {
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
+        opened = true
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —
@@ -3230,6 +3237,11 @@ struct DevotionalAgentWorkspaceView: View {
         // ending means the session has ended.
         guard launch == terminalID, activeProvider != nil else { return }
         if let workspaceURL { collectTerminalTurns(in: workspaceURL) }
+        // A Claude session ended by closing its pane saved its rules as it
+        // ran; its exit is not heard once the pane is gone.
+        if activeProvider == .claude, !terminalCapture.processExited, let workspaceURL {
+            Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
+        }
         activeProvider = nil
         terminalExitCode = nil
         terminalCapture = TerminalCaptureState()

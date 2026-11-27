@@ -1116,12 +1116,17 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     /// Whether a CLI's help, asked with `asking`, lists `flag`; asked once
     /// per executable and kept, nil where the help could not be read.
     func helpLists(_ flag: String, executableNamed name: String, asking: [String] = ["--help"]) -> Bool? {
-        let key = "\(name) \(asking.joined(separator: " ")) \(flag)"
+        guard let url = try? resolveExecutable(named: name) else { return nil }
+        // Kept by the program itself, as it is now: one updated or replaced
+        // while Lamp is open is asked again.
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        let identity = "\(url.path) \(info.st_ino) \(info.st_mtimespec.tv_sec) \(info.st_size)"
+        let key = "\(identity) \(asking.joined(separator: " ")) \(flag)"
         Self.versionLock.lock()
         let known = Self.flagsByKey[key]
         Self.versionLock.unlock()
         if let known { return known }
-        guard let url = try? resolveExecutable(named: name) else { return nil }
         let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = url
@@ -2223,6 +2228,27 @@ enum KeptAgentChats {
         turnsInHand[key] = count > 1 ? count - 1 : nil
     }
 
+    /// Writings whose Terminal is starting, until when: no chat begins a
+    /// turn there meanwhile, so the CLI reads the settings Lamp checked
+    /// (`decisions/0032`).
+    private static var heldForTerminal: [String: Date] = [:]
+
+    @MainActor
+    static func holdForTerminal(in workspace: URL, seconds: Double = 15) {
+        heldForTerminal[workspace.standardizedFileURL.path] = Date().addingTimeInterval(seconds)
+    }
+
+    @MainActor
+    static func releaseTerminalHold(in workspace: URL) {
+        heldForTerminal[workspace.standardizedFileURL.path] = nil
+    }
+
+    @MainActor
+    static func isHeldForTerminal(in workspace: URL) -> Bool {
+        guard let until = heldForTerminal[workspace.standardizedFileURL.path] else { return false }
+        return until > Date()
+    }
+
     /// A turn is being prepared or a reply is arriving on this workspace.
     @MainActor
     static func isBusy(in workspace: URL) -> Bool {
@@ -2663,7 +2689,10 @@ final class NativeAgentChatModel: ObservableObject {
         // Nothing new starts once Lamp is quitting: a message queued behind
         // the reply being stopped would otherwise go the moment it stopped,
         // as a run nobody is left to stop. Refused here, it stays queued.
-        guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting else { return false }
+        // Nor while the writing's Terminal is starting, from any pane or the
+        // phone: its agent could change what the Terminal is about to read.
+        guard !prompt.isEmpty, !isRunning, !KeptAgentChats.isQuitting,
+              !KeptAgentChats.isHeldForTerminal(in: workspace) else { return false }
         // Turns from Terminal, another pane or another Mac may have arrived
         // while this prompt was being prepared, so the conversation is read
         // from disk **before** it is judged against the one the caller
@@ -2796,6 +2825,9 @@ final class NativeAgentChatModel: ObservableObject {
 
     func clearConversation() {
         guard !isRunning else { return }
+        // A message still being prepared belongs to the conversation going.
+        placeholderToken = nil
+        sendingPlaceholder = []
         // A new identity, so the clear reaches other Macs rather than being
         // undone by their copies of the conversation it replaced.
         conversationID = UUID()
@@ -3890,6 +3922,12 @@ struct NativeAgentChatView: View {
         // A message the person sends is their word to carry on, so whatever
         // was held back after a failure goes after it.
         if queued == nil { model.releaseQueue() }
+        if KeptAgentChats.isHeldForTerminal(in: workspaceFolder) {
+            if let queued { model.releaseQueued(queued) } else {
+                submissionError = "The Terminal is starting in this writing. Send this again in a moment."
+            }
+            return false
+        }
         guard !isPreparing else {
             if let queued { model.releaseQueued(queued) }
             return false
@@ -4144,7 +4182,7 @@ struct NativeAgentChatView: View {
                     }
                 }
 
-                if connectionState != .connected || model.messages.isEmpty {
+                if connectionState != .connected || (model.messages.isEmpty && model.sendingPlaceholder.isEmpty) {
                     emptyState
                 }
             }
@@ -4430,7 +4468,7 @@ struct NativeAgentChatView: View {
             }
             .padding(24)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        } else if model.messages.isEmpty, !mode.isReadOnly {
+        } else if model.messages.isEmpty, model.sendingPlaceholder.isEmpty, !mode.isReadOnly {
             writingStarters
         } else if model.messages.isEmpty {
             VStack(spacing: 10) {

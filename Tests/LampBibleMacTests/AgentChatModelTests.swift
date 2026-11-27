@@ -79,6 +79,38 @@ struct AgentChatModelTests {
         #expect(model.sendingPlaceholder.isEmpty)
     }
 
+    /// While the writing's Terminal starts, no chat begins a turn there,
+    /// from any pane or the phone (`decisions/0032`).
+    @Test func noTurnBeginsWhileTheTerminalStarts() async throws {
+        let workspace = try workspace()
+        defer {
+            KeptAgentChats.releaseTerminalHold(in: workspace)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+        model.load()
+        KeptAgentChats.holdForTerminal(in: workspace)
+        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
+        #expect(await model.send("Hello", contextualPrompt: "Hello") == false)
+        #expect(model.messages.isEmpty && !model.isRunning)
+        KeptAgentChats.releaseTerminalHold(in: workspace)
+        #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
+        // And the hold ends by itself.
+        KeptAgentChats.holdForTerminal(in: workspace, seconds: -1)
+        #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
+    }
+
+    /// New Chat takes a message still being prepared with the conversation.
+    @Test func newChatTakesTheMessageBeingPrepared() throws {
+        let workspace = try workspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
+        model.load()
+        _ = model.showSending("Hello")
+        model.clearConversation()
+        #expect(model.sendingPlaceholder.isEmpty)
+    }
+
     /// The save that follows an undo used to merge the whole conversation
     /// straight back in, with the provider session it was undone from.
     @Test func anUndoneTurnIsGoneFromTheFileItWasUndoneIn() throws {
