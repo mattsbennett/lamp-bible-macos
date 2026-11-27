@@ -238,4 +238,25 @@ struct AgentTerminalLaunchCheckTests {
         #expect(mkfifo(root.appendingPathComponent(".claude/settings.json").path, 0o644) == 0)
         #expect(findings(root, server, bundle).contains { $0.path == ".claude/settings.json" && $0.isIncomplete })
     }
+
+    /// A restriction taken away since the Terminal last opened is asked
+    /// about, since it can widen an approved grant; one added passes.
+    @Test func aRestrictionTakenAwayIsAskedAbout() throws {
+        let (root, server, bundle) = try workspace()
+        let state = FileManager.default.temporaryDirectory.appendingPathComponent("checks-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: state) }
+        try write(#"{"permissions":{"allow":["Bash(git *)"],"deny":["Bash(git push *)"]}}"#, ".claude/settings.local.json", in: root)
+        AgentTerminalLaunchCheck.recordRestrictions(AgentTerminalLaunchCheck.restrictions(in: root), for: root, in: state)
+        func scan() -> [AgentTerminalLaunchCheck.Finding] {
+            AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle,
+                                              approvedRestrictions: AgentTerminalLaunchCheck.approvedRestrictions(for: root, in: state))
+        }
+        #expect(!scan().contains { $0.detail.contains("restriction") })
+        // Another added: still nothing about restrictions.
+        try write(#"{"permissions":{"allow":["Bash(git *)"],"deny":["Bash(git push *)","Bash(rm *)"]}}"#, ".claude/settings.local.json", in: root)
+        #expect(!scan().contains { $0.detail.contains("restriction") })
+        // The one in place taken away: asked.
+        try write(#"{"permissions":{"allow":["Bash(git *)"]}}"#, ".claude/settings.local.json", in: root)
+        #expect(scan().contains { $0.detail == "a restriction taken away, which can widen what Claude may do: deny Bash(git push *)" })
+    }
 }

@@ -1156,8 +1156,13 @@ public enum AgentTerminalLaunchCheck {
     static let largestCount = 5_000
     static let shownBytes = 4_000
 
+    /// `approvedRestrictions`: the `ask` and `deny` rules in Claude's local
+    /// settings when the person last answered, so one taken away since,
+    /// which can widen what an approved grant allows, is asked about; one
+    /// added only restricts, and passes. Never used to trust anything.
     public static func findings(
-        in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?
+        in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?,
+        approvedRestrictions: [String] = []
     ) -> [Finding] {
         var found: [Finding] = []
         var counted = 0
@@ -1214,6 +1219,13 @@ public enum AgentTerminalLaunchCheck {
                    let settings = claudeLocalSettings(head) {
                     found += settings.map {
                         Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown, isPermission: $0.canonical.hasPrefix("grant\u{0}"))
+                    }
+                    let now = Set(restrictions(inSettingsData: head))
+                    for rule in approvedRestrictions where !now.contains(rule) {
+                        found.append(Finding(
+                            path: relative, fingerprint: digest("unrestricted\u{0}\(rule)"),
+                            detail: "a restriction taken away, which can widen what Claude may do: \(rule)", isPermission: true
+                        ))
                     }
                     return
                 }
@@ -1288,6 +1300,25 @@ public enum AgentTerminalLaunchCheck {
         return found
     }
 
+    /// The `ask` and `deny` rules in Claude's local settings, as `deny X`.
+    public static func restrictions(inSettingsData data: Data) -> [String] {
+        guard let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let permissions = settings["permissions"] as? [String: Any]
+        else { return [] }
+        return ["ask", "deny"].flatMap { kind in ((permissions[kind] as? [Any]) ?? []).map { "\(kind) \(shown($0))" } }
+    }
+
+    /// The restrictions in a workspace's Claude local settings now, read as
+    /// the scan reads them; none where it can't be read plainly.
+    public static func restrictions(in workspace: URL) -> [String] {
+        let file = workspace.appendingPathComponent(".claude/settings.local.json")
+        var info = stat()
+        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= settingsBytes,
+              let data = try? Data(contentsOf: file)
+        else { return [] }
+        return restrictions(inSettingsData: data)
+    }
+
     /// How a saved permission reads, which the sheet words as a
     /// confirmation rather than a warning when every finding is one.
     public static let permissionPrefix = "a permission saved for Claude: "
@@ -1358,6 +1389,26 @@ public enum AgentTerminalLaunchCheck {
     private struct Record: Codable {
         /// Findings the person said to open with.
         var approved: [String] = []
+        /// Claude's restrictions when they last answered, or opened with
+        /// nothing to ask; see `findings(approvedRestrictions:)`.
+        var restrictions: [String]?
+    }
+
+    /// The restrictions the person last opened the Terminal with.
+    public static func approvedRestrictions(for workspace: URL, in file: URL = stateFile) -> [String] {
+        storeLock.lock()
+        defer { storeLock.unlock() }
+        return load(file)[key(workspace)]?.restrictions ?? []
+    }
+
+    /// Keeps the restrictions now in place as the ones opened with, as the
+    /// Terminal opens: added ones pass, so the reference is what is there.
+    public static func recordRestrictions(_ restrictions: [String], for workspace: URL, in file: URL = stateFile) {
+        storeLock.lock()
+        defer { storeLock.unlock() }
+        var records = load(file)
+        records[key(workspace), default: Record()].restrictions = restrictions.sorted()
+        try? save(records, to: file)
     }
 
     private static func key(_ workspace: URL) -> String { workspace.standardizedFileURL.path }

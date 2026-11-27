@@ -803,7 +803,8 @@ enum DevotionalAgentWorkspaceStore {
             try? installBundledSkillsIfNeeded(in: workspace)
         }
         return AgentTerminalLaunchCheck.findings(
-            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL
+            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
+            approvedRestrictions: AgentTerminalLaunchCheck.approvedRestrictions(for: workspace)
         )
     }
 
@@ -3127,6 +3128,9 @@ struct DevotionalAgentWorkspaceView: View {
         activeProvider = provider
         terminalExitCode = nil
         terminalID = UUID()
+        // Opened with what was checked: its restrictions are the reference
+        // for the next check.
+        AgentTerminalLaunchCheck.recordRestrictions(AgentTerminalLaunchCheck.restrictions(in: workspaceURL), for: workspaceURL)
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —

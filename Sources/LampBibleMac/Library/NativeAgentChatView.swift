@@ -499,13 +499,19 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     return false
                 }
                 let entry = waiting.remove(at: index)
-                let outcome: [String: Any] = stopped || isCancelled
-                    ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: answer, permission: entry.params)
+                let outcome: [String: Any] = AgentACPRun.outcome(for: answer, permission: entry.params)
                 publish()
                 // Queued under the same lock that took it off the card, so a
                 // Stop's cancel can't be queued ahead of it; written off the
-                // caller's thread, the card's being the main one.
-                replies.async { send(["id": entry.id, "result": ["outcome": outcome]]) }
+                // caller's thread, the card's being the main one; and judged
+                // again as it is written, so one pressed just before Stop is
+                // cancelled after all.
+                replies.async {
+                    stateLock.lock()
+                    let late = stopped
+                    stateLock.unlock()
+                    send(["id": entry.id, "result": ["outcome": late || self.isCancelled ? ["outcome": "cancelled"] : outcome]])
+                }
                 stateLock.unlock()
                 return true
             }
@@ -836,11 +842,15 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                     return false
                 }
                 let entry = waiting.remove(at: index)
-                let given = stopped || isCancelled ? .deny : answer
                 publish()
-                // Queued under the lock, and written off the caller's thread,
-                // as for Antigravity.
-                replies.async { send(["id": entry.id, "result": AgentCodexRun.decision(given)]) }
+                // Queued under the lock, written off the caller's thread, and
+                // judged again as it is written, as for Antigravity.
+                replies.async {
+                    stateLock.lock()
+                    let late = stopped
+                    stateLock.unlock()
+                    send(["id": entry.id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : answer)])
+                }
                 stateLock.unlock()
                 return true
             }
@@ -4278,6 +4288,7 @@ struct NativeAgentChatView: View {
         }
         .reportsVisibility(to: visibility)
         .onAppear { loadSavedPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: AgentToolAllowRules.changed)) { _ in loadSavedPermissions() }
         .onChange(of: model.pendingApprovals.count) { _, _ in loadSavedPermissions() }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)

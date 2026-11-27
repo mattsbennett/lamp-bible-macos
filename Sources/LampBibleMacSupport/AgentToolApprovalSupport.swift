@@ -367,6 +367,9 @@ public enum AgentToolAllowRules {
         load(file)[key(workspace)] ?? []
     }
 
+    /// Posted as rules are kept or taken back, so a list of them follows.
+    public static let changed = Notification.Name("LampAllowRulesChanged")
+
     /// Takes one back, as the person asked.
     public static func remove(_ rule: String, for workspace: URL, in file: URL = defaultFile) throws {
         var stored = load(file)
@@ -374,6 +377,7 @@ public enum AgentToolAllowRules {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(stored).write(to: file, options: .atomic)
+        NotificationCenter.default.post(name: changed, object: key(workspace))
     }
 
     public static func add(_ rules: [String], for workspace: URL, in file: URL = defaultFile) throws {
@@ -385,6 +389,7 @@ public enum AgentToolAllowRules {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(stored).write(to: file, options: .atomic)
+        NotificationCenter.default.post(name: changed, object: key(workspace))
     }
 }
 
