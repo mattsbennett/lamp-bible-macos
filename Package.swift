@@ -30,7 +30,7 @@ let package = Package(
                 .product(name: "LampModuleKit", package: "lamp-bible-core"),
                 .product(name: "LampPresentationUI", package: "lamp-bible-core"),
             ],
-            resources: [.copy("Resources/AgentSkills")]
+            resources: [.copy("Resources/AgentSkills"), .copy("Resources/AnimationRuntime")]
         ),
         .executableTarget(
             name: "LampBibleMac",

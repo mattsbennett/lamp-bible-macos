@@ -435,10 +435,7 @@ public actor LampMCPToolHandler {
                 "page", "an .html page inside the workspace, such as Assets/scene.html"
             )
         }
-        guard let three = LampBundledSkills.catalogURL?
-            .appendingPathComponent("build-lamp-deck/scene/three.module.min.js"),
-            FileManager.default.fileExists(atPath: three.path)
-        else { throw LampMCPToolError.noSkills }
+        guard let three = LampAnimationRuntime.threeFolderURL else { throw LampMCPToolError.noAnimationRuntime }
         let base = pageURL.deletingPathExtension()
         let rendered = try await LampAnimationRenderer.render(
             page: pageURL,
@@ -1233,6 +1230,8 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
     case noWorkspace
     case animationNeedsWorkspace
     case noSkills
+    /// Lamp's copy of three.js is missing from this install.
+    case noAnimationRuntime
     case accessDisabled
     case personalContentNotAllowed
     case noLibraryRoot
@@ -1270,6 +1269,12 @@ public enum LampMCPToolError: Error, LocalizedError, Equatable, Sendable {
             No skills are installed for this session: Lamp started it without \
             a folder of skills, so there is nothing for read_skill to read. \
             Answer without them, and say so.
+            """
+        case .noAnimationRuntime:
+            """
+            Lamp's copy of three.js is missing from this install, so no \
+            animation can be drawn. Say so, and that reinstalling Lamp brings \
+            it back.
             """
         case .accessDisabled:
             """

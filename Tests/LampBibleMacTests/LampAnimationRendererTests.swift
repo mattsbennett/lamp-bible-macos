@@ -11,7 +11,7 @@ import Testing
 struct LampAnimationRendererTests {
     private let three = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Sources/LampBibleMacSupport/Resources/AgentSkills/build-lamp-deck/scene/three.module.min.js")
+        .appendingPathComponent("Sources/LampBibleMacSupport/Resources/AnimationRuntime/three")
 
     private func folder() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

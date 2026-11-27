@@ -657,8 +657,9 @@ of yours runs while the deck is presented: the room sees a video, which goes
 on an image block like any other.
 
 Write the page in `Assets`, beside the deck, in UTF-8. It imports three.js as `three`
-(Lamp supplies version 0.170, the core library only; nothing loads from the
-network), may read other files in its own folder, and sets `window.lamp`:
+and its addons as `three/addons/…` (Lamp supplies version 0.187; nothing loads
+from the network), may read other files in its own folder, and sets
+`window.lamp`:
 
 ```html
 <!doctype html><html><head></head><body style="margin:0">
@@ -694,6 +695,18 @@ the still and `video` the video, and an `altText` that says what moves. The
 names change whenever the animation does, which is how Lamp knows to bring in
 the new video: after every render, write the names it returned into the deck.
 
+- **Addons Lamp has**, imported as `three/addons/<folder>/<File>.js`, as
+  three's own examples do: all of `postprocessing` (bloom through
+  `EffectComposer` and `UnrealBloomPass`, depth of field, film grain),
+  `shaders`, `geometries`, `curves`, `math`, `objects` (sky, water,
+  reflectors), `environments` (`RoomEnvironment`), `lines`, `lights`,
+  `helpers`, `csm`, `textures` and `capabilities`; most of `utils` and
+  `modifiers`; `GPUComputationRenderer`, `CSS2DRenderer` and `CSS3DRenderer`;
+  and the GLTF, OBJ with MTL, STL, PLY, SVG, font, HDR/RGBE and LUT loaders,
+  reading files from the page's folder. Not there: controls (nothing is
+  interactive), WebXR, exporters, physics, and anything needing a decoder
+  from `libs/` — Draco- or KTX2-compressed models and EXR images. Save a model
+  as plain glTF instead. An addon Lamp lacks stops the render with its name.
 - **Everything the page loads must be there.** A file it asks for that is
   missing, outside its folder, or over 64 MB, and any error it throws, stops
   the render with the reason, rather than making a video of a broken scene.

@@ -115,11 +115,25 @@ public enum LampAnimationRenderer {
     private static var rendering: Set<String> = []
     /// The address the page and its files are served from.
     nonisolated static let scheme = "lamp-scene"
+    /// Where a page written before three.js's addons came finds three: one
+    /// line re-exporting the module build, so it is the same three.
     nonisolated static let threePath = "/lamp/three.module.min.js"
+    /// Where Lamp's three.js and its addons are served from, at npm's own
+    /// paths (`decisions/0027`).
+    nonisolated static let threeFolderPath = "/lamp/three/"
+
+    /// What `import` finds on a page: three.js's module build, and its
+    /// addons by both of the names three's docs use.
+    nonisolated static let importMap: [String: String] = [
+        "three": "\(threeFolderPath)build/three.module.js",
+        "three/addons/": "\(threeFolderPath)examples/jsm/",
+        "three/examples/jsm/": "\(threeFolderPath)examples/jsm/",
+    ]
 
     /// Renders `page` to `videoURL` and its first frame to `stillURL`.
     ///
-    /// `three` is Lamp's copy of three.js's module build.
+    /// `three` is Lamp's copy of three.js and its addons, the folder holding
+    /// its `MANIFEST.json` (`LampAnimationRuntime.threeFolderURL`).
     public static func render(
         page: URL,
         three: URL,
@@ -653,11 +667,15 @@ public enum LampAnimationRenderer {
     private final class SceneFiles: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
         let folder: URL
         let three: URL
+        /// The files of three.js Lamp ships, by npm's path: the only ones
+        /// served from it.
+        let threeFiles: Set<String>
         private(set) var pageErrors: [String] = []
 
         init(folder: URL, three: URL) {
             self.folder = folder.standardizedFileURL.resolvingSymlinksInPath()
             self.three = three
+            threeFiles = LampAnimationRuntime.manifest(in: three).map { Set($0.files.keys) } ?? []
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -684,7 +702,18 @@ public enum LampAnimationRenderer {
             let path = url.path
             let file: URL
             if path == LampAnimationRenderer.threePath {
-                file = three
+                // A page written before the addons came: the same three, by
+                // the module build's own address.
+                let line = "export * from \"\(LampAnimationRenderer.importMap["three"]!)\";\n"
+                return respond(task, url, Data(line.utf8), "text/javascript; charset=utf-8")
+            } else if path.hasPrefix(LampAnimationRenderer.threeFolderPath) {
+                let relative = String(path.dropFirst(LampAnimationRenderer.threeFolderPath.count))
+                // Only what Lamp ships, by its exact path: an addon left out
+                // fails by name.
+                guard threeFiles.contains(relative) else {
+                    return refuse(task, path, .fileDoesNotExist, "not one of the three.js files Lamp has (see the deck format's list of addons)")
+                }
+                file = three.appendingPathComponent(relative)
             } else {
                 let relative = String(path.drop { $0 == "/" })
                 let candidate = folder.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
@@ -704,10 +733,14 @@ public enum LampAnimationRenderer {
             }
             let type = Self.mimeType(file.pathExtension)
             if type.hasPrefix("text/html") {
-                // `import * as THREE from "three"` finds Lamp's copy.
-                let map = "<script type=\"importmap\">{\"imports\":{\"three\":\"\(LampAnimationRenderer.threePath)\"}}</script>"
-                data = Data(Self.withImportMap(String(decoding: data, as: UTF8.self), map).utf8)
+                // `import * as THREE from "three"` finds Lamp's copy, and
+                // `three/addons/...` its addons.
+                data = Data(Self.withImportMap(String(decoding: data, as: UTF8.self), Self.importMapTag).utf8)
             }
+            respond(task, url, data, type)
+        }
+
+        private func respond(_ task: any WKURLSchemeTask, _ url: URL, _ data: Data, _ type: String) {
             task.didReceive(HTTPURLResponse(
                 url: url, statusCode: 200, httpVersion: "HTTP/1.1",
                 headerFields: ["Content-Type": type, "Content-Length": "\(data.count)"]
@@ -715,6 +748,13 @@ public enum LampAnimationRenderer {
             task.didReceive(data)
             task.didFinish()
         }
+
+        static let importMapTag: String = {
+            let json = (try? JSONSerialization.data(
+                withJSONObject: ["imports": LampAnimationRenderer.importMap], options: [.sortedKeys, .withoutEscapingSlashes]
+            )).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+            return "<script type=\"importmap\">\(json)</script>"
+        }()
 
         func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 
@@ -793,5 +833,44 @@ private final class ResumeOnceBox<Value: Sendable>: @unchecked Sendable {
         if target == nil { early = result }
         lock.unlock()
         target?.finish(result)
+    }
+}
+
+/// Lamp's copy of three.js and the addons it ships, for the animation
+/// renderer (`decisions/0027`): at npm's paths under `AnimationRuntime/three`
+/// in the app's resources, beside the helper, or in the package's bundle,
+/// with a manifest of every file and its SHA-256.
+public enum LampAnimationRuntime {
+    public struct Manifest: Decodable, Sendable {
+        public var version: String
+        public var files: [String: String]
+    }
+
+    public static var threeFolderURL: URL? {
+        #if SWIFT_PACKAGE
+        let resources = Bundle.module.resourceURL
+        #else
+        let resources = Bundle.main.resourceURL
+        #endif
+        return threeFolderURL(resourceURL: resources, executableURL: Bundle.main.executableURL)
+    }
+
+    /// As the skill catalog is found: the app's resources, an embedded
+    /// helper's app, or a helper standing alone with it beside. Never the
+    /// working folder.
+    static func threeFolderURL(resourceURL: URL?, executableURL: URL?) -> URL? {
+        var candidates = resourceURL.map { [$0.appendingPathComponent("AnimationRuntime/three")] } ?? []
+        if let executableDirectory = executableURL?.deletingLastPathComponent() {
+            candidates += [
+                executableDirectory.deletingLastPathComponent().appendingPathComponent("Resources/AnimationRuntime/three"),
+                executableDirectory.appendingPathComponent("AnimationRuntime/three"),
+            ]
+        }
+        return candidates.first { manifest(in: $0) != nil }
+    }
+
+    public static func manifest(in folder: URL) -> Manifest? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("MANIFEST.json")) else { return nil }
+        return try? JSONDecoder().decode(Manifest.self, from: data)
     }
 }

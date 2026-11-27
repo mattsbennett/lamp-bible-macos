@@ -161,11 +161,12 @@ EDITOR_NOTICE_FILES = [
 CROSSWIRE_NOTICE = "CrossWire-KJV-v3.1-NOTICE.txt"
 VERSIFICATION_NOTICE = "SIL-libpalaso-versification-MIT.txt"
 MAP_NOTICE = "Bible-maps-OpenBible-CC-BY-4.0-Natural-Earth.txt"
-# three.js, vendored into the deck skill for animations the deck agent renders. Its licence sits
-# beside it; the hash says which build this notice is for, so a replaced copy is noticed.
-THREE_DIRECTORY = ROOT / "Sources" / "LampBibleMacSupport" / "Resources" / "AgentSkills" / "build-lamp-deck" / "scene"
-THREE_VERSION = "0.170.0"
-THREE_SHA256 = "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7"
+# three.js and the addons Lamp ships for the animation renderer (scripts/vendor_three.py). Its
+# licence sits beside it; the manifest's hash says which files this notice is for, so a folder
+# changed by anything but the vendoring script, and this pin with it, is noticed.
+THREE_DIRECTORY = ROOT / "Sources" / "LampBibleMacSupport" / "Resources" / "AnimationRuntime" / "three"
+THREE_VERSION = "0.187.0"
+THREE_MANIFEST_SHA256 = "242bebe97b27f824c492ce598abc2b1d075fa35ee8c971e51e917838e201cf3a"
 THREE_NOTICE = "three.js-MIT.txt"
 
 LICENCE_NAMES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "COPYING")
@@ -174,6 +175,27 @@ NOTICE_NAMES = ("NOTICE", "NOTICE.txt", "NOTICE.md")
 
 class NoticeError(RuntimeError):
     pass
+
+
+def check_three(directory=None, pinned=None):
+    """That the vendored three.js is the one this notice is for: its manifest as pinned, every
+    file it lists as listed, and nothing it doesn't list."""
+    THREE_DIRECTORY_ = directory or THREE_DIRECTORY
+    manifest = THREE_DIRECTORY_ / "MANIFEST.json"
+    if not manifest.exists() or hashlib.sha256(manifest.read_bytes()).hexdigest() != (pinned or THREE_MANIFEST_SHA256):
+        raise NoticeError(
+            f"{manifest} is not three.js {THREE_VERSION}'s as recorded. Vendor it again with "
+            "scripts/vendor_three.py and update THREE_VERSION and (pinned or THREE_MANIFEST_SHA256)."
+        )
+    listed = json.loads(manifest.read_text())["files"]
+    for path, digest in listed.items():
+        file = THREE_DIRECTORY_ / path
+        if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
+            raise NoticeError(f"{file} is not the file three.js {THREE_VERSION}'s manifest lists.")
+    present = {p.relative_to(THREE_DIRECTORY_).as_posix() for p in THREE_DIRECTORY_.rglob("*") if p.is_file()}
+    unlisted = present - set(listed) - {"LICENSE", "MANIFEST.json"}
+    if unlisted:
+        raise NoticeError(f"{THREE_DIRECTORY_} holds files its manifest does not list: {sorted(unlisted)[:3]}")
 
 
 def resolved_pins(path: Path) -> dict[str, dict]:
@@ -449,13 +471,8 @@ def main() -> int:
         f"  — {MAP_NOTICE}",
     ]
 
-    three = THREE_DIRECTORY / "three.module.min.js"
-    if not three.exists() or hashlib.sha256(three.read_bytes()).hexdigest() != THREE_SHA256:
-        raise NoticeError(
-            f"{three} is not three.js {THREE_VERSION} as recorded. Update THREE_VERSION and "
-            "THREE_SHA256 with the new build's, and its licence beside it."
-        )
-    shutil.copy2(THREE_DIRECTORY / "three-LICENSE.txt", OUTPUT / THREE_NOTICE)
+    check_three()
+    shutil.copy2(THREE_DIRECTORY / "LICENSE", OUTPUT / THREE_NOTICE)
 
     content_lines = []
     # Either spelling: the Strong's KJV was "KJVs" until translation ids dropped
@@ -492,7 +509,7 @@ Swift packages (in the app and its lamp-mcp helper):
 - markdown-it and related runtime packages — permissive licences; exact notices are included here
 
 Deck animations (in the deck skill, drawn by the lamp-mcp helper):
-- three.js {THREE_VERSION} — MIT — Copyright © 2010-2024 three.js authors
+- three.js {THREE_VERSION}, with the addons Lamp ships — MIT — Copyright © 2010-2026 three.js authors
   — {THREE_NOTICE}
 
 Reference data (in lamp-bible-core):
