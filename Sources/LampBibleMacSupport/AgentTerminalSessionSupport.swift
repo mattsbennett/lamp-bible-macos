@@ -224,7 +224,7 @@ public enum AgentTerminalCaptureStore {
     /// Where the files the Terminal runs are written for a workspace: the
     /// launch script, Claude's settings and the recap. In Lamp's own folder,
     /// outside every workspace, so what Lamp runs is never a file an agent in
-    /// the writing could have written (`decisions/0032`). One folder per
+    /// the writing could have written (`decisions/0038`). One folder per
     /// workspace, by a digest of its path, written afresh at each launch.
     public static func launchDirectory(for workspace: URL, in root: URL = launchRoot) -> URL {
         let path = workspace.standardizedFileURL.path
@@ -1104,7 +1104,7 @@ public enum AgentDeclaredWrites {
 }
 
 /// What a writing's own settings hold that Lamp cannot vouch for, put to the
-/// person before a Terminal opens (`decisions/0032`).
+/// person before a Terminal opens (`decisions/0038`).
 ///
 /// The Terminal is the person's own session and keeps reading the writing's
 /// settings, so nothing they use there changes. But those files are in the

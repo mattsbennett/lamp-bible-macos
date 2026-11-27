@@ -81,7 +81,7 @@ struct AgentChatModelTests {
 
     /// Every turn a writing begins is counted, from a pane or the phone, so
     /// a Terminal launch can tell one began while it checked; nothing is
-    /// refused for it (`decisions/0032`).
+    /// refused for it (`decisions/0038`).
     @Test func eachTurnBegunIsCountedAndNoneIsRefused() throws {
         let workspace = try workspace()
         defer { try? FileManager.default.removeItem(at: workspace) }

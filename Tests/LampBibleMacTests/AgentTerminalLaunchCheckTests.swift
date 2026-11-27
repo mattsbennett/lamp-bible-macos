@@ -3,7 +3,7 @@ import Testing
 @testable import LampBibleMacSupport
 
 /// Before the Terminal opens, Lamp puts to the person whatever a provider
-/// would read from the writing that Lamp can't vouch for (`decisions/0032`):
+/// would read from the writing that Lamp can't vouch for (`decisions/0038`):
 /// an allow-list, failing closed, the answer held to the bytes shown.
 struct AgentTerminalLaunchCheckTests {
     private func workspace() throws -> (URL, LampAgentMCPConfiguration, URL) {

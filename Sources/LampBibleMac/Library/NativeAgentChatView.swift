@@ -2319,7 +2319,7 @@ enum KeptAgentChats {
     /// How many turns each writing has begun, from any pane or the phone:
     /// a Terminal launch reads it before its last check and again as it
     /// hands the Terminal its command, and checks again if it moved, so no
-    /// chat's turn falls between the check and the hand-over (`decisions/0032`).
+    /// chat's turn falls between the check and the hand-over (`decisions/0038`).
     private static var turnsBegun: [String: Int] = [:]
 
     @MainActor

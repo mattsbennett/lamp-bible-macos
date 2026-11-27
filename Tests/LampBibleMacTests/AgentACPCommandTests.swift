@@ -4,7 +4,7 @@ import Testing
 @testable import LampBibleMacSupport
 
 /// An Antigravity writing chat puts a command to the person on Lamp's card
-/// (`decisions/0033`), as Codex's and Claude's do; a reader chat never asks.
+/// (`decisions/0039`), as Codex's and Claude's do; a reader chat never asks.
 struct AgentACPCommandTests {
     /// The request `agy acp` 1.5.14 sent to run a command, recorded
     /// 2026-11-26; only the session's id is changed.

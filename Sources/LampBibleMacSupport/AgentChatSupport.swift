@@ -2193,7 +2193,7 @@ public enum AgentACPRun {
     /// as `agy acp` 1.5.14 sends it; recorded), offering a once-only allow.
     /// Never its title or summary as the command, which are the agent's
     /// words about it. Nil for anything else, which `decide` answers by rule,
-    /// and always in a reader chat, which never asks (`decisions/0033`).
+    /// and always in a reader chat, which never asks (`decisions/0039`).
     public static func commandRequest(permission params: [String: Any], readOnly: Bool, id: String) -> AgentToolApprovalRequest? {
         guard !readOnly,
               let call = params["toolCall"] as? [String: Any], call["kind"] as? String == "execute",
@@ -2233,7 +2233,7 @@ public enum AgentACPRun {
     /// configuration. It does not follow links out of a guarded folder to
     /// what they lead to, and need not: making such a link takes a command,
     /// which is never allowed by rule (it is put to the person), and a writer
-    /// able to make one could have written the file itself (`decisions/0032`).
+    /// able to make one could have written the file itself (`decisions/0038`).
     static func startsAProvider(_ path: String, in workspace: URL) -> Bool {
         guard let landing = resolved(path), let root = resolved(workspace.path) else { return true }
         let inside = root == "/" ? landing : String(landing.dropFirst(root.count))
