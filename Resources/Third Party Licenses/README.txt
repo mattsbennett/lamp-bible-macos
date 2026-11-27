@@ -27,8 +27,8 @@ and adds no packages of its own):
 - tiptap-markdown 0.9.0 — MIT — Copyright (c) 2021, Antoine Guingand
 - markdown-it and related runtime packages — permissive licences; exact notices are included here
 
-Deck animations (in the deck skill, drawn by the lamp-mcp helper):
-- three.js 0.170.0 — MIT — Copyright © 2010-2024 three.js authors
+Deck animations (drawn by the lamp-mcp helper):
+- three.js 0.187.0, with the addons Lamp ships — MIT — Copyright © 2010-2026 three.js authors
   — three.js-MIT.txt
 
 Reference data (in lamp-bible-core):

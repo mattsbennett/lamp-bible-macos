@@ -508,7 +508,7 @@ Swift packages (in the app and its lamp-mcp helper):
 - tiptap-markdown 0.9.0 — MIT — Copyright (c) 2021, Antoine Guingand
 - markdown-it and related runtime packages — permissive licences; exact notices are included here
 
-Deck animations (in the deck skill, drawn by the lamp-mcp helper):
+Deck animations (drawn by the lamp-mcp helper):
 - three.js {THREE_VERSION}, with the addons Lamp ships — MIT — Copyright © 2010-2026 three.js authors
   — {THREE_NOTICE}
 

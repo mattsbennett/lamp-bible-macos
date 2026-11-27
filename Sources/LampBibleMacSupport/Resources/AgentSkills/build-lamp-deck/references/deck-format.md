@@ -706,7 +706,14 @@ the new video: after every render, write the names it returned into the deck.
   reading files from the page's folder. Not there: controls (nothing is
   interactive), WebXR, exporters, physics, and anything needing a decoder
   from `libs/` — Draco- or KTX2-compressed models and EXR images. Save a model
-  as plain glTF instead. An addon Lamp lacks stops the render with its name.
+  as plain glTF instead. Nor yet the WebGPU variants, which import
+  `three/webgpu` or `three/tsl` — `WaterMesh`, `lines/webgpu/`, the `tsl`
+  folder: use `Water.js` and `lines/Line2.js`. An addon Lamp lacks stops the
+  render with its name.
+- **A page written for 0.170** that uses something three has since taken
+  away, such as `WebGLMultipleRenderTargets` (now `WebGLRenderTarget` with a
+  `count`), stops with what is missing when it is drawn again; the video
+  made before is untouched. Update the page to 0.187.
 - **Everything the page loads must be there.** A file it asks for that is
   missing, outside its folder, or over 64 MB, and any error it throws, stops
   the render with the reason, rather than making a video of a broken scene.
