@@ -18,6 +18,51 @@ import LampBibleMacSupport
 /// Mac.
 @MainActor
 enum WritingChatTurns {
+    /// What the check before an OpenCode writing turn found
+    /// (`checkOpenCode`).
+    enum OpenCodeCheck: Equatable {
+        case clear
+        /// Settings Lamp can't vouch for, not yet approved.
+        case unapproved([AgentTerminalLaunchCheck.Finding])
+        /// It couldn't check, or couldn't put Lamp's own files back.
+        case refused(String)
+    }
+
+    /// Checks a writing's settings before an OpenCode turn, as before a
+    /// Terminal opens (`decisions/0043`). OpenCode reads its project settings
+    /// from the writing's folder and every folder above it, again at each
+    /// request, and documents no way to be told not to; another provider's
+    /// agent in the writing could have written them. Lamp's own files are
+    /// written again whole, then what OpenCode reads is scanned, and anything
+    /// Lamp can't vouch for is put to the person; the answers are the
+    /// Terminal's, held per writing by the same fingerprints.
+    ///
+    /// Clear, it is noted against the turns begun so far, and the chat's
+    /// send checks that nothing began since (`KeptAgentChats.takeOpenCodeCheck`).
+    static func checkOpenCode(in workspace: URL) async -> OpenCodeCheck {
+        let lampServer = mcpConfiguration(forWorkspace: workspace)
+        if let lampServer {
+            do {
+                try await DevotionalAgentWorkspaceStore.restoreProviderFiles(in: workspace, configuration: lampServer)
+            } catch {
+                return .refused("Lamp didn’t start OpenCode: \(error.localizedDescription)")
+            }
+        }
+        let scanned = await DevotionalAgentWorkspaceStore.terminalScan(in: workspace, lampServer: lampServer)
+        let above = await Task.detached(priority: .userInitiated) {
+            AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
+        }.value
+        let findings = scanned.findings.filter(AgentTerminalLaunchCheck.openCodeReads) + above
+        if let unchecked = findings.first(where: \.isIncomplete) {
+            return .refused("Lamp didn’t start OpenCode: it couldn’t check all of what OpenCode reads in this writing (\(unchecked.detail)).")
+        }
+        if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspace) {
+            return .unapproved(AgentTerminalLaunchCheck.unapproved(findings, for: workspace))
+        }
+        KeptAgentChats.noteOpenCodeChecked(in: workspace)
+        return .clear
+    }
+
     /// The writing's workspace, set up for an agent and holding the writing
     /// as it is now: its draft, its brief, and the helper that gives the
     /// agent Lamp's modules under `policy`.

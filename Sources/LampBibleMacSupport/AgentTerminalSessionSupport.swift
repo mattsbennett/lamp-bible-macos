@@ -1133,6 +1133,13 @@ public enum AgentTerminalLaunchCheck {
         /// alone, which the sheet words as a confirmation.
         public var isPermission = false
         public var id: String { path + "\u{0}" + fingerprint }
+
+        public init(path: String, fingerprint: String, detail: String, isPermission: Bool = false) {
+            self.path = path
+            self.fingerprint = fingerprint
+            self.detail = detail
+            self.isPermission = isPermission
+        }
         /// Something the check could not look at, which no answer can cover.
         public var isIncomplete: Bool { fingerprint == AgentTerminalLaunchCheck.incomplete }
     }
@@ -1263,6 +1270,69 @@ public enum AgentTerminalLaunchCheck {
             found.append(Finding(path: ".", fingerprint: incomplete, detail: "more than \(largestCount) entries, too many to check one by one"))
         }
         return (found, Array(Set(restrictionsRead)).sorted())
+    }
+
+    /// Whether an OpenCode run reads what a finding is about: its own files,
+    /// and the skill folders it reads beside its own (`decisions/0043`).
+    /// Claude's settings are Claude's, and asked about before a Claude
+    /// Terminal opens; anything the scan couldn't look at counts for
+    /// everyone.
+    public static func openCodeReads(_ finding: Finding) -> Bool {
+        if finding.isIncomplete { return true }
+        let path = finding.path.lowercased()
+        let first = path.split(separator: "/").first.map(String.init) ?? path
+        return ["opencode.json", "opencode.jsonc", ".opencode"].contains(first)
+            || path.hasPrefix(".claude/skills/") || path == ".claude/skills"
+            || path.hasPrefix(".agents/skills/") || path == ".agents/skills"
+    }
+
+    /// The names OpenCode reads in a folder above the one it runs in: it
+    /// looks for its project settings from there up to the root.
+    static let openCodeAncestorNames: Set<String> = ["opencode.json", "opencode.jsonc", ".opencode"]
+
+    /// What OpenCode would read above a writing's workspace, as far up as
+    /// Lamp's library (`<library>/AgentWorkspaces/Writing/<writing>`): the
+    /// folders Lamp owns. Nothing is there unless something put it there.
+    /// Above the library is the person's own, and isn't looked at.
+    public static func openCodeAncestorFindings(of workspace: URL) -> [Finding] {
+        var found: [Finding] = []
+        var folder = workspace.standardizedFileURL
+        var prefix = ""
+        for _ in 0..<3 {
+            folder = folder.deletingLastPathComponent()
+            prefix += "../"
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else {
+                found.append(Finding(path: prefix, fingerprint: incomplete, detail: "the folder \(prefix) could not be listed"))
+                continue
+            }
+            for name in names.sorted() where openCodeAncestorNames.contains(name.lowercased()) {
+                let url = folder.appendingPathComponent(name)
+                let shown = prefix + name
+                var info = stat()
+                guard lstat(url.path, &info) == 0 else {
+                    found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) could not be looked at"))
+                    continue
+                }
+                switch info.st_mode & S_IFMT {
+                case S_IFREG:
+                    guard let (fingerprint, head, size) = read(url) else {
+                        found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) could not be read"))
+                        continue
+                    }
+                    let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
+                    found.append(Finding(
+                        path: shown, fingerprint: fingerprint,
+                        detail: text ?? "\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) of content"
+                    ))
+                default:
+                    // A folder or a link above the writing: what OpenCode
+                    // would read through it isn't walked here, so no answer
+                    // covers it. It has to go.
+                    found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) is above the writing, where only Lamp's folders belong"))
+                }
+            }
+        }
+        return found
     }
 
     /// As `read(from:)`, the file opened through the workspace's own walk:

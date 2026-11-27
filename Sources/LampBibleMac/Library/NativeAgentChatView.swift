@@ -2131,6 +2131,22 @@ private struct CopiedConversationRow: View {
     }
 }
 
+/// A message held while the person is asked about what the writing's
+/// settings hold for OpenCode (`WritingChatTurns.checkOpenCode`).
+struct OpenCodeChatCheck: Identifiable {
+    let prompt: String
+    /// The queued message it was, which goes back to waiting meanwhile.
+    let queued: UUID?
+    let findings: [AgentTerminalLaunchCheck.Finding]
+    var id: String { (queued?.uuidString ?? prompt) + findings.map(\.id).joined() }
+}
+
+/// Why a message wasn't sent, said where the chat says it.
+struct AgentChatSendRefusal: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 /// Over the composer while a Claude Terminal runs in the writing: why
 /// nothing sends, and the way out (`AgentTerminalHolds`). Ending sends
 /// nothing: the Terminal's last turns come into the chat first, for the
@@ -2379,6 +2395,26 @@ enum KeptAgentChats {
     static func beginTurn(in workspace: URL) {
         turnsInHand[workspace.standardizedFileURL.path, default: 0] += 1
         noteTurnBegun(in: workspace)
+    }
+
+    /// The turns begun on each writing when its settings were last found
+    /// clear for OpenCode (`WritingChatTurns.checkOpenCode`).
+    @MainActor
+    private static var openCodeChecked: [String: Int] = [:]
+
+    @MainActor
+    static func noteOpenCodeChecked(in workspace: URL) {
+        openCodeChecked[workspace.standardizedFileURL.path] = turnsBegun(in: workspace)
+    }
+
+    /// Whether the writing was found clear for OpenCode with no turn begun
+    /// since, from any pane, the phone or a Terminal: once only, so each
+    /// turn is checked for itself.
+    @MainActor
+    static func takeOpenCodeCheck(in workspace: URL) -> Bool {
+        let key = workspace.standardizedFileURL.path
+        defer { openCodeChecked[key] = nil }
+        return openCodeChecked[key] == turnsBegun(in: workspace)
     }
 
     /// How many turns are in hand on this workspace.
@@ -2870,6 +2906,12 @@ final class NativeAgentChatModel: ObservableObject {
         // is stale rather than waiting.
         if let messageID, knownTranscript?.messages.contains(where: { $0.id == messageID }) == true {
             completeQueued(messageID)
+            return false
+        }
+        // An OpenCode writing turn runs only on settings checked for it, with
+        // nothing begun since (`decisions/0043`).
+        if provider == .openCode, !mode.isReadOnly, !KeptAgentChats.takeOpenCodeCheck(in: workspace) {
+            errorMessage = "OpenCode wasn’t started: this writing’s settings weren’t checked for this message, or something began in it meanwhile. Send it again."
             return false
         }
         errorMessage = nil
@@ -4073,6 +4115,9 @@ struct NativeAgentChatView: View {
     /// Shows the writing's Terminal, where the host has one.
     private var showTerminal: (() -> Void)?
     @State private var draft = ""
+    /// What an OpenCode writing turn found in the writing's settings, put to
+    /// the person before it is sent again.
+    @State private var openCodeCheck: OpenCodeChatCheck?
     @State private var scrollToBottom = false
     @State private var connectionState = AIProviderConnectionState.checking
     @State private var authenticationProvider: AIProviderCLI?
@@ -4193,6 +4238,19 @@ struct NativeAgentChatView: View {
             defer { KeptAgentChats.endTurn(in: workspaceFolder) }
             do {
                 let contextualPrompt = try await preparePrompt(prompt)
+                // The last thing before the send, which runs with nothing
+                // awaited from its own check of what was checked here.
+                if provider == .openCode, model.isWritingChat {
+                    switch await WritingChatTurns.checkOpenCode(in: workspaceFolder) {
+                    case .clear:
+                        break
+                    case .refused(let words):
+                        throw AgentChatSendRefusal(message: words)
+                    case .unapproved(let findings):
+                        openCodeCheck = OpenCodeChatCheck(prompt: prompt, queued: queued, findings: findings)
+                        throw AgentChatSendRefusal(message: "OpenCode wasn’t started: this writing’s settings hold things Lamp didn’t put there.")
+                    }
+                }
                 submissionError = nil
                 isPreparing = false
                 let taken = await model.send(
@@ -4222,6 +4280,7 @@ struct NativeAgentChatView: View {
                         // is simply gone.
                         submissionError = AgentTerminalHolds.shared.isHeld(in: workspaceFolder)
                             ? "That message was not sent: Claude is running in this writing’s Terminal."
+                            : model.errorMessage != nil ? nil
                             : "That message was not sent: the conversation changed while it was being prepared."
                         if draft.isEmpty { draft = prompt }
                     }
@@ -4509,6 +4568,29 @@ struct NativeAgentChatView: View {
             Task { await refreshConnectionState() }
         }) { request in
             AIProviderAuthenticationTerminal(request: request)
+        }
+        .sheet(item: $openCodeCheck) { check in
+            TerminalLaunchCheckSheet(
+                check: TerminalLaunchCheck(provider: provider, findings: check.findings, forChat: true)
+            ) {
+                openCodeCheck = nil
+            } open: {
+                openCodeCheck = nil
+                do {
+                    try AgentTerminalLaunchCheck.approve(check.findings, for: workspaceFolder)
+                } catch {
+                    submissionError = "Lamp couldn’t keep your answer, so it didn’t send the message: \(error.localizedDescription)"
+                    return
+                }
+                // Checked again as it goes: what changed while this was up
+                // is asked about afresh.
+                if check.queued != nil {
+                    drainQueue()
+                } else {
+                    if draft == check.prompt { draft = "" }
+                    startSending(check.prompt)
+                }
+            }
         }
         .confirmationDialog(
             "Undo this turn?",
