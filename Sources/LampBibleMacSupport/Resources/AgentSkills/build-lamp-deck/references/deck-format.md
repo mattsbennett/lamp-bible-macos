@@ -712,8 +712,11 @@ the new video: after every render, write the names it returned into the deck.
   before setting `window.lamp`. The WebGPU addons (`WaterMesh`,
   `lines/webgpu/`, `tsl/display/` with bloom and the rest) go with it, and
   post-processing goes through `RenderPipeline`. On a Mac without WebGPU (before
-  macOS 26) the same page draws with WebGL and may look a little different;
-  `render_animation` says which drew. Draw on a canvas in the page, with a
+  macOS 26) three tries WebGL in its place, which may look a little different,
+  and can't do what only WebGPU can (compute shaders, subgroups): a page that
+  needs those has no fallback there. `render_animation` says which drew
+  (`drewWith`: `webgpu`, `webgl`, `webgl+webgpu`, or nothing for a page that
+  drew in 2D). Draw on a canvas in the page, with a
   render pass: WebGPU on an `OffscreenCanvas`, or a compute shader writing
   straight into the canvas, reaches no frame Lamp keeps and is refused, and
   one drawn in a worker is never kept. Draw each frame in one submit, or end

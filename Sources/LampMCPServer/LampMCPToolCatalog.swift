@@ -394,9 +394,10 @@ public enum LampMCPToolCatalog {
             Turn an animation into a looping video for a slide. Write an HTML \
             page in the workspace's Assets folder that draws a scene, with \
             three.js 0.187 imported as "three", its addons as \
-            "three/addons/..." and its WebGPU renderer as "three/webgpu" (Lamp \
-            supplies them; nothing loads from the network, and an addon Lamp \
-            lacks stops the render: the deck format lists them), and sets \
+            "three/addons/..." and its WebGPU renderer as "three/webgpu", \
+            awaiting renderer.init() before window.lamp is set (Lamp supplies \
+            them; nothing loads from the network, and an addon Lamp lacks stops \
+            the render: the deck format lists them), and sets \
             window.lamp = { duration, render(t) }: render draws the frame at t \
             seconds and may be async; it must depend on t alone, since Lamp may \
             draw a frame twice, and render(duration) must look like render(0) \
@@ -406,8 +407,10 @@ public enum LampMCPToolCatalog {
             and .jpg), for an image block's video and assetPath. The names \
             change whenever the animation does, so write them into the deck \
             again after every render. Returns frames from across the loop to look at, \
-            and drewWith: webgpu or webgl, since a WebGPU page draws with WebGL \
-            on a Mac without WebGPU. Needs a \
+            and drewWith: webgpu, webgl, webgl+webgpu, or null for a page that \
+            drew with neither. On a Mac without WebGPU, three tries WebGL in its \
+            place, which can't do what only WebGPU can (compute, subgroups): a \
+            page needing that has no fallback there. Needs a \
             session opened on a writing's workspace.
             """,
             inputSchema: .object([
