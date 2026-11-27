@@ -1292,7 +1292,7 @@ private struct StreamingAgentReplyBubble: View {
 
     var body: some View {
         AgentReplyBubble(markdown: content.markdown)
-            .background { ChatScrollOvershootGuard(length: content.markdown.utf16.count) }
+            .background { ChatScrollEndKeeping(length: content.markdown.utf16.count) }
     }
 }
 
@@ -1315,23 +1315,30 @@ private struct AgentWaitingBubble: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        // Each dot its own size, with a gap: left to fill a shared width,
+        // the three ran together into one bar.
+        HStack(spacing: 5) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .fill(Color.primary)
                     .opacity(reduceMotion || lit == index ? 1 : 0.5)
+                    .frame(width: 8, height: 8)
             }
         }
-        .frame(width: 40, height: 8)
-        .frame(height: 42)
-        .padding(.horizontal, 12)
+        // Half the room it had around the dots, which made the bubble
+        // twice the size of what it held (owner, 2026-11-26).
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
         .background(shape.fill(LampChatSurface.agentBubble))
         .overlay(shape.stroke(LampChatSurface.agentBubbleBorder, lineWidth: 1))
         .onReceive(tick) { _ in
             guard !reduceMotion else { return }
             withAnimation(.linear(duration: 0.5)) { lit = (lit + 1) % 3 }
         }
-        .background { ChatEndPin() }
+        .background {
+            ChatEndPin()
+            ChatScrollEndKeeping()
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
         .accessibilityElement()
@@ -1393,47 +1400,143 @@ private struct ChatEndPin: NSViewRepresentable {
     }
 }
 
-/// Keeps the chat from scrolling past its end while a reply grows.
-///
-/// SwiftyChat lists its messages in a lazy stack anchored at the bottom. As
-/// the reply grows, the stack re-estimates the rows above it that it has
-/// put away, and the content can come out shorter than the place it is
-/// scrolled to: the whole pane went blank part way through a long reply, and
-/// came back only when the pane was rebuilt (user, 2026-11-05). In a harness
-/// with a 6,000-character history, the view stood wholly past the end by
-/// 4,900 characters of reply; with this, never.
-///
-/// It moves the view only when it is past the end, and only as far back as
-/// the end, so a reader who has scrolled up to read is left where they are.
-/// It lives in the arriving reply, so it acts only while there is one.
-private struct ChatScrollOvershootGuard: NSViewRepresentable {
-    /// Changes as the reply does, which is when to look.
-    let length: Int
+/// Has the chat's scroll view kept from standing past its end, from the row
+/// it sits in; see `ChatScrollEndKeeper`. In the arriving reply it also looks
+/// each time the reply grows.
+private struct ChatScrollEndKeeping: NSViewRepresentable {
+    /// Changes as the reply does, which is when to look again.
+    var length = 0
 
-    func makeNSView(context: Context) -> OvershootGuardView { OvershootGuardView() }
+    func makeNSView(context: Context) -> KeepingView { KeepingView() }
 
-    func updateNSView(_ view: OvershootGuardView, context: Context) {
-        view.clampSoon()
+    func updateNSView(_ view: KeepingView, context: Context) {
+        view.keeper?.clampSoon()
     }
 
-    final class OvershootGuardView: NSView {
-        override func setFrameSize(_ newSize: NSSize) {
-            super.setFrameSize(newSize)
-            clampSoon()
+    final class KeepingView: NSView {
+        private(set) var keeper: ChatScrollEndKeeper?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scrollView = enclosingScrollView else { return }
+            keeper = ChatScrollEndKeeper.keeper(for: scrollView)
+            keeper?.clampSoon()
         }
 
-        /// After the pass that grew the reply, once the list has laid out.
-        func clampSoon() {
-            DispatchQueue.main.async { [weak self] in
-                guard let scrollView = self?.enclosingScrollView,
-                      let document = scrollView.documentView else { return }
-                let clip = scrollView.contentView
-                let end = max(document.frame.height - clip.bounds.height, 0)
-                guard clip.bounds.origin.y > end + 0.5 else { return }
-                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: end))
-                scrollView.reflectScrolledClipView(clip)
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            keeper?.clampSoon()
+        }
+    }
+}
+
+/// Keeps the chat from standing past its end.
+///
+/// SwiftyChat lists its messages in a lazy stack anchored at the bottom. As
+/// a reply grows, and as a message is sent and the chat scrolled to it, the
+/// stack re-estimates the rows it has put away, and the content can come out
+/// shorter than the place it is scrolled to: the whole pane goes blank until
+/// the reader scrolls (user, 2026-11-05, part way through a long reply;
+/// owner, 2026-11-26, sometimes just after sending).
+///
+/// It belongs to the scroll view rather than to a row. It was a row's, the
+/// arriving reply's, and a lazy stack draws only the rows in view: once the
+/// view stood past the end there was no row drawn to bring it back, and
+/// after a send it had no reply row yet at all. So it watches the list's own
+/// height and the view's place, and lives as long as the scroll view does.
+///
+/// It moves the view only when it is past the end, and only as far back as
+/// the end, insets counted, so a reader who has scrolled up is left where
+/// they are; and not while they are scrolling, so an overscroll still
+/// springs back on its own.
+@MainActor
+final class ChatScrollEndKeeper: NSObject {
+    /// Held by the scroll view itself, so it goes when the scroll view does.
+    private static let key = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+
+    static func keeper(for scrollView: NSScrollView) -> ChatScrollEndKeeper {
+        if let keeper = objc_getAssociatedObject(scrollView, key) as? ChatScrollEndKeeper { return keeper }
+        let keeper = ChatScrollEndKeeper(scrollView)
+        objc_setAssociatedObject(scrollView, key, keeper, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return keeper
+    }
+
+    private weak var scrollView: NSScrollView?
+    private weak var watchedDocument: NSView?
+    private var observers: [NSObjectProtocol] = []
+    private var documentObserver: NSObjectProtocol?
+    private var readerIsScrolling = false
+    private var clampIsQueued = false
+
+    private init(_ scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init()
+        let center = NotificationCenter.default
+        let clip = scrollView.contentView
+        clip.postsBoundsChangedNotifications = true
+        clip.postsFrameChangedNotifications = true
+        // Where the view stands, and how tall it is: a card arriving above
+        // the chat shortens it mid-reply.
+        observers = [NSView.boundsDidChangeNotification, NSView.frameDidChangeNotification].map { name in
+            center.addObserver(forName: name, object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clampSoon() }
+            }
+        } + [
+            center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.readerIsScrolling = true }
+            },
+            center.addObserver(forName: NSScrollView.didEndLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.readerIsScrolling = false
+                    self?.clampSoon()
+                }
+            },
+        ]
+        watchDocument()
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        documentObserver.map(NotificationCenter.default.removeObserver)
+    }
+
+    /// The list's height, which is what shrinks under the view. The
+    /// document is looked for again each time, in case SwiftUI replaced it.
+    private func watchDocument() {
+        guard let document = scrollView?.documentView, document !== watchedDocument else { return }
+        documentObserver.map(NotificationCenter.default.removeObserver)
+        document.postsFrameChangedNotifications = true
+        watchedDocument = document
+        documentObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: document, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clampSoon() }
+        }
+    }
+
+    /// After the pass that changed the list, once it has laid out; one look
+    /// however many changes ask in the same turn of the run loop.
+    func clampSoon() {
+        guard !clampIsQueued else { return }
+        clampIsQueued = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.clampIsQueued = false
+                self?.clamp()
             }
         }
+    }
+
+    private func clamp() {
+        watchDocument()
+        guard !readerIsScrolling, let scrollView, scrollView.window != nil else { return }
+        let clip = scrollView.contentView
+        // The clip view's own limit for where it stands now, so the message
+        // field's inset is counted as the end's, not as past it.
+        let allowed = clip.constrainBoundsRect(clip.bounds)
+        guard clip.bounds.origin.y > allowed.origin.y + 0.5 else { return }
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: allowed.origin.y))
+        scrollView.reflectScrolledClipView(clip)
     }
 }
 
@@ -3434,6 +3537,10 @@ struct NativeAgentChatView: View {
     /// connection, so this header keeps only its buttons, and only when it
     /// has one to offer.
     private var hostNamesIdentity = false
+    /// The host's own row has the New Chat button; see
+    /// `newChatShownByHost(asked:available:)`.
+    private var newChatAsked: Binding<Bool>?
+    private var newChatAvailable: ((Bool) -> Void)?
     /// What the next message is sent with beside its words, shown over the
     /// field; see `attachment(_:dismiss:)`.
     private var attachment: ChatAttachment?
@@ -3866,6 +3973,12 @@ struct NativeAgentChatView: View {
         } message: { _ in
             Text("The draft goes back to what it said before this turn, and this turn and everything after it leave the conversation. Anything you have written since is replaced — the restore is recorded in the writing’s history, so you can put it back.")
         }
+        .onChange(of: newChatAsked?.wrappedValue == true) { _, asked in
+            guard asked else { return }
+            newChatAsked?.wrappedValue = false
+            if canStartNewChat { showingClearConfirmation = true }
+        }
+        .onChange(of: canStartNewChat, initial: true) { _, can in newChatAvailable?(can) }
         .confirmationDialog(
             "Start a new \(provider.shortName) chat?",
             isPresented: $showingClearConfirmation
@@ -3921,9 +4034,26 @@ struct NativeAgentChatView: View {
         return copy
     }
 
+    /// The host's row offers New Chat instead of this header, which then
+    /// shows only while there is something else to offer: a header row
+    /// holding that one button stood under the host's own (owner,
+    /// 2026-11-26). `asked` is set by the host's button and put back here;
+    /// `available` is told whether a new chat can be started now.
+    func newChatShownByHost(asked: Binding<Bool>, available: @escaping (Bool) -> Void) -> NativeAgentChatView {
+        var copy = self
+        copy.newChatAsked = asked
+        copy.newChatAvailable = available
+        return copy
+    }
+
+    private var hostShowsNewChat: Bool { newChatAsked != nil }
+
+    private var canStartNewChat: Bool { !model.messages.isEmpty && !model.isRunning }
+
     /// Whether the header has a button to show.
     private var headerHasActions: Bool {
-        (connectionState != .connected && connectionState != .checking) || model.isRunning || !model.messages.isEmpty
+        (connectionState != .connected && connectionState != .checking) || model.isRunning
+            || (!hostShowsNewChat && !model.messages.isEmpty)
     }
 
     /// See `onConnectionChanged`.
@@ -3977,13 +4107,15 @@ struct NativeAgentChatView: View {
                 Button("Stop", systemImage: "stop.fill") { model.cancel() }
                     .controlSize(.small)
             }
-            Button("New Chat", systemImage: "square.and.pencil") {
-                showingClearConfirmation = true
+            if !hostShowsNewChat {
+                Button("New Chat", systemImage: "square.and.pencil") {
+                    showingClearConfirmation = true
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .disabled(!canStartNewChat)
+                .help("Start a new chat")
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
-            .disabled(model.messages.isEmpty || model.isRunning)
-            .help("Start a new chat")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)

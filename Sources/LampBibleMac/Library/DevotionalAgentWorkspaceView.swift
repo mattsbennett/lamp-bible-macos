@@ -1221,6 +1221,10 @@ struct DevotionalAgentWorkspaceView: View {
     @State private var turnHoldsQuit = false
     @State private var sessionCanMount = false
     @State private var providerConnection = AIProviderConnectionState.checking
+    /// The chat's New Chat, asked from this pane's header row; see
+    /// `NativeAgentChatView.newChatShownByHost(asked:available:)`.
+    @State private var newChatAsked = false
+    @State private var chatCanStartNew = false
     /// The setup was opened because the provider needed it,
     /// so it folds again once the provider is connected.
     @State private var setupOpenedForConnection = false
@@ -1544,46 +1548,61 @@ struct DevotionalAgentWorkspaceView: View {
     }
 
     /// The one row the setup keeps while the conversation leads: what agent
-    /// it is and whether the draft is in sync, opened on the whole row.
+    /// it is and whether the draft is in sync, opened on the whole row but
+    /// for the chat's New Chat at its end. That button had a row of its own
+    /// beneath this one (owner, 2026-11-26); here the summary gives it room
+    /// by truncating further.
     private var setupHeader: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) { showsSetup.toggle() }
-        } label: {
-            // One row says it all: the agent, its model, the writing it
-            // works on, and whether it is connected; it opens the setup.
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(showsSetup ? 90 : 0))
-                    .frame(width: 10)
-                Image(systemName: selectedProvider.systemImage)
-                    .foregroundStyle(.secondary)
-                Text(setupSummary)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Label(providerConnection.label, systemImage: providerConnection.systemImage)
-                    .font(.callout)
-                    .foregroundStyle(providerConnection.color)
-                    .lineLimit(1)
-                if workspaceURL != nil, workspaceDraft != draftMarkdown {
-                    Text("Syncing…")
-                        .font(.callout)
+        HStack(spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { showsSetup.toggle() }
+            } label: {
+                // One row says it all: the agent, its model, the writing it
+                // works on, and whether it is connected; it opens the setup.
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(showsSetup ? 90 : 0))
+                        .frame(width: 10)
+                    Image(systemName: selectedProvider.systemImage)
+                        .foregroundStyle(.secondary)
+                    Text(setupSummary)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Label(providerConnection.label, systemImage: providerConnection.systemImage)
+                        .font(.callout)
+                        .foregroundStyle(providerConnection.color)
+                        .lineLimit(1)
+                    if workspaceURL != nil, workspaceDraft != draftMarkdown {
+                        Text("Syncing…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(showsSetup ? "Hide the agent's setup"
+                  : "Choose the agent and model, and add context and skills. It reads and edits this writing's files.")
+            // Only where the conversation is the one shown: the terminal has
+            // its own way to start over.
+            if sessionMode == .native, sessionIsMounted {
+                Button("New Chat", systemImage: "square.and.pencil") { newChatAsked = true }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .disabled(!chatCanStartNew)
+                    .help("Start a new chat")
+            }
         }
-        .buttonStyle(.plain)
         .padding(.horizontal, 12)
         // The writing's format bar stands beside this row and the two read as
         // one line across the window, so they take one height; this row's own
         // padding left it 10pt shorter and the line stepped at the divider.
         .frame(height: LampMetrics.paneHeaderHeight)
-        .help(showsSetup ? "Hide the agent's setup"
-              : "Choose the agent and model, and add context and skills. It reads and edits this writing's files.")
     }
 
     private var setupSummary: String {
@@ -1919,6 +1938,7 @@ struct DevotionalAgentWorkspaceView: View {
                 )
                 .turnNotifications(title: notificationTitle, route: .writing(devotionalID))
                 .identityShownByHost()
+                .newChatShownByHost(asked: $newChatAsked) { chatCanStartNew = $0 }
                 .onConnectionChanged { state in providerConnection = state }
                 .id("\(selectedProvider.rawValue)|\(workspaceURL.path)")
                 // Covers the terminal kept alive beneath it.
