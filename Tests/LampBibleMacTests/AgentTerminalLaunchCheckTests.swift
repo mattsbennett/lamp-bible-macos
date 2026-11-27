@@ -258,5 +258,17 @@ struct AgentTerminalLaunchCheckTests {
         // The one in place taken away: asked.
         try write(#"{"permissions":{"allow":["Bash(git *)"]}}"#, ".claude/settings.local.json", in: root)
         #expect(scan().contains { $0.detail == "a restriction taken away, which can widen what Claude may do: deny Bash(git push *)" })
+        // And so with the whole file gone.
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".claude/settings.local.json"))
+        #expect(scan().contains { $0.detail.hasSuffix("deny Bash(git push *)") })
+    }
+
+    /// A bundled skill holding anything its digest doesn't cover is scanned
+    /// like anything else, not taken for Lamp's.
+    @Test func aBundledSkillWithAPipeInItIsScanned() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(mkfifo(root.appendingPathComponent(".claude/skills/build-lamp-deck/references/pipe").path, 0o644) == 0)
+        #expect(findings(root, server, bundle).contains { $0.path.hasSuffix("references/pipe") && $0.isIncomplete })
     }
 }

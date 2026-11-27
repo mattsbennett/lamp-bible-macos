@@ -99,25 +99,47 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
             (".mcp.json", answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON),
             ("opencode.json", answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON),
         ]
+        func refuse(_ words: String) -> Error {
+            CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: words])
+        }
+        let root = open(workspace.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard root >= 0 else { throw refuse("Lamp couldn’t open this writing’s folder.") }
+        defer { close(root) }
         for (relative, content) in files {
-            var folder = workspace
-            for part in relative.split(separator: "/").dropLast() {
-                folder = folder.appendingPathComponent(String(part), isDirectory: true)
-                var info = stat()
-                if lstat(folder.path, &info) == 0 {
-                    guard info.st_mode & S_IFMT == S_IFDIR else {
-                        throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "\(part) in this writing is not a plain folder, so Lamp did not write into it."])
-                    }
-                } else {
-                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            // Each folder opened from the one before it, following no link,
+            // and the file written and renamed within the opened folder: a
+            // folder swapped for a link meanwhile can't lead the write out.
+            var parts = relative.split(separator: "/").map(String.init)
+            let name = parts.removeLast()
+            var folder = dup(root)
+            guard folder >= 0 else { throw refuse("Lamp couldn’t open this writing’s folder.") }
+            defer { close(folder) }
+            for part in parts {
+                var next = openat(folder, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                if next < 0, errno == ENOENT {
+                    guard mkdirat(folder, part, 0o755) == 0 || errno == EEXIST else { throw refuse("Lamp couldn’t make \(part) in this writing.") }
+                    next = openat(folder, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                 }
+                guard next >= 0 else {
+                    throw refuse("\(part) in this writing is not a plain folder, so Lamp did not write into it.")
+                }
+                close(folder)
+                folder = next
             }
-            let file = workspace.appendingPathComponent(relative)
             var info = stat()
-            if lstat(file.path, &info) == 0, info.st_mode & S_IFMT != S_IFREG {
-                throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "\(relative) in this writing is not a plain file, so Lamp did not replace it."])
+            if fstatat(folder, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT != S_IFREG {
+                throw refuse("\(relative) in this writing is not a plain file, so Lamp did not replace it.")
             }
-            try Data(content.utf8).write(to: file, options: .atomic)
+            let draft = ".\(name).lamp-\(UUID().uuidString)"
+            let out = openat(folder, draft, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+            guard out >= 0 else { throw refuse("Lamp couldn’t write \(relative) in this writing.") }
+            let bytes = Array(content.utf8)
+            let wrote = bytes.withUnsafeBytes { write(out, $0.baseAddress, $0.count) }
+            close(out)
+            guard wrote == bytes.count, renameat(folder, draft, folder, name) == 0 else {
+                unlinkat(folder, draft, 0)
+                throw refuse("Lamp couldn’t write \(relative) in this writing.")
+            }
         }
     }
 

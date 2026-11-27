@@ -1220,13 +1220,6 @@ public enum AgentTerminalLaunchCheck {
                     found += settings.map {
                         Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown, isPermission: $0.canonical.hasPrefix("grant\u{0}"))
                     }
-                    let now = Set(restrictions(inSettingsData: head))
-                    for rule in approvedRestrictions where !now.contains(rule) {
-                        found.append(Finding(
-                            path: relative, fingerprint: digest("unrestricted\u{0}\(rule)"),
-                            detail: "a restriction taken away, which can widen what Claude may do: \(rule)", isPermission: true
-                        ))
-                    }
                     return
                 }
                 let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
@@ -1241,6 +1234,15 @@ public enum AgentTerminalLaunchCheck {
             }
         }
         for name in names.sorted() where roots.contains(name.lowercased()) { visit(name) }
+        // Restrictions in place when the Terminal last opened and gone now,
+        // the file itself gone included, which leaves none.
+        let now = Set(restrictions(in: workspace))
+        for rule in approvedRestrictions where !now.contains(rule) {
+            found.append(Finding(
+                path: ".claude/settings.local.json", fingerprint: digest("unrestricted\u{0}\(rule)"),
+                detail: "a restriction taken away, which can widen what Claude may do: \(rule)", isPermission: true
+            ))
+        }
         if counted > largestCount {
             found.append(Finding(path: ".", fingerprint: incomplete, detail: "more than \(largestCount) entries, too many to check one by one"))
         }
@@ -1361,13 +1363,16 @@ public enum AgentTerminalLaunchCheck {
         return WorkspaceSkillStore.isPlainSkill(directory)
     }
 
-    /// Whether a folder holds a link, or a hidden entry the digest skips.
+    /// Whether a folder holds anything the digest doesn't account for: a
+    /// link, a hidden entry, or anything but plain files and folders.
     private static func containsLinkOrHidden(_ directory: URL) -> Bool {
         guard let walk = FileManager.default.enumerator(atPath: directory.path) else { return true }
         while let relative = walk.nextObject() as? String {
             if relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { return true }
             var info = stat()
-            if lstat(directory.appendingPathComponent(relative).path, &info) == 0, info.st_mode & S_IFMT == S_IFLNK { return true }
+            guard lstat(directory.appendingPathComponent(relative).path, &info) == 0 else { return true }
+            let kind = info.st_mode & S_IFMT
+            if kind != S_IFREG && kind != S_IFDIR { return true }
         }
         return false
     }
