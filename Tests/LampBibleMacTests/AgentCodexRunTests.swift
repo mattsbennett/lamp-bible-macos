@@ -437,6 +437,22 @@ struct AgentCodexRunnerTests {
     }
 }
 
+/// A CLI is found through the login shell once, then remembered: the shell
+/// runs the reader's startup files, about a second of them, and was asked
+/// again before every turn.
+struct AgentCLILookupTests {
+    @Test func aProgramFoundOnceIsAnsweredAtOnce() throws {
+        let runner = AgentCLIProcessRunner()
+        let first = try runner.resolveExecutable(named: "sw_vers")
+        let asked = AgentCLIProcessRunner.loginShellLookupCount("sw_vers")
+        for _ in 0..<5 { #expect(try runner.resolveExecutable(named: "sw_vers") == first) }
+        // Answered from what was found, the login shell not asked again.
+        #expect(AgentCLIProcessRunner.loginShellLookupCount("sw_vers") == asked)
+        // A program that isn't there is not remembered as there.
+        #expect(throws: (any Error).self) { try runner.resolveExecutable(named: "lamp-no-such-cli-\(UUID().uuidString.prefix(8))") }
+    }
+}
+
 final class Locked<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Value

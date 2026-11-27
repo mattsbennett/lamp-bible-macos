@@ -1963,21 +1963,13 @@ struct DevotionalAgentWorkspaceView: View {
                         async let review = Task.detached(priority: .userInitiated) {
                             try? store?.review(writingID: devotionalID)
                         }.value
-                        // The draft behind everything this pane has asked
-                        // for, so the prompt describes the marks against the
-                        // draft the agent will actually read rather than one
-                        // a keystroke behind. Actors schedule by priority,
-                        // not arrival, so a detached read of it could
-                        // otherwise overtake a queued synchronise.
-                        let draft = await work.afterEverything {
-                            (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
-                        }
-                        let read = await review
                         // The documents beside the writing have marks of
                         // their own. Told of the prose's alone, an agent
                         // reads the rest as cleared and rewrites passages
-                        // the writer has not looked at yet.
-                        let documents = await Task.detached(priority: .userInitiated) { () -> [(
+                        // the writer has not looked at yet. Read while the
+                        // draft waits on the work queued before it, which
+                        // they don't.
+                        async let documents = Task.detached(priority: .userInitiated) { () -> [(
                             name: String, review: LampWritingReview, text: String, known: [String]
                         )] in
                             guard let store else { return [] }
@@ -1991,12 +1983,23 @@ struct DevotionalAgentWorkspaceView: View {
                                 return (name, review, file.contents, [])
                             }
                         }.value
+                        // The draft behind everything this pane has asked
+                        // for, so the prompt describes the marks against the
+                        // draft the agent will actually read rather than one
+                        // a keystroke behind. Actors schedule by priority,
+                        // not arrival, so a detached read of it could
+                        // otherwise overtake a queued synchronise.
+                        let draft = await work.afterEverything {
+                            (try? await DevotionalAgentWorkspaceStore.readDraft(from: workspaceURL)) ?? ""
+                        }
+                        let read = await review
+                        let marked = await documents
                         let note = await Task.detached(priority: .userInitiated) {
                             [
                                 WritingChatTurns.reviewNote(
                                     read, marksAreOn: store != nil, in: draft, known: known
                                 ),
-                                WritingChatTurns.documentReviewNotes(documents),
+                                WritingChatTurns.documentReviewNotes(marked),
                             ].compactMap { $0 }.joined(separator: "\n")
                         }.value
                         return WritingChatTurns.prompt(

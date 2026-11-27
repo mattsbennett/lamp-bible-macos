@@ -1151,6 +1151,44 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
         if name.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: name) {
             return URL(fileURLWithPath: name)
         }
+        // Found once and kept, while the file is still there: a login shell
+        // runs the reader's startup files, 0.7 to 1.3 seconds of them on the
+        // owner's Mac, and was asked again before every turn of every chat.
+        // A program moved or removed is looked for afresh; one not found is
+        // not kept, so installing it later is seen at once.
+        Self.resolvedLock.lock()
+        let known = Self.resolvedByName[name]
+        Self.resolvedLock.unlock()
+        if let known, FileManager.default.isExecutableFile(atPath: known.path) { return known }
+        let found = try resolveThroughLoginShell(named: name)
+        Self.resolvedLock.lock()
+        Self.loginShellLookups[name, default: 0] += 1
+        Self.resolvedByName[name] = found
+        Self.resolvedLock.unlock()
+        return found
+    }
+
+    private nonisolated(unsafe) static var resolvedByName: [String: URL] = [:]
+    /// How many times a name was asked of the login shell; for tests.
+    private nonisolated(unsafe) static var loginShellLookups: [String: Int] = [:]
+    static func loginShellLookupCount(_ name: String) -> Int {
+        resolvedLock.lock()
+        defer { resolvedLock.unlock() }
+        return loginShellLookups[name] ?? 0
+    }
+    private static let resolvedLock = NSLock()
+
+    /// Finds a CLI ahead of its first use, off the main thread, so the first
+    /// message to a chat doesn't wait on the login shell either.
+    static func warmUp(executableNamed name: String) {
+        DispatchQueue.global(qos: .utility).async {
+            let runner = AgentCLIProcessRunner()
+            _ = try? runner.resolveExecutable(named: name)
+            _ = runner.majorVersion(ofExecutableNamed: name)
+        }
+    }
+
+    private func resolveThroughLoginShell(named name: String) throws -> URL {
         let process = AgentSpawnedProcess()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -2470,6 +2508,8 @@ final class NativeAgentChatModel: ObservableObject {
         self.provider = provider
         self.workspace = workspace
         self.mode = mode
+        // Found now, while the person types, rather than after Send.
+        AgentCLIProcessRunner.warmUp(executableNamed: provider.executable)
     }
 
     func load() {
@@ -2878,20 +2918,27 @@ final class NativeAgentChatModel: ObservableObject {
         // the whole window froze on the first message to that provider.
         let executable = provider.executable
         let runner = self.runner
-        let providerMajorVersion = await Task.detached {
+        // Asked side by side: each is a process the first time for a CLI,
+        // and none needs another's answer.
+        async let majorVersion = Task.detached {
             runner.majorVersion(ofExecutableNamed: executable)
         }.value
         // A Codex older than `--ignore-rules` refuses it and every reader
         // chat with it; unknown is taken as the current Codex, which has it.
-        let codexIgnoresRules = wire == .codex && mode.isReadOnly
-            ? (await Task.detached { runner.codexExecTakes("--ignore-rules", executableNamed: executable) }.value ?? true)
-            : true
+        let asksIgnoreRules = wire == .codex && mode.isReadOnly
+        async let ignoresRules = Task.detached {
+            asksIgnoreRules ? runner.codexExecTakes("--ignore-rules", executableNamed: executable) ?? true : true
+        }.value
         // Claude Code before 2.1.257 has no prompt snapshot to turn off, and
         // refuses the flag, and every writing chat with it; unknown is taken
         // as the current one, which has it.
-        let claudeSnapshots = wire == .claude && mode == .writing
-            ? (await Task.detached { runner.helpLists("--system-prompt-snapshot", executableNamed: executable) }.value ?? true)
-            : true
+        let asksSnapshots = wire == .claude && mode == .writing
+        async let snapshots = Task.detached {
+            asksSnapshots ? runner.helpLists("--system-prompt-snapshot", executableNamed: executable) ?? true : true
+        }.value
+        let providerMajorVersion = await majorVersion
+        let codexIgnoresRules = await ignoresRules
+        let claudeSnapshots = await snapshots
         // Read as the run starts rather than held on the model: the picker
         // writes straight to this chat's own choices, and a chat left open
         // while they changed would otherwise keep launching the old one. This
