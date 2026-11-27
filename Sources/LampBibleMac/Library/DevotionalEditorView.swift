@@ -2452,7 +2452,7 @@ struct DevotionalEditorView: View {
             let askedIn = reviewKey
             guard askedIn != nil else { return }
             reviewSession?.clear(
-                markedMarkdown: clear.marked, pageText: clear.pageText, askedIn: askedIn
+                markedMarkdown: clear.marked, pageText: clear.pageText, askedIn: askedIn, wholeBlock: true
             )
         }
         // The page's context menu, as the toolbar's review menu does it:

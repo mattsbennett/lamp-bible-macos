@@ -597,6 +597,33 @@ struct WritingReviewSessionTests {
         }
     }
 
+    /// The owner's footnote (2026-11-26): a passage reaching into a
+    /// footnote through its label, and a footnote opening with bold, are
+    /// cleared whole by the footnote's ✓. The page asks from inside the
+    /// `**`, after the label it draws apart; a selection would not reach.
+    @Test func aFootnotesCheckClearsItsLabelAndOpeningEmphasis() async throws {
+        let root = try library()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LampWritingReviewStore(rootURL: root)
+        let id = "footnote-\(UUID().uuidString)"
+        let new = "Body here.\n\n[^1]: **Note** on it."
+        try store.save(LampWritingReview(writingID: id).markingAssistantChange(from: "Body here.", to: new))
+        let session = WritingReviewSession()
+        let following = Task { await session.follow(writingID: id, text: new, libraryRootURL: root, isShown: true) }
+        defer { following.cancel() }
+        try await waitUntil { session.count == 1 }
+        let line = (new as NSString).range(of: "[^1]: **Note** on it.")
+        // What the page sends for the footnote's block: its text, from
+        // inside the bold.
+        let pressed = "Body here.\n\n[^1]: **\(LampWritingReview.markStart)Note** on it.\(LampWritingReview.markEnd)"
+        session.clear(markedMarkdown: pressed, pageText: new, wholeBlock: true)
+        try await waitUntil {
+            let left = (try? store.review(writingID: id))?.highlightedRanges(in: new)
+                .filter { NSIntersectionRange($0, line).length > 0 } ?? [line]
+            return left.isEmpty
+        }
+    }
+
     /// Codex's case: markers can change how the page writes what is round
     /// them, so the marked Markdown with its markers taken out is text the
     /// page never held. A page that sends no text of its own clears only

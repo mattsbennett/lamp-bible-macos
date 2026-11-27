@@ -601,7 +601,7 @@ final class WritingReviewSession: ObservableObject {
     /// page's, pressed before a turn's draft reached it), and carried whole
     /// into it, a mark with no words there would be retired by a clear of
     /// some other passage.
-    private func clear(range: NSRange, in text: String, drawsAnyway: Bool = false) {
+    private func clear(range: NSRange, in text: String, drawsAnyway: Bool = false, wholeBlock: Bool = false) {
         guard let writingID else { return }
         remember(text)
         let known = texts
@@ -611,7 +611,16 @@ final class WritingReviewSession: ObservableObject {
         // as a point after it while the mark sits on it, so a clear
         // from that point touches nothing and the writer watches the
         // mark stay (core's `takingInSyntax`).
-        let asked = LampWritingReviewMarkdown.takingInSyntax(range, of: text)
+        //
+        // A block's own ✓ asks for the block's words, which the page draws
+        // apart from its line's syntax: it reaches to the line's ends over
+        // that syntax, a footnote's `[^1]:` and the emphasis the words open
+        // and close with among it, or a passage running through the label
+        // kept a sliver no ✓ could clear (owner, 2026-11-26). A selection
+        // never reaches: see `restoring(_:in:)` on why.
+        let asked = wholeBlock
+            ? LampWritingReviewMarkdown.wholeBlock(range, of: text)
+            : LampWritingReviewMarkdown.takingInSyntax(range, of: text)
         // The restores owed as the clear is made: the only ones it reads.
         let owedNow = key.map { Set(WritingReviewObligations.shared.owing(for: $0).map(\.id)) } ?? []
         if let key { WritingReviewObligations.shared.wasCleared(for: key) }
@@ -657,12 +666,17 @@ final class WritingReviewSession: ObservableObject {
     /// answers, so it is always answered with the marks drawn again: where
     /// the record comes back unchanged, the write fails, or the range
     /// cannot be placed, nothing else would put back what the page took off.
-    func clear(markedMarkdown marked: String, pageText: String? = nil, askedIn: WritingReviewKey? = nil) {
+    ///
+    /// `wholeBlock` is a block's own ✓, as against a selection.
+    func clear(
+        markedMarkdown marked: String, pageText: String? = nil, askedIn: WritingReviewKey? = nil,
+        wholeBlock: Bool = false
+    ) {
         if let askedIn, askedIn != key { return }
         if let range = LampWritingReview.markedRange(in: marked, of: text) {
-            clear(range: range, in: text, drawsAnyway: true)
+            clear(range: range, in: text, drawsAnyway: true, wholeBlock: wholeBlock)
         } else if let pageText, let range = LampWritingReview.markedRange(in: marked, of: pageText) {
-            clear(range: range, in: pageText, drawsAnyway: true)
+            clear(range: range, in: pageText, drawsAnyway: true, wholeBlock: wholeBlock)
         } else {
             draw(sendsMarks: true)
         }
