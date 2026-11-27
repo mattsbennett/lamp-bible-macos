@@ -3169,6 +3169,15 @@ struct DevotionalAgentWorkspaceView: View {
         terminalExitCode = nil
         terminalID = UUID()
         AgentTerminalHolds.shared.begin(terminalID, in: workspaceURL, holdsChats: AgentTerminalHolds.holds(provider))
+        // Messages already waiting in the writing's chats wait for the
+        // person's next Send, whether or not a pane is there to see the hold.
+        if AgentTerminalHolds.holds(provider) {
+            for each in AIProviderCLI.allCases {
+                if let model = KeptAgentChats.existing(provider: each, workspace: workspaceURL), model.hasWaitingMessage {
+                    model.holdQueue()
+                }
+            }
+        }
         // Opened with what was checked: its restrictions, as the scan read
         // them, are the reference for the next check.
         AgentTerminalLaunchCheck.recordRestrictions(scanned.restrictions, for: workspaceURL)
@@ -3707,6 +3716,10 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
             coordinator.watchForEditingKeys(in: terminal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak terminal] in
                 guard let terminal, terminal.process.running else { return }
+                // Ended meanwhile: the shell goes without being given it.
+                if let holdID = coordinator.holdID, MainActor.assumeIsolated({ AgentTerminalHolds.shared.isEndAsked(holdID) }) {
+                    return
+                }
                 let bytes = Array((command + "\r").utf8)
                 terminal.process.send(data: bytes[...])
             }

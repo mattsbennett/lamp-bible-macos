@@ -117,6 +117,23 @@ struct AgentTerminalHoldsTests {
 
     /// Ended before its process started, it isn't pending, so the Terminal
     /// doesn't start it at all.
+    /// End is remembered until the process goes, so the Terminal doesn't type
+    /// Claude's command into a shell that ignored the request to stop.
+    @Test func endIsRememberedUntilTheProcessGoes() throws {
+        let place = try workspace()
+        let process = try spawn("trap '' TERM; exec sleep 30")
+        defer { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+        let launch = UUID()
+        holds.begin(launch, in: place)
+        holds.started(launch, pid: process.processIdentifier)
+        #expect(!holds.isEndAsked(launch))
+        holds.end(in: place, killAfter: 30)
+        #expect(holds.isEndAsked(launch))
+        #expect(holds.isHeld(in: place))
+        holds.ended(launch)
+        #expect(!holds.isEndAsked(launch))
+    }
+
     @Test func endClearsALaunchNotStartedYet() throws {
         let place = try workspace()
         let launch = UUID()

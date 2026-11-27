@@ -1052,6 +1052,14 @@ final class AgentRemoteHost: ObservableObject {
         guard let root = libraryRootURL else { return }
         let chat: LampAgentRemoteHosting.Chat
         if newChat.kind == LampAgentRemoteChatSummary.writing {
+            // Refused before anything is fetched for it.
+            if let writingID = newChat.writingID,
+               !admitsTurn(
+                   in: LampWritingWorkspace.url(libraryRootURL: root, writingID: writingID), running: false,
+                   chatID: LampAgentRemoteHosting.Chat.writing(writingID).id, requestID: message.requestID, peer: peer
+               ) {
+                return
+            }
             guard let writingID = newChat.writingID,
                   await isCurrent(
                       writingID, revision: newChat.writingRevision, digest: newChat.writingDigest,
@@ -1082,7 +1090,16 @@ final class AgentRemoteHost: ObservableObject {
         else { return }
         // Held from here, so a Terminal can't open while the writing is
         // prepared and its choices saved: its launch waits for no turn in
-        // hand.
+        // hand. A chat nothing was said in yet, being started already from a
+        // window or another device, is that one's to choose for: this start
+        // waits, rather than both choosing or neither.
+        if summary(of: chat) == nil, KeptAgentChats.turnsInHand(in: workspace) > 0 {
+            send(.failed(
+                LampAgentRemoteFailure.busy, "This chat is being started from somewhere else. Try again in a moment.",
+                requestID: message.requestID, chatID: chat.id
+            ), to: peer)
+            return
+        }
         KeptAgentChats.beginTurn(in: workspace)
         defer { KeptAgentChats.endTurn(in: workspace) }
         do {
@@ -1103,7 +1120,9 @@ final class AgentRemoteHost: ObservableObject {
             let isWriting = if case .writing = chat { true } else { false }
             // New: nothing said in it, and no first turn on its way from a
             // window or another device, whose choices these would overwrite.
-            // This request's own reservation is the one turn in hand.
+            // This request's own reservation the one turn in hand: no first
+            // turn on its way from a window meanwhile, whose choices these
+            // would overwrite.
             let isNew = summary(of: chat) == nil && KeptAgentChats.turnsInHand(in: workspace) <= 1
                 && !KeptAgentChats.isRunning(in: workspace)
             if isNew, chosen != nil || !isWriting {

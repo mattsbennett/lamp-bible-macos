@@ -43,6 +43,10 @@ final class AgentTerminalHolds: ObservableObject {
     }
 
     @Published private(set) var launches: [UUID: Launch] = [:]
+    /// Launches End was pressed for, still held until their process is
+    /// gone: a login shell ignores the request to stop, and its command,
+    /// typed a moment after it starts, mustn't be typed then.
+    private(set) var endAsked: Set<UUID> = []
 
     /// Whether a Terminal of this provider holds its writing's chats: Claude
     /// Code's, which reloads its settings while it runs. Codex and OpenCode
@@ -76,7 +80,11 @@ final class AgentTerminalHolds: ObservableObject {
     /// Its process exited.
     func ended(_ id: UUID) {
         if launches[id] != nil { launches[id] = nil }
+        endAsked.remove(id)
     }
+
+    /// Whether End was pressed for this launch.
+    func isEndAsked(_ id: UUID) -> Bool { endAsked.contains(id) }
 
     /// Whether this launch is still waiting for its process: false once it
     /// was dropped or ended before it started, when it mustn't start at all.
@@ -134,6 +142,7 @@ final class AgentTerminalHolds: ObservableObject {
             case .starting:
                 launches[id] = nil
             case .running(let pid, let began):
+                endAsked.insert(id)
                 if Self.isAlive(pid, began: began) { kill(pid, SIGTERM) }
                 DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
                     if Self.isAlive(pid, began: began) { kill(pid, SIGKILL) }
