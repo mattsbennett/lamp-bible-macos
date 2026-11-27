@@ -33,8 +33,8 @@ struct AgentTerminalLaunchCheckTests {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func findings(_ root: URL, _ server: LampAgentMCPConfiguration, _ bundle: URL, baseline: [String]? = []) -> [AgentTerminalLaunchCheck.Finding] {
-        AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle, baseline: baseline)
+    private func findings(_ root: URL, _ server: LampAgentMCPConfiguration, _ bundle: URL) -> [AgentTerminalLaunchCheck.Finding] {
+        AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle)
     }
 
     @Test func aWritingAsLampAndClaudeLeaveItRaisesNothing() throws {
@@ -42,10 +42,11 @@ struct AgentTerminalLaunchCheckTests {
         defer { try? FileManager.default.removeItem(at: root) }
         // A plain custom skill, as Lamp writes one.
         try write("---\nname: my-notes\ndescription: \"Notes.\"\n---\n\nTake notes.\n", ".claude/skills/my-notes/SKILL.md", in: root)
-        // As Claude writes it: servers approved, a style, a rule from a session.
-        try write(#"{"enabledMcpjsonServers":["lamp"],"enableAllProjectMcpServers":true,"outputStyle":"Explanatory","permissions":{"allow":["Bash(sw_vers)"],"deny":["Bash(rm *)"]}}"#,
+        // As Claude writes it: servers approved, a style, rules that only
+        // restrict, which need no one's say.
+        try write(#"{"enabledMcpjsonServers":["lamp"],"enableAllProjectMcpServers":true,"outputStyle":"Explanatory","permissions":{"deny":["Bash(rm *)"],"ask":["WebFetch"]}}"#,
                   ".claude/settings.local.json", in: root)
-        #expect(findings(root, server, bundle, baseline: ["allow Bash(sw_vers)"]).map(\.path) == [], "\(findings(root, server, bundle, baseline: ["allow Bash(sw_vers)"]))")
+        #expect(findings(root, server, bundle).map(\.path) == [], "\(findings(root, server, bundle))")
     }
 
     @Test func whatLampDidNotPutThereIsFoundWithWhatItHolds() throws {
@@ -75,8 +76,8 @@ struct AgentTerminalLaunchCheckTests {
         // An unknown setting, with its value: the test that it is an allow-list.
         #expect(local.contains(#"the setting futureKey: {"run":"make"}"#))
         #expect(local.contains("the permission setting defaultMode: bypassPermissions"))
-        #expect(local.contains("added outside a Terminal session: allow Bash"))
-        #expect(local.contains("added outside a Terminal session: folder /"))
+        #expect(local.contains("a permission saved for Claude: allow Bash"))
+        #expect(local.contains("a permission saved for Claude: folder /"))
         // A small file is shown whole.
         #expect(found.first { $0.path == ".claude/settings.json" }?.detail.contains("touch /tmp/x") == true)
         // Only the folders a provider reads.
@@ -106,24 +107,40 @@ struct AgentTerminalLaunchCheckTests {
         // One byte changed, as it would be behind the prompt: asked again.
         try write(#"{"env":{"A":"2"}}"#, ".claude/settings.json", in: root)
         #expect(!AgentTerminalLaunchCheck.isApproved(findings(root, server, bundle), for: root, in: state))
-        // Taken away, nothing is left to ask about.
+        // Taken away, nothing is left to ask about, and its approval goes.
         try FileManager.default.removeItem(at: root.appendingPathComponent(".claude/settings.json"))
         #expect(AgentTerminalLaunchCheck.isApproved(findings(root, server, bundle), for: root, in: state))
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings(root, server, bundle), for: root, in: state)
+        // Put back as it was approved, it is asked about again.
+        try write(#"{"env":{"A":"2"}}"#, ".claude/settings.json", in: root)
+        try AgentTerminalLaunchCheck.approve(findings(root, server, bundle), for: root, in: state)
+        try FileManager.default.removeItem(at: root.appendingPathComponent(".claude/settings.json"))
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings(root, server, bundle), for: root, in: state)
+        try write(#"{"env":{"A":"2"}}"#, ".claude/settings.json", in: root)
+        #expect(!AgentTerminalLaunchCheck.isApproved(findings(root, server, bundle), for: root, in: state))
     }
 
-    @Test func rulesClaudeSavedInASessionAreItsOwn() throws {
+    /// A rule that grants is the person's to keep, however it came: never
+    /// trusted for when it appeared. Kept once, the same bytes don't ask
+    /// again; several saved together come together.
+    @Test func aSavedPermissionIsKeptByThePersonAlone() throws {
         let (root, server, bundle) = try workspace()
         let state = FileManager.default.temporaryDirectory.appendingPathComponent("checks-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: state) }
-        try write(#"{"permissions":{"allow":["Bash(npm test)"]}}"#, ".claude/settings.local.json", in: root)
-        #expect(AgentTerminalLaunchCheck.baseline(for: root, in: state) == nil)
-        // As a session ends, what it saved is the writing's own.
-        try AgentTerminalLaunchCheck.recordBaseline(in: root, file: state)
-        #expect(findings(root, server, bundle, baseline: AgentTerminalLaunchCheck.baseline(for: root, in: state)).isEmpty)
-        // One added after it, by anyone else, is found.
-        try write(#"{"permissions":{"allow":["Bash(npm test)","Bash"]}}"#, ".claude/settings.local.json", in: root)
-        #expect(findings(root, server, bundle, baseline: AgentTerminalLaunchCheck.baseline(for: root, in: state)).map(\.detail)
-            == ["added outside a Terminal session: allow Bash"])
+        try write(#"{"permissions":{"allow":["Bash(npm test)","Bash(make)","WebSearch"]}}"#, ".claude/settings.local.json", in: root)
+        let saved = findings(root, server, bundle)
+        #expect(saved.map(\.detail) == [
+            "a permission saved for Claude: allow Bash(npm test)",
+            "a permission saved for Claude: allow Bash(make)",
+            "a permission saved for Claude: allow WebSearch",
+        ])
+        try AgentTerminalLaunchCheck.approve(saved, for: root, in: state)
+        #expect(AgentTerminalLaunchCheck.isApproved(findings(root, server, bundle), for: root, in: state))
+        // One more, and only it is new.
+        try write(#"{"permissions":{"allow":["Bash(npm test)","Bash(make)","WebSearch","Bash"]}}"#, ".claude/settings.local.json", in: root)
+        let now = findings(root, server, bundle)
+        #expect(!AgentTerminalLaunchCheck.isApproved(now, for: root, in: state))
+        #expect(now.filter { !saved.map(\.id).contains($0.id) }.map(\.detail) == ["a permission saved for Claude: allow Bash"])
     }
 
     @Test func lampsFilesAreRestoredOnlyInsideTheWorkspace() throws {
@@ -143,7 +160,7 @@ struct AgentTerminalLaunchCheckTests {
     }
 
     /// A linked skills folder is never written through, and a linked local
-    /// settings file gives no rules to trust.
+    /// settings file is a finding, never read.
     @Test func linkedFoldersAreNeitherRefreshedThroughNorTrusted() throws {
         let (root, _, _) = try workspace()
         let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
@@ -159,8 +176,8 @@ struct AgentTerminalLaunchCheckTests {
         try FileManager.default.createSymbolicLink(
             at: root.appendingPathComponent(".claude/settings.local.json"), withDestinationURL: outside.appendingPathComponent("planted.json")
         )
-        try AgentTerminalLaunchCheck.recordBaseline(in: root, file: state)
-        #expect(AgentTerminalLaunchCheck.baseline(for: root, in: state) == [])
+        #expect(AgentTerminalLaunchCheck.findings(in: root, lampServer: nil, bundledSkills: nil)
+            .contains { $0.path == ".claude/settings.local.json" && $0.detail.hasPrefix("a link to") })
     }
 
     /// What couldn't be looked at is marked so, and no answer covers it.
@@ -171,7 +188,7 @@ struct AgentTerminalLaunchCheckTests {
         try FileManager.default.createDirectory(at: shut, withIntermediateDirectories: true)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shut.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shut.path) }
-        let found = AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle, baseline: [])
+        let found = AgentTerminalLaunchCheck.findings(in: root, lampServer: server, bundledSkills: bundle)
         #expect(found.contains { $0.path == ".opencode/shut" && $0.isIncomplete })
     }
 
@@ -194,5 +211,14 @@ struct AgentTerminalLaunchCheckTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try write("---\nname: notes\ndescription: \"Before --- after\"\n---\n\nTake notes.\n", ".claude/skills/notes/SKILL.md", in: root)
         #expect(!findings(root, server, bundle).contains { $0.path.contains("notes") })
+    }
+
+    /// A skill folder named as Lamp never names one is not taken for Lamp's.
+    @Test func aSkillWithANameLampWouldNotGiveIsNotLamps() throws {
+        let (root, server, bundle) = try workspace()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let odd = "notes\u{2028}x"
+        try write("---\nname: \(odd)\ndescription: \"N\"\n---\n\nTake notes.\n", ".claude/skills/\(odd)/SKILL.md", in: root)
+        #expect(findings(root, server, bundle).contains { $0.path.contains("SKILL.md") && $0.path.contains("notes") })
     }
 }

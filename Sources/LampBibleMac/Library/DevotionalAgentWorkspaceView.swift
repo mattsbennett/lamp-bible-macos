@@ -790,13 +790,9 @@ enum DevotionalAgentWorkspaceStore {
     }
 
     /// What the writing's settings hold that Lamp can't vouch for; see
-    /// `AgentTerminalLaunchCheck`. The first check takes the rules Claude's
-    /// local settings hold now as its start.
+    /// `AgentTerminalLaunchCheck`.
     @WritingWorkspaceFiles
     static func terminalFindings(in workspace: URL, lampServer: LampAgentMCPConfiguration?) -> [AgentTerminalLaunchCheck.Finding] {
-        if AgentTerminalLaunchCheck.baseline(for: workspace) == nil {
-            try? AgentTerminalLaunchCheck.recordBaseline(in: workspace)
-        }
         // Lamp's bundled skills brought up to the ones this build ships
         // first, as opening the writing does, so a copy from an older Lamp is
         // Lamp's again rather than a finding. Only those: a custom skill the
@@ -807,16 +803,8 @@ enum DevotionalAgentWorkspaceStore {
             try? installBundledSkillsIfNeeded(in: workspace)
         }
         return AgentTerminalLaunchCheck.findings(
-            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL,
-            baseline: AgentTerminalLaunchCheck.baseline(for: workspace)
+            in: workspace, lampServer: lampServer, bundledSkills: LampBundledSkills.catalogURL
         )
-    }
-
-    /// As a Terminal session ends, the rules Claude saved in it become the
-    /// writing's own.
-    @WritingWorkspaceFiles
-    static func recordTerminalBaseline(in workspace: URL) {
-        try? AgentTerminalLaunchCheck.recordBaseline(in: workspace)
     }
 
     /// What a Claude writing run is told in place of the workspace's
@@ -1329,6 +1317,8 @@ struct DevotionalAgentWorkspaceView: View {
     /// Settings in the writing that would run something on opening the
     /// Terminal, waiting on the person's answer.
     @State private var terminalLaunchCheck: TerminalLaunchCheck?
+    /// This pane's hold on the writing while its Terminal starts.
+    @State private var terminalHold: UUID?
     /// Kept apart from `errorMessage`: the refresh loop runs every 400ms, so
     /// clearing one state for both would erase what a failed add just reported
     /// before anyone could read it.
@@ -2101,11 +2091,6 @@ struct DevotionalAgentWorkspaceView: View {
                         guard launch == terminalID else { return }
                         terminalExitCode = exitCode
                         terminalDidExit(exitStatus: exitCode)
-                        // Only Claude's own session saves Claude's rules; one
-                        // added while another provider's ran is still asked.
-                        if activeProvider == .claude {
-                            Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
-                        }
                     },
                     onDismantle: { [launch = terminalID] in terminalWasTornDown(launch) }
                 )
@@ -3089,19 +3074,12 @@ struct DevotionalAgentWorkspaceView: View {
             return
         }
         // And none begins until the Terminal's CLI has read its settings:
-        // held from here, released if it doesn't open, and by time if it
-        // does, the CLI reading them within moments of starting.
-        KeptAgentChats.holdForTerminal(in: workspaceURL)
+        // held by this launch from here, released if it doesn't open, and
+        // once it does when the CLI shows it has started (its first report),
+        // or after a while for one that reports nothing until asked.
+        let hold = KeptAgentChats.holdForTerminal(in: workspaceURL)
         var opened = false
-        defer { if !opened { KeptAgentChats.releaseTerminalHold(in: workspaceURL) } }
-        // A Claude session still running, being replaced by this launch,
-        // saved its rules as it ran; they are its own, kept before the new
-        // launch is checked, since its exit is no longer heard once the
-        // launch changes. Not one that has already exited: its rules were
-        // kept as it did, and what changed since is someone else's.
-        if activeProvider == .claude, terminalExitCode == nil, !terminalCapture.processExited {
-            await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL)
-        }
+        defer { if !opened { KeptAgentChats.releaseTerminalHold(hold, in: workspaceURL) } }
         // The writing's context written first, so the check is the last
         // thing before the Terminal starts.
         try? await DevotionalAgentWorkspaceStore.writeContext(contextDocument, to: workspaceURL)
@@ -3125,6 +3103,7 @@ struct DevotionalAgentWorkspaceView: View {
             errorMessage = "Lamp didn’t open the Terminal: it couldn’t check all of this writing’s settings (\(unchecked.detail))."
             return
         }
+        AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings, for: workspaceURL)
         if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspaceURL) {
             terminalLaunchCheck = TerminalLaunchCheck(provider: provider, findings: findings)
             return
@@ -3141,6 +3120,9 @@ struct DevotionalAgentWorkspaceView: View {
         terminalExitCode = nil
         terminalID = UUID()
         opened = true
+        terminalHold.map { KeptAgentChats.releaseTerminalHold($0, in: workspaceURL) }
+        terminalHold = hold
+        KeptAgentChats.extendTerminalHold(hold, in: workspaceURL, seconds: 30)
     }
 
     /// Plans a Terminal session that carries on the workspace's conversation —
@@ -3183,6 +3165,12 @@ struct DevotionalAgentWorkspaceView: View {
             workspace: workspace,
             installID: LampInstallIdentity.current()
         ) else { return }
+        // The CLI has started, and so has read its settings: the writing's
+        // chats may go on.
+        if result.integrationReported || result.linkedSessionID != nil, let hold = terminalHold {
+            KeptAgentChats.releaseTerminalHold(hold, in: workspace)
+            terminalHold = nil
+        }
         if result.integrationReported, let provider = terminalCapture.provider {
             AgentTerminalIntegrationMemory.forProvider(provider.wireProvider)?.recordRun()
         }
@@ -3237,11 +3225,6 @@ struct DevotionalAgentWorkspaceView: View {
         // ending means the session has ended.
         guard launch == terminalID, activeProvider != nil else { return }
         if let workspaceURL { collectTerminalTurns(in: workspaceURL) }
-        // A Claude session ended by closing its pane saved its rules as it
-        // ran; its exit is not heard once the pane is gone.
-        if activeProvider == .claude, !terminalCapture.processExited, let workspaceURL {
-            Task { await DevotionalAgentWorkspaceStore.recordTerminalBaseline(in: workspaceURL) }
-        }
         activeProvider = nil
         terminalExitCode = nil
         terminalCapture = TerminalCaptureState()
@@ -3801,10 +3784,15 @@ private struct TerminalLaunchCheckSheet: View {
     let open: () -> Void
 
     var body: some View {
+        // Only permissions saved for Claude: most likely the person's own
+        // "don't ask again", so it reads as a confirmation.
+        let onlyPermissions = check.findings.allSatisfy { $0.detail.hasPrefix(AgentTerminalLaunchCheck.permissionPrefix) }
         VStack(alignment: .leading, spacing: 12) {
-            Text("This writing’s settings hold things Lamp didn’t put there")
+            Text(onlyPermissions ? "Keep the permissions saved for Claude?" : "This writing’s settings hold things Lamp didn’t put there")
                 .font(.headline)
-            Text("\(check.provider.shortName) reads these when the Terminal opens, and an agent working in this writing could have written them. Open only if you added them yourself; Lamp asks again if any of them changes.")
+            Text(onlyPermissions
+                ? "Since this Terminal was last opened, these permissions were saved for Claude in this writing. Keep them if you chose “don’t ask again” for them. An agent working here could also have written them."
+                : "\(check.provider.shortName) reads these when the Terminal opens, and an agent working in this writing could have written them. Open only if you added them yourself; Lamp asks again if any of them changes.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -3826,7 +3814,7 @@ private struct TerminalLaunchCheckSheet: View {
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
             HStack {
                 Spacer()
-                Button("Open Anyway", action: open)
+                Button(onlyPermissions ? "Keep and Open" : "Open Anyway", action: open)
                 Button("Don’t Open", action: cancel)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.lampProminent)

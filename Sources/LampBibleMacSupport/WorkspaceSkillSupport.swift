@@ -166,9 +166,19 @@ public enum WorkspaceSkillStore {
             else { continue }
             let path = url.standardizedFileURL.path
             let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-            entries.append("\(relative):\(hexDigest(of: try Data(contentsOf: url)))")
+            entries.append("\(relative):\(try streamedDigest(of: url))")
         }
         return hexDigest(of: Data(entries.sorted().joined(separator: "\n").utf8))
+    }
+
+    /// A file's digest, read in pieces: a skill folder can hold a large file,
+    /// and this runs as a Terminal opens.
+    private static func streamedDigest(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func hexDigest(of data: Data) -> String {
@@ -561,8 +571,12 @@ public enum WorkspaceSkillStore {
     /// exactly a `name:` and a `description:`.
     public static func isPlainSkill(_ directory: URL) -> Bool {
         var info = stat()
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path), entries == ["SKILL.md"],
+        // A name Lamp would give a skill, and a size Lamp would write: what
+        // is compared is made from the name, and read whole.
+        guard isValidSkillName(directory.lastPathComponent),
+              let entries = try? FileManager.default.contentsOfDirectory(atPath: directory.path), entries == ["SKILL.md"],
               lstat(directory.appendingPathComponent("SKILL.md").path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_size <= 256 * 1024,
               let written = try? Data(contentsOf: directory.appendingPathComponent("SKILL.md")),
               let text = String(data: written, encoding: .utf8)
         else { return false }

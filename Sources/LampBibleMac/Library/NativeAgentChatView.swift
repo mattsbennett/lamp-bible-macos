@@ -2228,25 +2228,42 @@ enum KeptAgentChats {
         turnsInHand[key] = count > 1 ? count - 1 : nil
     }
 
-    /// Writings whose Terminal is starting, until when: no chat begins a
-    /// turn there meanwhile, so the CLI reads the settings Lamp checked
-    /// (`decisions/0032`).
-    private static var heldForTerminal: [String: Date] = [:]
+    /// Writings whose Terminal is starting, each launch's hold until when:
+    /// no chat begins a turn there meanwhile, so the CLI reads the settings
+    /// Lamp checked (`decisions/0032`). Each launch owns its own, so one
+    /// launch giving up leaves another's.
+    private static var heldForTerminal: [String: [UUID: Date]] = [:]
 
+    /// Holds the writing for a launch, for up to `seconds` unless released.
     @MainActor
-    static func holdForTerminal(in workspace: URL, seconds: Double = 15) {
-        heldForTerminal[workspace.standardizedFileURL.path] = Date().addingTimeInterval(seconds)
+    static func holdForTerminal(in workspace: URL, seconds: Double = 120) -> UUID {
+        let token = UUID()
+        heldForTerminal[workspace.standardizedFileURL.path, default: [:]][token] = Date().addingTimeInterval(seconds)
+        return token
     }
 
     @MainActor
-    static func releaseTerminalHold(in workspace: URL) {
-        heldForTerminal[workspace.standardizedFileURL.path] = nil
+    static func extendTerminalHold(_ token: UUID, in workspace: URL, seconds: Double) {
+        let key = workspace.standardizedFileURL.path
+        guard heldForTerminal[key]?[token] != nil else { return }
+        heldForTerminal[key]?[token] = Date().addingTimeInterval(seconds)
+    }
+
+    @MainActor
+    static func releaseTerminalHold(_ token: UUID, in workspace: URL) {
+        let key = workspace.standardizedFileURL.path
+        heldForTerminal[key]?[token] = nil
+        if heldForTerminal[key]?.isEmpty == true { heldForTerminal[key] = nil }
+    }
+
+    @MainActor
+    static func terminalHoldEnds(in workspace: URL) -> Date? {
+        heldForTerminal[workspace.standardizedFileURL.path]?.values.filter { $0 > Date() }.max()
     }
 
     @MainActor
     static func isHeldForTerminal(in workspace: URL) -> Bool {
-        guard let until = heldForTerminal[workspace.standardizedFileURL.path] else { return false }
-        return until > Date()
+        terminalHoldEnds(in: workspace) != nil
     }
 
     /// A turn is being prepared or a reply is arriving on this workspace.
@@ -3021,11 +3038,27 @@ final class NativeAgentChatModel: ObservableObject {
         defer { writingInstructionsFile.map(AgentChatInstructionFiles.remove) }
         // The hook and the rules kept for this writing, in a file of Lamp's,
         // which `--settings` takes as well as JSON.
-        let writingSettingsFile: URL? = channel.flatMap {
-            try? AgentChatInstructionFiles.write(
-                ClaudePermissionHook.settingsJSON(for: $0, allowing: AgentToolAllowRules.rules(for: workspace)),
-                extension: "json"
-            )
+        // Without it Claude would start with neither Lamp's approval hook nor
+        // the writing's rules, so the turn stops and says why.
+        var writingSettingsFile: URL?
+        if let channel {
+            do {
+                writingSettingsFile = try AgentChatInstructionFiles.write(
+                    ClaudePermissionHook.settingsJSON(for: channel, allowing: AgentToolAllowRules.rules(for: workspace)),
+                    extension: "json"
+                )
+            } catch {
+                lines.finish()
+                await absorbing.value
+                return RunOutcome(
+                    result: AgentCLIProcessResult(
+                        exitCode: -1, output: "",
+                        launchError: "Lamp could not write this chat's settings, so it did not start Claude: \(error.localizedDescription)"
+                    ),
+                    proposedSessionID: proposedSessionID,
+                    resumedSessionID: resumedSessionID
+                )
+            }
         }
         defer { writingSettingsFile.map(AgentChatInstructionFiles.remove) }
         let result: AgentCLIProcessResult
@@ -3926,6 +3959,10 @@ struct NativeAgentChatView: View {
             if let queued { model.releaseQueued(queued) } else {
                 submissionError = "The Terminal is starting in this writing. Send this again in a moment."
             }
+            // Tried again once the hold is over: nothing else would drain the
+            // queue, no run having finished.
+            let wait = max(0.2, (KeptAgentChats.terminalHoldEnds(in: workspaceFolder)?.timeIntervalSinceNow ?? 0) + 0.2)
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { drainQueue() }
             return false
         }
         guard !isPreparing else {

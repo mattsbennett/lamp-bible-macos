@@ -83,20 +83,21 @@ struct AgentChatModelTests {
     /// from any pane or the phone (`decisions/0032`).
     @Test func noTurnBeginsWhileTheTerminalStarts() async throws {
         let workspace = try workspace()
-        defer {
-            KeptAgentChats.releaseTerminalHold(in: workspace)
-            try? FileManager.default.removeItem(at: workspace)
-        }
+        defer { try? FileManager.default.removeItem(at: workspace) }
         let model = NativeAgentChatModel(provider: .claude, workspace: workspace, mode: .writing)
         model.load()
-        KeptAgentChats.holdForTerminal(in: workspace)
+        let first = KeptAgentChats.holdForTerminal(in: workspace)
         #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
         #expect(await model.send("Hello", contextualPrompt: "Hello") == false)
         #expect(model.messages.isEmpty && !model.isRunning)
-        KeptAgentChats.releaseTerminalHold(in: workspace)
+        // Two launches each own their hold: one let go leaves the other.
+        let second = KeptAgentChats.holdForTerminal(in: workspace)
+        KeptAgentChats.releaseTerminalHold(first, in: workspace)
+        #expect(KeptAgentChats.isHeldForTerminal(in: workspace))
+        KeptAgentChats.releaseTerminalHold(second, in: workspace)
         #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
-        // And the hold ends by itself.
-        KeptAgentChats.holdForTerminal(in: workspace, seconds: -1)
+        // And a hold ends by itself.
+        _ = KeptAgentChats.holdForTerminal(in: workspace, seconds: -1)
         #expect(!KeptAgentChats.isHeldForTerminal(in: workspace))
     }
 

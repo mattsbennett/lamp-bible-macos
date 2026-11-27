@@ -1090,8 +1090,10 @@ public enum AgentDeclaredWrites {
 /// files a provider reads (`roots`), and counts every entry it does not
 /// recognise: anything but Lamp's own files as it writes them, its skills as
 /// it installs them, and in `.claude/settings.local.json` the settings Claude
-/// writes there itself, with an allow rule recognised only if it was there
-/// when the last Terminal session ended. An allow-list, failing closed: a
+/// writes there itself; an allow rule or extra folder is shown for the person
+/// to keep, never trusted for when it appeared (who wrote a rule can't be told
+/// from when, and five reviews broke every way of guessing it), while a rule
+/// that only restricts passes. An allow-list, failing closed: a
 /// setting no one has seen yet counts. Each counted entry is fingerprinted
 /// by its bytes, and the person's answer holds for exactly those bytes.
 public enum AgentTerminalLaunchCheck {
@@ -1129,8 +1131,7 @@ public enum AgentTerminalLaunchCheck {
     static let shownBytes = 4_000
 
     public static func findings(
-        in workspace: URL, lampServer: LampAgentMCPConfiguration?,
-        bundledSkills: URL?, baseline: [String]?
+        in workspace: URL, lampServer: LampAgentMCPConfiguration?, bundledSkills: URL?
     ) -> [Finding] {
         var found: [Finding] = []
         var counted = 0
@@ -1184,7 +1185,7 @@ public enum AgentTerminalLaunchCheck {
                 }
                 if let lamps = expected[relative], size == lamps.utf8.count, head == Data(lamps.utf8) { return }
                 if relative == ".claude/settings.local.json", size <= Int64(settingsBytes),
-                   let settings = claudeLocalSettings(head, baseline: baseline) {
+                   let settings = claudeLocalSettings(head) {
                     found += settings.map { Finding(path: relative, fingerprint: digest($0.canonical), detail: $0.shown) }
                     return
                 }
@@ -1230,12 +1231,12 @@ public enum AgentTerminalLaunchCheck {
 
     /// The findings in Claude's local settings: each setting Claude does not
     /// write there itself, with its value, and each allow rule or extra
-    /// folder not there when the last Terminal session ended. Nil when the
-    /// file is not a settings object, which is then a finding whole.
+    /// folder, which the person keeps by approving it. Nil when the file is
+    /// not a settings object, which is then a finding whole.
     /// Each with what is shown and what is fingerprinted: the setting's key
     /// and its value as typed JSON, so a string that reads as an object is
     /// not the object.
-    static func claudeLocalSettings(_ data: Data, baseline: [String]?) -> [(shown: String, canonical: String)]? {
+    static func claudeLocalSettings(_ data: Data) -> [(shown: String, canonical: String)]? {
         guard let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         var found: [(shown: String, canonical: String)] = []
         let harmless: Set<String> = ["permissions", "outputStyle", "enabledMcpjsonServers", "disabledMcpjsonServers", "enableAllProjectMcpServers"]
@@ -1250,13 +1251,16 @@ public enum AgentTerminalLaunchCheck {
                 found.append(("the permission setting \(key): \(shown(permissions[key] as Any))",
                               "permission\u{0}\(key)\u{0}\(typed(permissions[key] as Any))"))
             }
-            let known = Set(baseline ?? [])
-            for rule in grants(in: settings) where !known.contains(rule) {
-                found.append(("added outside a Terminal session: \(rule)", "grant\u{0}\(rule)"))
+            for rule in grants(in: settings) {
+                found.append(("\(permissionPrefix)\(rule)", "grant\u{0}\(rule)"))
             }
         }
         return found
     }
+
+    /// How a saved permission reads, which the sheet words as a
+    /// confirmation rather than a warning when every finding is one.
+    public static let permissionPrefix = "a permission saved for Claude: "
 
     /// A value as JSON with its type kept: a string stays a quoted string.
     private static func typed(_ value: Any) -> String {
@@ -1271,24 +1275,6 @@ public enum AgentTerminalLaunchCheck {
         let permissions = settings["permissions"] as? [String: Any] ?? [:]
         return ((permissions["allow"] as? [Any]) ?? []).map { "allow \(shown($0))" }
             + ((permissions["additionalDirectories"] as? [Any]) ?? []).map { "folder \(shown($0))" }
-    }
-
-    /// Read only from a plain file reached through plain folders: a linked
-    /// one would hand Lamp grants from somewhere else to trust.
-    static func grants(inFile file: URL) -> [String] {
-        var folder = file.deletingLastPathComponent()
-        for _ in 0..<2 {
-            var info = stat()
-            if lstat(folder.path, &info) == 0, info.st_mode & S_IFMT != S_IFDIR { return [] }
-            folder = folder.deletingLastPathComponent()
-        }
-        var info = stat()
-        // No larger than the scan parses; one larger is the scan's to report.
-        guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= settingsBytes,
-              let data = try? Data(contentsOf: file),
-              let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        else { return [] }
-        return grants(in: settings)
     }
 
     private static func shown(_ value: Any) -> String {
@@ -1342,9 +1328,6 @@ public enum AgentTerminalLaunchCheck {
     private struct Record: Codable {
         /// Findings the person said to open with.
         var approved: [String] = []
-        /// The allow rules and folders in Claude's local settings when the
-        /// last Terminal session ended.
-        var baseline: [String]?
     }
 
     private static func key(_ workspace: URL) -> String { workspace.standardizedFileURL.path }
@@ -1362,29 +1345,25 @@ public enum AgentTerminalLaunchCheck {
         try JSONEncoder().encode(records).write(to: file, options: .atomic)
     }
 
-    /// The rules counted as Claude's own for this writing. Nil before any is
-    /// kept: the first check takes what is there as its start, since rules
-    /// from before this check have no session end to compare with.
-    public static func baseline(for workspace: URL, in file: URL = stateFile) -> [String]? {
-        load(file)[key(workspace)]?.baseline
-    }
-
-    /// Keeps the rules Claude's local settings hold now as this writing's
-    /// own: as a Terminal session ends, when only it has been writing them,
-    /// and on the first check.
-    public static func recordBaseline(in workspace: URL, file: URL = stateFile) throws {
-        storeLock.lock()
-        defer { storeLock.unlock() }
-        var records = load(file)
-        records[key(workspace), default: Record()].baseline =
-            grants(inFile: workspace.appendingPathComponent(".claude/settings.local.json"))
-        try save(records, to: file)
-    }
-
     /// Whether every finding is one the person already said to open with.
     public static func isApproved(_ findings: [Finding], for workspace: URL, in file: URL = stateFile) -> Bool {
         let approved = Set(load(file)[key(workspace)]?.approved ?? [])
         return findings.allSatisfy { approved.contains($0.id) }
+    }
+
+    /// After a scan that finished, approvals for what is no longer there go,
+    /// so a setting removed and later put back is asked about again.
+    public static func keepApprovals(onlyFor findings: [Finding], for workspace: URL, in file: URL = stateFile) {
+        storeLock.lock()
+        defer { storeLock.unlock() }
+        var records = load(file)
+        guard var record = records[key(workspace)] else { return }
+        let present = Set(findings.map(\.id))
+        let kept = record.approved.filter(present.contains)
+        guard kept != record.approved else { return }
+        record.approved = kept
+        records[key(workspace)] = record
+        try? save(records, to: file)
     }
 
     /// The person said to open with exactly these: replacing what was
