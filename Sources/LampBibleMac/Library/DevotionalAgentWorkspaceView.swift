@@ -2090,7 +2090,10 @@ struct DevotionalAgentWorkspaceView: View {
                 // where it can be shown: another window's pane would show a
                 // Launch button, and Antigravity's has no Terminal.
                 .showsTerminal(ownsLiveTerminal && selectedProvider != .antigravity
-                    ? { sessionModeID = AgentSessionDisplayMode.terminal.rawValue } : nil)
+                    ? {
+                        showsChatForWait = false
+                        sessionModeID = AgentSessionDisplayMode.terminal.rawValue
+                    } : nil)
                 .hiddenByHost(sessionMode != .native)
                 .identityShownByHost()
                 .newChatShownByHost(asked: $newChatAsked) { chatCanStartNew = $0 }

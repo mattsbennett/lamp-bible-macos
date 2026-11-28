@@ -2650,9 +2650,10 @@ enum KeptAgentChats {
     @MainActor
     static func holdQueues(in workspace: URL) {
         for provider in AIProviderCLI.allCases {
-            if let model = existing(provider: provider, workspace: workspace) {
+            if let model = existing(provider: provider, workspace: workspace), model.isLoaded {
                 if model.hasWaitingMessage { model.holdQueue() }
             } else if !AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages.isEmpty {
+                // Not loaded, made or not: its queue is still only on disk.
                 NativeAgentChatModel.keepHold(provider: provider, workspace: workspace)
             }
         }
@@ -2731,6 +2732,8 @@ final class NativeAgentChatModel: ObservableObject {
     private(set) var conversationID: UUID?
     private var conversationStartedAt: Date?
     private var didLoad = false
+    /// Whether what is on disk has been read in yet.
+    var isLoaded: Bool { didLoad }
     /// The transcript as this chat last read or wrote it. Others write it too —
     /// sync bringing in another Mac's turns, a Terminal session's captured ones —
     /// and a difference from this is how their changes are noticed rather than
@@ -4137,11 +4140,15 @@ final class NativeAgentChatModel: ObservableObject {
         try? AgentChatQueueStore.save(queue, providerID: provider.rawValue, in: workspace)
     }
 
+    /// The new message's id, only once it is saved: one kept in memory alone
+    /// would be lost at a quit, so the caller keeps the words itself then.
     @discardableResult
     func enqueue(_ text: String) -> UUID? {
         let before = Set(queued.map(\.id))
         changeQueue { [conversationID] in $0.add(text, conversation: conversationID) }
-        return queued.first { !before.contains($0.id) }?.id
+        guard let id = queued.first(where: { !before.contains($0.id) })?.id else { return nil }
+        let saved = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages.contains { $0.id == id }
+        return saved ? id : nil
     }
 
     /// Whether this waiting message still belongs to the conversation it
@@ -4554,7 +4561,8 @@ struct NativeAgentChatView: View {
                         var kept = queued
                         // Not written anywhere for a writing reached through a
                         // link out of the library: it stays in the field.
-                        if kept == nil, conversation == model.conversationID, !paths.contains("..") {
+                        if kept == nil, conversation == model.conversationID, !paths.contains(".."),
+                           AgentTerminalLaunchCheck.isInsideLibrary(workspaceFolder) {
                             kept = model.enqueue(prompt)
                         }
                         // Held only for a message still this chat's, waiting:

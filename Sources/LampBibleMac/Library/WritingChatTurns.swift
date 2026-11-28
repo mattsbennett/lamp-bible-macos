@@ -70,7 +70,7 @@ enum WritingChatTurns {
         guard AgentTerminalLaunchCheck.isInsideLibrary(workspace) else {
             return .refused(
                 Self.openCodeRefusal([.init(path: "..", fingerprint: "incomplete", detail: "")]),
-                code: LampAgentRemoteFailure.writingSettings
+                paths: [".."], code: LampAgentRemoteFailure.writingSettings
             )
         }
         let lampServer = mcpConfiguration(forWorkspace: workspace)

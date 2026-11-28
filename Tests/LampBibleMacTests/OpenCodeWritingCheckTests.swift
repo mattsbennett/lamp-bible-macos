@@ -379,4 +379,17 @@ struct OpenCodeWritingCheckTests {
         after.load()
         #expect(!after.queueHeld)
     }
+
+    /// A chat made but not loaded yet is held from what is on disk too.
+    @Test func aChatMadeButNotLoadedIsHeldFromDisk() throws {
+        let (_, workspace) = try writing()
+        var queue = AgentChatQueue()
+        queue.add("Later", conversation: nil)
+        try AgentChatQueueStore.save(queue, providerID: AIProviderCLI.codex.rawValue, in: workspace)
+        let model = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        defer { KeptAgentChats.drop(model) }
+        KeptAgentChats.holdQueues(in: workspace)
+        model.load()
+        #expect(model.queueHeld)
+    }
 }
