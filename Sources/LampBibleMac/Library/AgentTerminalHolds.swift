@@ -155,8 +155,11 @@ final class AgentTerminalHolds: ObservableObject {
             case .running(let pid, let began):
                 endAsked.insert(id)
                 if Self.isAlive(pid, began: began) { kill(pid, SIGTERM) }
-                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-                    if Self.isAlive(pid, began: began) { kill(pid, SIGKILL) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                    // Killed only as the same process, known by its start
+                    // time, and still this launch's: a pid can be reused.
+                    guard began != 0, self?.launches[id] != nil, Self.isAlive(pid, began: began) else { return }
+                    kill(pid, SIGKILL)
                 }
             }
         }

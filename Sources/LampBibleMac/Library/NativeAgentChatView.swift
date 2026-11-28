@@ -2729,7 +2729,17 @@ final class NativeAgentChatModel: ObservableObject {
     private let runner = AgentCLIProcessRunner()
     private let installID = LampInstallIdentity.current()
     private var sessionID: String?
-    private(set) var conversationID: UUID?
+    /// The conversation, whose commands allowed for the chat go when it is
+    /// replaced, by New Chat or by another Mac's (`decisions/0044`): one that
+    /// comes back later through sync doesn't bring them back.
+    private(set) var conversationID: UUID? {
+        didSet {
+            guard oldValue != conversationID, let oldValue,
+                  let key = AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: oldValue)
+            else { return }
+            AgentChatCommandGrants.shared.removeAll(for: key)
+        }
+    }
     private var conversationStartedAt: Date?
     private var didLoad = false
     /// Whether what is on disk has been read in yet.

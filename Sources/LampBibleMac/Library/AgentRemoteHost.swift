@@ -667,8 +667,8 @@ final class AgentRemoteHost: ObservableObject {
                 })
             case .clear:
                 telling.told = false
+                AgentTurnPush.clearWaiting(deviceID: device, chatID: chat.id, waitID: telling.current)
                 telling.current = nil
-                AgentTurnPush.clearWaiting(deviceID: device, chatID: chat.id)
             case .none:
                 break
             }
@@ -695,7 +695,7 @@ final class AgentRemoteHost: ObservableObject {
         func end() {
             watch?.cancel()
             watch = nil
-            if told { AgentTurnPush.clearWaiting(deviceID: deviceID, chatID: chatID) }
+            if told { AgentTurnPush.clearWaiting(deviceID: deviceID, chatID: chatID, waitID: current) }
             told = false
             current = nil
         }
@@ -1268,6 +1268,8 @@ final class AgentRemoteHost: ObservableObject {
         // checks it (`decisions/0043`): anything not Lamp's is named, and
         // nothing is asked.
         if open.model.provider == .openCode, case .writing = open.chat {
+            // Before the check writes Lamp's file: the device may no longer act.
+            guard !Task.isCancelled, mayAct(peer) else { return }
             if case .refused(let words, _, let code) = await WritingChatTurns.checkOpenCode(in: open.workspace) {
                 // Each refusal under the code a phone reads it rightly by:
                 // settings in the way, a Terminal open, another chat busy.

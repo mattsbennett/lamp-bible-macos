@@ -215,7 +215,7 @@ enum AgentTurnPush {
         // still has it deleted on the next launch; kept from the list's
         // retries while it lasts in this one.
         let name = waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id)
-        activeWaits.insert(name)
+        activeWaits[name, default: []].insert(waiting.waitID)
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let previous = tail
         tail = Task.detached(priority: .utility) {
@@ -241,10 +241,15 @@ enum AgentTurnPush {
     /// so a record left behind keeps an alert up for a wait long over: a
     /// delete that fails, or is cut short by a quit, is kept on a list and
     /// tried again with the next push and as remote chats start.
-    static func clearWaiting(deviceID: String, chatID: String) {
+    ///
+    /// `waitID`: the wait that ended. Another still lasting under the same
+    /// name (a second turn of the phone's in the writing) keeps the record.
+    static func clearWaiting(deviceID: String, chatID: String, waitID: UUID?) {
         guard isEntitled else { return }
         let name = waitRecordName(deviceID: deviceID, chatID: chatID)
-        activeWaits.remove(name)
+        if let waitID { activeWaits[name]?.remove(waitID) }
+        if activeWaits[name]?.isEmpty == true { activeWaits[name] = nil }
+        guard activeWaits[name] == nil else { return }
         PendingClears.add(name)
         clearPending()
     }
@@ -257,7 +262,7 @@ enum AgentTurnPush {
         let previous = tail
         tail = Task.detached(priority: .utility) {
             await previous?.value
-            let active = await MainActor.run { activeWaits }
+            let active = await MainActor.run { Set(activeWaits.keys) }
             let names = PendingClears.names().filter { !active.contains($0) }
             guard !names.isEmpty else { return }
             // In batches CloudKit takes, so a backlog left by a long time
@@ -285,7 +290,7 @@ enum AgentTurnPush {
 
     /// Waits told in this launch and not over, whose records the list's
     /// retries leave alone.
-    private static var activeWaits: Set<String> = []
+    private static var activeWaits: [String: Set<UUID>] = [:]
 
     /// The wait records still to delete, kept across launches.
     enum PendingClears {
