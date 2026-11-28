@@ -3869,14 +3869,11 @@ final class PaneLifetime {
 struct TerminalLaunchCheck: Equatable, Identifiable {
     let provider: AIProviderCLI
     let findings: [AgentTerminalLaunchCheck.Finding]
-    /// Asked before a chat's message is sent (OpenCode's, `decisions/0043`),
-    /// not before a Terminal opens.
-    var forChat = false
     var id: String { provider.rawValue + findings.map(\.id).joined() }
 }
 
 /// Each finding whole, path and content, scrollable; Don't Open the default.
-struct TerminalLaunchCheckSheet: View {
+private struct TerminalLaunchCheckSheet: View {
     let check: TerminalLaunchCheck
     let cancel: () -> Void
     let open: () -> Void
@@ -3890,8 +3887,6 @@ struct TerminalLaunchCheckSheet: View {
                 .font(.headline)
             Text(onlyPermissions
                 ? "Since this Terminal was last opened, these permissions were saved for Claude in this writing. Keep them if you chose “don’t ask again” for them. An agent working here could also have written them."
-                : check.forChat
-                ? "\(check.provider.shortName) reads these as it answers, and an agent working in this writing could have written them. Send only if you added them yourself; Lamp asks again if any of them changes."
                 : "\(check.provider.shortName) reads these when the Terminal opens, and an agent working in this writing could have written them. Open only if you added them yourself; Lamp asks again if any of them changes.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -3914,8 +3909,8 @@ struct TerminalLaunchCheckSheet: View {
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
             HStack {
                 Spacer()
-                Button(onlyPermissions ? "Keep and Open" : check.forChat ? "Send Anyway" : "Open Anyway", action: open)
-                Button(check.forChat ? "Don’t Send" : "Don’t Open", action: cancel)
+                Button(onlyPermissions ? "Keep and Open" : "Open Anyway", action: open)
+                Button("Don’t Open", action: cancel)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.lampProminent)
             }

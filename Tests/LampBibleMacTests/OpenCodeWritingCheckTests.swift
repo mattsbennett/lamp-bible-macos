@@ -62,11 +62,55 @@ struct OpenCodeWritingCheckTests {
         try write("export default {}", to: workspace.appendingPathComponent(".opencode/plugin/x.js"))
         // Claude's settings are Claude's: not asked about here.
         try write("{\"permissions\":{\"allow\":[\"Bash(make)\"]}}", to: workspace.appendingPathComponent(".claude/settings.local.json"))
-        guard case .unapproved(let findings) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn stopped")
             return
         }
-        #expect(findings.map(\.path).sorted() == [".opencode/plugin/x.js", "opencode.jsonc"])
+        #expect(paths.sorted() == [".opencode/plugin/x.js", "opencode.jsonc"])
+        #expect(words.contains("opencode.jsonc") && words.contains("~/.config/opencode"))
+    }
+
+    /// Nothing of the writing's is approved for an OpenCode chat, a setting
+    /// whose code is elsewhere (Codex's round 5) and an empty one alike.
+    @Test func noSettingOfTheWritingsIsTakenForOpenCodeHoweverSmall() async throws {
+        for body in [#"{"plugin":["/tmp/elsewhere/plugin.js"]}"#, "{}"] {
+            let (_, workspace) = try writing()
+            try write(body, to: workspace.appendingPathComponent("opencode.jsonc"))
+            guard case .refused(_, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+                Issue.record("expected \(body) refused")
+                continue
+            }
+            #expect(paths == ["opencode.jsonc"])
+        }
+    }
+
+    /// A skill as plain as Lamp writes one passes; one carrying a script
+    /// beside its words doesn't.
+    @Test func aPlainSkillPassesAndOneWithAScriptDoesNot() async throws {
+        let (library, workspace) = try writing()
+        // As the writing's pane adds one: saved in the library, enabled here.
+        try await DevotionalAgentWorkspaceStore.writeSkill(
+            name: "notes", description: "Notes.", instructions: "Words.", to: workspace, libraryRootURL: library
+        )
+        #expect(await WritingChatTurns.checkOpenCode(in: workspace) == .clear)
+        try write("echo hi", to: workspace.appendingPathComponent(".claude/skills/notes/run.sh"))
+        guard case .refused(_, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            Issue.record("expected the turn refused")
+            return
+        }
+        #expect(paths.contains { $0.hasPrefix(".claude/skills/notes") })
+    }
+
+    /// Lamp's skills as Lamp installs them pass, a stale or retired copy
+    /// brought up to date by the install a writing's preparation runs.
+    @Test func lampsOwnSkillsPassOnceInstalled() async throws {
+        let catalog = try #require(LampBundledSkills.catalogURL)
+        let (_, workspace) = try writing()
+        let names = WorkspaceSkillStore.bundledSkillNames
+        let stale = workspace.appendingPathComponent(".claude/skills/\(names.sorted()[0])/SKILL.md")
+        try write("an older Lamp's words", to: stale)
+        try WorkspaceSkillStore.installBundledSkills(named: names, from: catalog, intoSkillDirectoriesOf: workspace)
+        #expect(await WritingChatTurns.checkOpenCode(in: workspace) == .clear)
     }
 
     @Test func aLinkWhereTheSettingsShouldBeStopsTheTurn() async throws {
@@ -77,7 +121,7 @@ struct OpenCodeWritingCheckTests {
         )
         // Refused, not put to the person: what a link leads to can change
         // unasked, and OpenCode rereads it at every request.
-        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
@@ -143,7 +187,7 @@ struct OpenCodeWritingCheckTests {
     @Test func aClaudeFolderAboveTheWritingStopsTheTurn() async throws {
         let (library, workspace) = try writing()
         try write("x", to: library.appendingPathComponent("AgentWorkspaces/.claude/skills/x/SKILL.md"))
-        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
@@ -253,7 +297,7 @@ struct OpenCodeWritingCheckTests {
     @Test func aLongPluginInTheWritingStopsTheTurn() async throws {
         let (_, workspace) = try writing()
         try write(String(repeating: "x", count: 5_000), to: workspace.appendingPathComponent(".opencode/plugin/big.js"))
-        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }

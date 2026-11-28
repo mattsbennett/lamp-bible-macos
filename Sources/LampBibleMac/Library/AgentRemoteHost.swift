@@ -1265,21 +1265,11 @@ final class AgentRemoteHost: ObservableObject {
             prompt = written
         }
         // What OpenCode reads in the writing, checked last, as a window
-        // checks it (`decisions/0043`): what needs an answer is answered on
-        // the Mac.
+        // checks it (`decisions/0043`): anything not Lamp's is named, and
+        // nothing is asked.
         if open.model.provider == .openCode, case .writing = open.chat {
-            switch await WritingChatTurns.checkOpenCode(in: open.workspace) {
-            case .clear:
-                break
-            case .refused(let words):
+            if case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: open.workspace) {
                 send(.failed(LampAgentRemoteFailure.needsSetup, words, requestID: requestID, chatID: open.id), to: peer)
-                return
-            case .unapproved:
-                send(.failed(
-                    LampAgentRemoteFailure.needsSetup,
-                    "This writing's settings hold things for OpenCode that Lamp didn't put there. Look at them by sending from the writing on your Mac.",
-                    requestID: requestID, chatID: open.id
-                ), to: peer)
                 return
             }
         }

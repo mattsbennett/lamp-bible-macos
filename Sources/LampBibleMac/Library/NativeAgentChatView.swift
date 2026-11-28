@@ -2307,18 +2307,6 @@ private struct CopiedConversationRow: View {
     }
 }
 
-/// A message held while the person is asked about what the writing's
-/// settings hold for OpenCode (`WritingChatTurns.checkOpenCode`).
-struct OpenCodeChatCheck: Identifiable {
-    let prompt: String
-    /// The queued message it was, which goes back to waiting meanwhile.
-    let queued: UUID?
-    /// The conversation it was written in, the only one it is sent to.
-    let conversation: UUID?
-    let findings: [AgentTerminalLaunchCheck.Finding]
-    var id: String { (queued?.uuidString ?? prompt) + findings.map(\.id).joined() }
-}
-
 /// Why a message wasn't sent, said where the chat says it.
 struct AgentChatSendRefusal: LocalizedError {
     let message: String
@@ -4385,9 +4373,9 @@ struct NativeAgentChatView: View {
     /// Shows the writing's Terminal, where the host has one.
     private var showTerminal: (() -> Void)?
     @State private var draft = ""
-    /// What an OpenCode writing turn found in the writing's settings, put to
-    /// the person before it is sent again.
-    @State private var openCodeCheck: OpenCodeChatCheck?
+    /// The writing whose settings stopped an OpenCode turn, for Show in
+    /// Finder beside the words.
+    @State private var refusedSettingsFolder: URL?
     @State private var scrollToBottom = false
     @State private var connectionState = AIProviderConnectionState.checking
     @State private var authenticationProvider: AIProviderCLI?
@@ -4513,27 +4501,20 @@ struct NativeAgentChatView: View {
                 // The last thing before the send, which runs with nothing
                 // awaited from its own check of what was checked here.
                 if provider == .openCode, model.isWritingChat {
-                    let check = await WritingChatTurns.checkOpenCode(in: workspaceFolder)
-                    if check != .clear {
+                    if case .refused(let words, let paths) = await WritingChatTurns.checkOpenCode(in: workspaceFolder) {
                         // Kept on the chat, held, not in this pane's field,
-                        // which may be gone by now: Send Them, or Send Anyway
-                        // below, sends it on.
+                        // which may be gone by now: Send Them sends it on.
                         var kept = queued
                         if kept == nil, conversation == model.conversationID {
                             kept = model.enqueue(prompt)
                         }
                         model.holdQueue()
-                        if case .unapproved(let findings) = check {
-                            openCodeCheck = OpenCodeChatCheck(
-                                prompt: prompt, queued: kept, conversation: conversation, findings: findings
-                            )
-                        }
-                        let words = if case .refused(let words) = check { words }
-                            else { "OpenCode wasn’t started: this writing’s settings hold things Lamp didn’t put there." }
+                        refusedSettingsFolder = paths.isEmpty ? nil : workspaceFolder
                         throw AgentChatSendRefusal(message: words, kept: kept != nil)
                     }
                 }
                 submissionError = nil
+                refusedSettingsFolder = nil
                 isPreparing = false
                 let taken = await model.send(
                     prompt, contextualPrompt: contextualPrompt,
@@ -4604,6 +4585,12 @@ struct NativeAgentChatView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
+                    if let refusedSettingsFolder, submissionError != nil {
+                        Button("Show in Finder", systemImage: "folder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([refusedSettingsFolder])
+                        }
+                        .buttonStyle(.lampSecondary)
+                    }
                     if model.needsProviderSetup {
                         Button("Set Up \(provider.shortName) in Terminal", systemImage: "terminal") {
                             terminalRequest = AIProviderTerminalRequest(
@@ -4870,54 +4857,6 @@ struct NativeAgentChatView: View {
             Task { await refreshConnectionState() }
         }) { request in
             AIProviderAuthenticationTerminal(request: request)
-        }
-        .sheet(item: $openCodeCheck) { check in
-            TerminalLaunchCheckSheet(
-                check: TerminalLaunchCheck(provider: provider, findings: check.findings, forChat: true)
-            ) {
-                openCodeCheck = nil
-                // Not sent, and not left to go with the next Send: back in
-                // the field, after whatever is being written there.
-                // Its words as they are now: another window may have edited it.
-                if let queued = check.queued, let waiting = model.queued.first(where: { $0.id == queued }) {
-                    model.removeQueued(queued)
-                    // Left waiting if it couldn't be taken off (it is being sent).
-                    guard !model.queued.contains(where: { $0.id == queued }) else { return }
-                    let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    draft = typed.isEmpty ? waiting.text : draft + "\n\n" + waiting.text
-                }
-            } open: {
-                openCodeCheck = nil
-                do {
-                    try AgentTerminalLaunchCheck.approve(check.findings, for: workspaceFolder)
-                } catch {
-                    submissionError = "Lamp couldn’t keep your answer, so it didn’t send the message: \(error.localizedDescription)"
-                    return
-                }
-                // Only into the conversation it was written in, and only the
-                // message it was: another may have taken its place meanwhile.
-                guard model.conversationID == check.conversation else {
-                    submissionError = "That message was not sent: the conversation changed while you were asked."
-                    return
-                }
-                // Checked again as it goes: what changed while this was up
-                // is asked about afresh.
-                if let queued = check.queued {
-                    guard model.queued.contains(where: { $0.id == queued }) else { return }
-                    // That message, wherever it waits: brought to the front.
-                    while model.queued.first?.id != queued, model.queued.contains(where: { $0.id == queued }) {
-                        let before = model.queued.map(\.id)
-                        model.sendQueuedSooner(queued)
-                        if model.queued.map(\.id) == before { break }
-                    }
-                    guard model.queued.first?.id == queued else { return }
-                    model.releaseQueue()
-                    drainQueue()
-                } else if startSending(check.prompt), draft == check.prompt {
-                    // Cleared only once it is taken, as the composer does.
-                    draft = ""
-                }
-            }
         }
         .confirmationDialog(
             "Undo this turn?",

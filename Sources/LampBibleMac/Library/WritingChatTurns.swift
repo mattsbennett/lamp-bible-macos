@@ -22,23 +22,26 @@ enum WritingChatTurns {
     /// (`checkOpenCode`).
     enum OpenCodeCheck: Equatable {
         case clear
-        /// Settings Lamp can't vouch for, not yet approved.
-        case unapproved([AgentTerminalLaunchCheck.Finding])
-        /// It couldn't check, or couldn't put Lamp's own files back.
-        case refused(String)
+        /// Not started, and why. `paths`: settings of the writing's that
+        /// Lamp didn't put there, for the person to look at.
+        case refused(String, paths: [String] = [])
     }
 
-    /// Checks a writing's settings before an OpenCode turn, as before a
-    /// Terminal opens (`decisions/0043`). OpenCode reads its project settings
-    /// from the writing's folder and every folder above it, again at each
-    /// request, and documents no way to be told not to; another provider's
-    /// agent in the writing could have written them. Lamp's own files are
-    /// written again whole, then what OpenCode reads is scanned, and anything
-    /// Lamp can't vouch for is put to the person; the answers are the
-    /// Terminal's, held per writing by the same fingerprints.
+    /// Checks a writing before an OpenCode turn (`decisions/0043`): an
+    /// OpenCode writing chat starts only from Lamp's settings and the
+    /// person's own (`~/.config/opencode`), never the writing's. OpenCode
+    /// reads its project settings from the writing's folder and every folder
+    /// above it, again at every request, and documents no way to be told not
+    /// to; another provider's agent in the writing could have written them,
+    /// and a setting is mostly a pointer (a plugin, an instruction file, a
+    /// command), so no approval of its bytes binds what it runs. Lamp's own
+    /// file is written again whole, then anything else OpenCode would read
+    /// stops the turn, named. Nothing is asked and no answer is kept; the
+    /// Terminal, which asks, is the way to use such settings.
     ///
-    /// Clear, it is noted against the turns begun so far, and the chat's
-    /// send checks that nothing began since (`KeptAgentChats.takeOpenCodeCheck`).
+    /// Clear, it is noted against the turns begun as it began, and the
+    /// chat's send checks that nothing began since
+    /// (`KeptAgentChats.takeOpenCodeCheck`).
     static func checkOpenCode(in workspace: URL) async -> OpenCodeCheck {
         // Counted before anything is looked at, so a turn begun while the
         // check runs makes it stale.
@@ -67,30 +70,18 @@ enum WritingChatTurns {
             AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
         }.value
         let findings = scanned.findings.filter(AgentTerminalLaunchCheck.openCodeReads) + above
-        // A link is fingerprinted by where it points, and what it leads to can
-        // change unasked, while OpenCode rereads it at every request: one in
-        // what OpenCode reads stops the turn rather than be approved.
-        if let link = findings.first(where: \.isLink) {
-            return .refused("Lamp didn’t start OpenCode: \(link.path) in this writing is a link, which Lamp can’t check for OpenCode. Replace it with the file itself.")
-        }
-        // Approved only as shown: a file the sheet could show only by its
-        // size can't be looked at there, so it stops the turn.
-        if let unshown = findings.first(where: \.isShownBySize) {
-            return .refused("Lamp didn’t start OpenCode: \(unshown.path) in this writing is too long to show whole, or isn’t text, so it can’t be checked here.")
-        }
-        if let unchecked = findings.first(where: \.isIncomplete) {
-            return .refused("Lamp didn’t start OpenCode: it couldn’t check all of what OpenCode reads in this writing (\(unchecked.detail)).")
-        }
-        // Answers for what this check looked at and found gone are let go, so
-        // a setting removed and put back is asked about again.
-        AgentTerminalLaunchCheck.keepApprovals(onlyFor: findings, for: workspace, inScope: { path in
-            path.hasPrefix("../") || AgentTerminalLaunchCheck.openCodeScope(path)
-        })
-        if !findings.isEmpty, !AgentTerminalLaunchCheck.isApproved(findings, for: workspace) {
-            return .unapproved(AgentTerminalLaunchCheck.unapproved(findings, for: workspace))
-        }
+        guard findings.isEmpty else { return .refused(Self.openCodeRefusal(findings), paths: findings.map(\.path)) }
         KeptAgentChats.noteOpenCodeChecked(in: workspace, at: generation)
         return .clear
+    }
+
+    /// Why an OpenCode turn didn't start, naming what is in the way.
+    nonisolated static func openCodeRefusal(_ findings: [AgentTerminalLaunchCheck.Finding]) -> String {
+        let paths = Array(NSOrderedSet(array: findings.map(\.path))) as? [String] ?? findings.map(\.path)
+        let named = paths.prefix(5).joined(separator: ", ") + (paths.count > 5 ? ", and \(paths.count - 5) more" : "")
+        return "OpenCode wasn’t started: this writing holds settings for OpenCode that Lamp didn’t put there (\(named)). "
+            + "OpenCode chats start from Lamp’s settings and your own in ~/.config/opencode. "
+            + "Remove these from the writing’s folder, or use the Terminal, which asks about them."
     }
 
     /// The writing's workspace, set up for an agent and holding the writing
