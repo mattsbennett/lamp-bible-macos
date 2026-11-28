@@ -1268,8 +1268,11 @@ final class AgentRemoteHost: ObservableObject {
         // checks it (`decisions/0043`): anything not Lamp's is named, and
         // nothing is asked.
         if open.model.provider == .openCode, case .writing = open.chat {
-            if case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: open.workspace) {
-                send(.failed(LampAgentRemoteFailure.needsSetup, words, requestID: requestID, chatID: open.id), to: peer)
+            if case .refused(let words, let paths) = await WritingChatTurns.checkOpenCode(in: open.workspace) {
+                // A code of its own where settings are in the way: a phone that
+                // doesn't know it shows the Mac's words, which name them.
+                let code = paths.isEmpty ? LampAgentRemoteFailure.needsSetup : LampAgentRemoteFailure.writingSettings
+                send(.failed(code, words, requestID: requestID, chatID: open.id), to: peer)
                 return
             }
         }

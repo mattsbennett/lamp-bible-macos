@@ -3252,11 +3252,21 @@ final class NativeAgentChatModel: ObservableObject {
     }
 
     /// Lets messages held back after a failure go, as sending one does.
-    func releaseQueue() { queueHeld = false }
+    func releaseQueue() {
+        queueHeld = false
+        heldForTheirWord = false
+    }
+
+    /// Held by Lamp for the person's word (a Claude Terminal, a refused
+    /// check), which no turn's end lets go: only their Send does.
+    private var heldForTheirWord = false
 
     /// Holds the waiting messages until the person sends, as a failure does:
     /// a Claude Terminal held them (`AgentTerminalHolds`).
-    func holdQueue() { if !queueHeld { queueHeld = true } }
+    func holdQueue() {
+        heldForTheirWord = true
+        if !queueHeld { queueHeld = true }
+    }
 
     /// Why Lamp, rather than the person, stopped the running reply.
     private var stoppedByLamp: String?
@@ -3835,7 +3845,7 @@ final class NativeAgentChatModel: ObservableObject {
             // A reply that began and then failed — a lapsed sign-in, a spent
             // budget, a crash — is still a failed run, and what waits behind
             // it would fail the same way.
-            queueHeld = result.exitCode != 0 || summary.failure != nil
+            queueHeld = heldForTheirWord || result.exitCode != 0 || summary.failure != nil
             appendAgentMarkdown(reply)
         case .stopped(let partialReply):
             if !partialReply.isEmpty { appendAgentMarkdown(partialReply) }
@@ -4373,9 +4383,9 @@ struct NativeAgentChatView: View {
     /// Shows the writing's Terminal, where the host has one.
     private var showTerminal: (() -> Void)?
     @State private var draft = ""
-    /// The writing whose settings stopped an OpenCode turn, for Show in
-    /// Finder beside the words.
-    @State private var refusedSettingsFolder: URL?
+    /// The settings that stopped an OpenCode turn, for Show in Finder beside
+    /// the words.
+    @State private var refusedSettings: [URL] = []
     @State private var scrollToBottom = false
     @State private var connectionState = AIProviderConnectionState.checking
     @State private var authenticationProvider: AIProviderCLI?
@@ -4509,12 +4519,14 @@ struct NativeAgentChatView: View {
                             kept = model.enqueue(prompt)
                         }
                         model.holdQueue()
-                        refusedSettingsFolder = paths.isEmpty ? nil : workspaceFolder
+                        refusedSettings = paths.prefix(5).map {
+                            workspaceFolder.appendingPathComponent($0).standardizedFileURL
+                        }
                         throw AgentChatSendRefusal(message: words, kept: kept != nil)
                     }
                 }
                 submissionError = nil
-                refusedSettingsFolder = nil
+                refusedSettings = []
                 isPreparing = false
                 let taken = await model.send(
                     prompt, contextualPrompt: contextualPrompt,
@@ -4548,7 +4560,14 @@ struct NativeAgentChatView: View {
                             ? "That message was not sent: Claude is running in this writing’s Terminal."
                             : model.errorMessage != nil ? nil
                             : "That message was not sent: the conversation changed while it was being prepared."
-                        if draft.isEmpty { draft = prompt }
+                        // Refused with a reason, in the conversation it was
+                        // written in: kept on the chat, held, as a refused
+                        // check keeps it, not in a field that may go.
+                        if model.errorMessage != nil, conversation == model.conversationID, model.enqueue(prompt) != nil {
+                            model.holdQueue()
+                        } else if draft.isEmpty {
+                            draft = prompt
+                        }
                     }
                 }
                 scrollToBottom = true
@@ -4585,9 +4604,9 @@ struct NativeAgentChatView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
-                    if let refusedSettingsFolder, submissionError != nil {
+                    if !refusedSettings.isEmpty, submissionError != nil {
                         Button("Show in Finder", systemImage: "folder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([refusedSettingsFolder])
+                            NSWorkspace.shared.activateFileViewerSelecting(refusedSettings)
                         }
                         .buttonStyle(.lampSecondary)
                     }

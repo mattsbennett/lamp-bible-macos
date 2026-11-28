@@ -276,20 +276,36 @@ struct OpenCodeWritingCheckTests {
         #expect(found.count == 1 && found[0].isIncomplete)
     }
 
-    /// The folders above where OpenCode runs, with a linked parent resolved.
+    /// The folders above where OpenCode runs, a linked parent resolved, all
+    /// the way up to the library however deep the link leads; a writing that
+    /// resolves outside the library can't be bounded, and stops the turn.
     @Test func theFoldersAboveAreFoundThroughALinkedParent() throws {
-        let (library, workspace) = try writing()
-        let elsewhere = library.deletingLastPathComponent().appendingPathComponent("Elsewhere/Writing", isDirectory: true)
-        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
-        try write("{}", to: elsewhere.deletingLastPathComponent().appendingPathComponent("opencode.json"))
-        let real = elsewhere.appendingPathComponent("w", isDirectory: true)
-        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
-        // AgentWorkspaces/Writing a link to Elsewhere/Writing.
+        let (library, _) = try writing()
+        // AgentWorkspaces/Linked leading deeper in: Library/Deep/Down/Writing.
+        let deep = library.appendingPathComponent("Deep/Down/Writing", isDirectory: true)
+        try FileManager.default.createDirectory(at: deep.appendingPathComponent("w"), withIntermediateDirectories: true)
+        // In the library itself, four folders up from the resolved writing.
+        try write("{}", to: library.appendingPathComponent("opencode.json"))
         let linked = library.appendingPathComponent("AgentWorkspaces/Linked", isDirectory: true)
-        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: elsewhere)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: deep)
         let found = AgentTerminalLaunchCheck.openCodeAncestorFindings(of: linked.appendingPathComponent("w"))
-        #expect(found.map(\.path).contains("../../opencode.json"))
-        _ = workspace
+        #expect(found.map(\.path).contains("../../../../opencode.json"))
+        // Leading out of the library.
+        let outside = library.deletingLastPathComponent().appendingPathComponent("Outside/Writing", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("w"), withIntermediateDirectories: true)
+        let away = library.appendingPathComponent("AgentWorkspaces/Away", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: away, withDestinationURL: outside)
+        let refused = AgentTerminalLaunchCheck.openCodeAncestorFindings(of: away.appendingPathComponent("w"))
+        #expect(refused.count == 1 && refused[0].isIncomplete)
+    }
+
+    /// Settings above the writing aren't sent to the Terminal, which doesn't
+    /// look there.
+    @Test func settingsAboveAreNotSentToTheTerminal() {
+        let mine = AgentTerminalLaunchCheck.Finding(path: "opencode.jsonc", fingerprint: "f", detail: "")
+        let above = AgentTerminalLaunchCheck.Finding(path: "../../../opencode.json", fingerprint: "f", detail: "")
+        #expect(WritingChatTurns.openCodeRefusal([mine]).contains("Terminal"))
+        #expect(!WritingChatTurns.openCodeRefusal([mine, above]).contains("Terminal"))
     }
 
     /// A file in the writing the sheet could show only by its size stops the

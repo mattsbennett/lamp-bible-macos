@@ -79,9 +79,13 @@ enum WritingChatTurns {
     nonisolated static func openCodeRefusal(_ findings: [AgentTerminalLaunchCheck.Finding]) -> String {
         let paths = Array(NSOrderedSet(array: findings.map(\.path))) as? [String] ?? findings.map(\.path)
         let named = paths.prefix(5).joined(separator: ", ") + (paths.count > 5 ? ", and \(paths.count - 5) more" : "")
+        // The Terminal asks about what is in the writing, not above it.
+        let above = paths.contains { $0.hasPrefix("../") }
         return "OpenCode wasn’t started: this writing holds settings for OpenCode that Lamp didn’t put there (\(named)). "
             + "OpenCode chats start from Lamp’s settings and your own in ~/.config/opencode. "
-            + "Remove these from the writing’s folder, or use the Terminal, which asks about them."
+            + (above
+                ? "Remove these: those above the writing are in Lamp’s library folder, where only Lamp’s files belong."
+                : "Remove these from the writing’s folder, or use the Terminal, which asks about them.")
     }
 
     /// The writing's workspace, set up for an agent and holding the writing

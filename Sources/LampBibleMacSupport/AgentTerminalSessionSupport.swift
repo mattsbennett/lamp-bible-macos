@@ -1324,7 +1324,14 @@ public enum AgentTerminalLaunchCheck {
         // otherwise lead the walk up folders OpenCode never looks in.
         var folder = workspace.resolvingSymlinksInPath().standardizedFileURL
         var prefix = ""
-        for _ in 0..<3 {
+        // Up to the library, resolved, however deep a linked parent puts the
+        // writing in it; a writing that resolves outside it can't be bounded.
+        let library = workspace.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        guard folder.path.hasPrefix(library + "/") else {
+            return [Finding(path: "..", fingerprint: incomplete, detail: "the writing's folder isn't inside Lamp's library")]
+        }
+        while folder.path != library, folder.path.count > library.count {
             folder = folder.deletingLastPathComponent()
             prefix += "../"
             guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else {
