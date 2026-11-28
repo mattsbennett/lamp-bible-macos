@@ -4148,6 +4148,9 @@ final class NativeAgentChatModel: ObservableObject {
         changeQueue { [conversationID] in $0.add(text, conversation: conversationID) }
         guard let id = queued.first(where: { !before.contains($0.id) })?.id else { return nil }
         let saved = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages.contains { $0.id == id }
+        // Not saved: not kept in memory either, where it would be sent as
+        // well as the words handed back.
+        if !saved { queued.removeAll { $0.id == id } }
         return saved ? id : nil
     }
 
@@ -4559,6 +4562,9 @@ struct NativeAgentChatView: View {
                         // Kept on the chat, held, not in this pane's field,
                         // which may be gone by now: Send Them sends it on.
                         var kept = queued
+                        // The conversation as it is on disk now: sync may have
+                        // replaced it while the check ran.
+                        model.reloadIfChangedOnDisk()
                         // Not written anywhere for a writing reached through a
                         // link out of the library: it stays in the field.
                         if kept == nil, conversation == model.conversationID, !paths.contains(".."),
