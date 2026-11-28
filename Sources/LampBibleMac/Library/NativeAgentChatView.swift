@@ -4511,7 +4511,7 @@ struct NativeAgentChatView: View {
                 // The last thing before the send, which runs with nothing
                 // awaited from its own check of what was checked here.
                 if provider == .openCode, model.isWritingChat {
-                    if case .refused(let words, let paths) = await WritingChatTurns.checkOpenCode(in: workspaceFolder) {
+                    if case .refused(let words, let paths, _) = await WritingChatTurns.checkOpenCode(in: workspaceFolder) {
                         // Kept on the chat, held, not in this pane's field,
                         // which may be gone by now: Send Them sends it on.
                         var kept = queued

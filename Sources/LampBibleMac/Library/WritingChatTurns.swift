@@ -23,8 +23,10 @@ enum WritingChatTurns {
     enum OpenCodeCheck: Equatable {
         case clear
         /// Not started, and why. `paths`: settings of the writing's that
-        /// Lamp didn't put there, for the person to look at.
-        case refused(String, paths: [String] = [])
+        /// Lamp didn't put there, for the person to look at. `code`: what a
+        /// paired device is told (`LampAgentRemoteFailure`), chosen so a
+        /// phone that doesn't know the case still says it rightly.
+        case refused(String, paths: [String] = [], code: String = LampAgentRemoteFailure.needsSetup)
     }
 
     /// Checks a writing before an OpenCode turn (`decisions/0043`): an
@@ -49,13 +51,19 @@ enum WritingChatTurns {
         // A Terminal's agent writes while it runs, and OpenCode rereads its
         // settings at every request.
         if AgentTerminalHolds.shared.hasTerminal(in: workspace) {
-            return .refused("OpenCode wasn’t started: a Terminal session is open in this writing. End it, then send again.")
+            return .refused(
+                "OpenCode wasn’t started: a Terminal session is open in this writing on your Mac. End it there, then send again.",
+                code: LampAgentRemoteFailure.terminalOpen
+            )
         }
         // Nor while any chat's agent is at work in it, OpenCode's own turn
         // from another pane included: it could change what is checked here
         // and finish before the send looks.
         if KeptAgentChats.isRunning(in: workspace) {
-            return .refused("OpenCode wasn’t started: another chat is answering in this writing. Send it again when that has finished.")
+            return .refused(
+                "OpenCode wasn’t started: another chat is answering in this writing. Send it again when that has finished.",
+                code: LampAgentRemoteFailure.busy
+            )
         }
         let lampServer = mcpConfiguration(forWorkspace: workspace)
         if let lampServer {
@@ -70,7 +78,9 @@ enum WritingChatTurns {
             AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
         }.value
         let findings = scanned.findings.filter(AgentTerminalLaunchCheck.openCodeReads) + above
-        guard findings.isEmpty else { return .refused(Self.openCodeRefusal(findings), paths: findings.map(\.path)) }
+        guard findings.isEmpty else {
+            return .refused(Self.openCodeRefusal(findings), paths: findings.map(\.path), code: LampAgentRemoteFailure.writingSettings)
+        }
         KeptAgentChats.noteOpenCodeChecked(in: workspace, at: generation)
         return .clear
     }

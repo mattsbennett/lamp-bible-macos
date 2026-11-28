@@ -1,5 +1,6 @@
 import Foundation
 import LampBibleMacSupport
+import LampCore
 import Testing
 @testable import LampBibleMac
 
@@ -62,12 +63,13 @@ struct OpenCodeWritingCheckTests {
         try write("export default {}", to: workspace.appendingPathComponent(".opencode/plugin/x.js"))
         // Claude's settings are Claude's: not asked about here.
         try write("{\"permissions\":{\"allow\":[\"Bash(make)\"]}}", to: workspace.appendingPathComponent(".claude/settings.local.json"))
-        guard case .refused(let words, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, let paths, let code) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn stopped")
             return
         }
         #expect(paths.sorted() == [".opencode/plugin/x.js", "opencode.jsonc"])
         #expect(words.contains("opencode.jsonc") && words.contains("~/.config/opencode"))
+        #expect(code == LampAgentRemoteFailure.writingSettings)
     }
 
     /// Nothing of the writing's is approved for an OpenCode chat, a setting
@@ -76,7 +78,7 @@ struct OpenCodeWritingCheckTests {
         for body in [#"{"plugin":["/tmp/elsewhere/plugin.js"]}"#, "{}"] {
             let (_, workspace) = try writing()
             try write(body, to: workspace.appendingPathComponent("opencode.jsonc"))
-            guard case .refused(_, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            guard case .refused(_, let paths, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
                 Issue.record("expected \(body) refused")
                 continue
             }
@@ -94,7 +96,7 @@ struct OpenCodeWritingCheckTests {
         )
         #expect(await WritingChatTurns.checkOpenCode(in: workspace) == .clear)
         try write("echo hi", to: workspace.appendingPathComponent(".claude/skills/notes/run.sh"))
-        guard case .refused(_, let paths) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(_, let paths, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
@@ -121,7 +123,7 @@ struct OpenCodeWritingCheckTests {
         )
         // Refused, not put to the person: what a link leads to can change
         // unasked, and OpenCode rereads it at every request.
-        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
@@ -187,7 +189,7 @@ struct OpenCodeWritingCheckTests {
     @Test func aClaudeFolderAboveTheWritingStopsTheTurn() async throws {
         let (library, workspace) = try writing()
         try write("x", to: library.appendingPathComponent("AgentWorkspaces/.claude/skills/x/SKILL.md"))
-        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
@@ -202,10 +204,12 @@ struct OpenCodeWritingCheckTests {
         AgentTerminalHolds.shared.begin(launch, in: workspace, holdsChats: false)
         defer { AgentTerminalHolds.shared.dropIfNotStarted(launch) }
         #expect(!AgentTerminalHolds.shared.isHeld(in: workspace))
-        guard case .refused = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(_, _, let code) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
+        // A phone that doesn't know the case reads the Mac's words.
+        #expect(code == LampAgentRemoteFailure.terminalOpen)
     }
 
     /// Noted at the count from before the check began, so a turn begun
@@ -313,7 +317,7 @@ struct OpenCodeWritingCheckTests {
     @Test func aLongPluginInTheWritingStopsTheTurn() async throws {
         let (_, workspace) = try writing()
         try write(String(repeating: "x", count: 5_000), to: workspace.appendingPathComponent(".opencode/plugin/big.js"))
-        guard case .refused(let words, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+        guard case .refused(let words, _, _) = await WritingChatTurns.checkOpenCode(in: workspace) else {
             Issue.record("expected the turn refused")
             return
         }
