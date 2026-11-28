@@ -259,4 +259,13 @@ struct OpenCodeWritingCheckTests {
         }
         #expect(words.contains("big.js"))
     }
+
+    /// Claude's own folder above the writing counts only for its skills.
+    @Test func aClaudeFolderAboveWithNoSkillsIsLeftAlone() throws {
+        let (library, workspace) = try writing()
+        try write("{}", to: library.appendingPathComponent(".claude/settings.json"))
+        #expect(AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace).isEmpty)
+        try FileManager.default.createDirectory(at: library.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
+        #expect(AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace).map(\.path) == ["../../../.claude/skills"])
+    }
 }

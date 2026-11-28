@@ -1361,6 +1361,15 @@ public enum AgentTerminalLaunchCheck {
                         continue
                     }
                     found.append(Finding(path: shown, fingerprint: fingerprint, detail: text))
+                case S_IFDIR where [".claude", ".agents"].contains(name.lowercased()):
+                    // Claude's or another tool's own folder: OpenCode reads
+                    // only its `skills`, so only that counts, if it's there
+                    // at all (or can't be looked for).
+                    var skills = stat()
+                    let child = url.appendingPathComponent("skills").path
+                    if lstat(child, &skills) == 0 || errno != ENOENT {
+                        found.append(Finding(path: shown + "/skills", fingerprint: incomplete, detail: "\(shown)/skills is above the writing, where only Lamp's folders belong"))
+                    }
                 default:
                     // A folder or a link above the writing: what OpenCode
                     // would read through it isn't walked here, so no answer
