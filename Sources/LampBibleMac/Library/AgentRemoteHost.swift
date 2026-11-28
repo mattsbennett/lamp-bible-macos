@@ -126,6 +126,9 @@ final class AgentRemoteHost: ObservableObject {
     }
 
     private func followSettings() {
+        // Waits whose records a failed delete or a quit left, whether or not
+        // remote chats are on now: the phone keeps their alerts until then.
+        AgentTurnPush.clearPending()
         if isAllowed { start() } else { stop() }
         // Library access may have changed: the open chats' helpers read their
         // policy file on every call, so it is rewritten now, not at the next

@@ -2734,8 +2734,12 @@ final class NativeAgentChatModel: ObservableObject {
     /// comes back later through sync doesn't bring them back.
     private(set) var conversationID: UUID? {
         didSet {
-            guard oldValue != conversationID, let oldValue,
-                  let key = AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: oldValue)
+            guard oldValue != conversationID else { return }
+            // One saved before conversations had ids went by a name of its
+            // own here: its grants go, and the name with them.
+            let left = oldValue ?? unnamedConversation
+            if oldValue == nil { unnamedConversation = UUID() }
+            guard let key = AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: left)
             else { return }
             AgentChatCommandGrants.shared.removeAll(for: key)
         }
@@ -4657,8 +4661,11 @@ struct NativeAgentChatView: View {
                     }
                 } else if (error as? AgentChatSendRefusal)?.kept == true {
                     // Waiting on the chat already.
-                } else if draft.isEmpty {
+                } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     draft = prompt
+                } else if !draft.contains(prompt) {
+                    // Typed over meanwhile: kept after the newer words, not lost.
+                    draft += "\n\n" + prompt
                 }
             }
         }
