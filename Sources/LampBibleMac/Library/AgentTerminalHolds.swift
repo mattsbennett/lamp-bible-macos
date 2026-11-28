@@ -69,11 +69,13 @@ final class AgentTerminalHolds: ObservableObject {
     /// Its process started. One that could not start ends the hold.
     func started(_ id: UUID, pid: pid_t) {
         guard var launch = launches[id] else { return }
-        guard pid > 0, let began = Self.beginning(of: pid) else {
+        guard pid > 0 else {
             launches[id] = nil
             return
         }
-        launch.state = .running(pid: pid, began: began)
+        // Its start time where the kernel says it; where it can't, 0, and the
+        // process is held by its pid alone rather than let go unconfirmed.
+        launch.state = .running(pid: pid, began: Self.beginning(of: pid) ?? 0)
         launches[id] = launch
     }
 
@@ -177,10 +179,15 @@ final class AgentTerminalHolds: ObservableObject {
     /// Whether the process that began at `began` is still running: not gone,
     /// not exited and waiting to be reaped, and not another process given
     /// the same pid since.
+    ///
+    /// A lookup that fails isn't taken for an exit: the process is alive if it
+    /// can still be signalled. A start time not known (0) isn't compared.
     nonisolated static func isAlive(_ pid: pid_t, began: Double) -> Bool {
-        guard let info = processInfo(pid), info.kp_proc.p_stat != SZOMB,
-              let now = beginning(of: pid) else { return false }
-        return now == began
+        guard let info = processInfo(pid) else { return kill(pid, 0) == 0 || errno == EPERM }
+        guard info.kp_proc.p_stat != SZOMB else { return false }
+        guard began != 0 else { return true }
+        let start = info.kp_proc.p_un.__p_starttime
+        return Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000 == began
     }
 
     nonisolated private static func processInfo(_ pid: pid_t) -> kinfo_proc? {

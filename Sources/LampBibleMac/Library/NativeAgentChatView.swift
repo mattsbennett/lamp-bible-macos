@@ -4778,7 +4778,11 @@ struct NativeAgentChatView: View {
                             // the answer, and making the reader hold it until
                             // the reply lands is how a question gets lost.
                             if model.isRunning {
-                                model.enqueue(prompt)
+                                // Cleared from the field only once saved.
+                                guard model.enqueue(prompt) != nil else {
+                                    submissionError = "That message couldn’t be kept to send after this reply, so it is still in the field."
+                                    return false
+                                }
                                 return true
                             }
                             return startSending(prompt)
