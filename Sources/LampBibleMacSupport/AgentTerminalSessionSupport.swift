@@ -1132,13 +1132,16 @@ public enum AgentTerminalLaunchCheck {
         /// A permission parsed from Claude's local settings, set by the scan
         /// alone, which the sheet words as a confirmation.
         public var isPermission = false
+        /// A link, fingerprinted by where it points, not by what it leads to.
+        public var isLink = false
         public var id: String { path + "\u{0}" + fingerprint }
 
-        public init(path: String, fingerprint: String, detail: String, isPermission: Bool = false) {
+        public init(path: String, fingerprint: String, detail: String, isPermission: Bool = false, isLink: Bool = false) {
             self.path = path
             self.fingerprint = fingerprint
             self.detail = detail
             self.isPermission = isPermission
+            self.isLink = isLink
         }
         /// Something the check could not look at, which no answer can cover.
         public var isIncomplete: Bool { fingerprint == AgentTerminalLaunchCheck.incomplete }
@@ -1215,7 +1218,7 @@ public enum AgentTerminalLaunchCheck {
             switch info.st_mode & S_IFMT {
             case S_IFLNK:
                 let target = (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) ?? "?"
-                found.append(Finding(path: relative, fingerprint: digest("link:" + target), detail: "a link to \(target)"))
+                found.append(Finding(path: relative, fingerprint: digest("link:" + target), detail: "a link to \(target)", isLink: true))
             case S_IFDIR:
                 guard let listed = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
                     found.append(Finding(path: relative, fingerprint: incomplete, detail: "\(relative) could not be listed"))

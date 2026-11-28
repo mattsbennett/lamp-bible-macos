@@ -701,6 +701,15 @@ struct DevotionalEditorView: View {
     @AppStorage("agent.moduleAccess.scope") private var agentModuleAccessScope = AgentModuleAccessScope.enabledModules.rawValue
     @AppStorage("agent.moduleAccess.personal") private var agentPersonalContentEnabled = false
     @State private var showingAgentWorkspace = false
+
+    private static let assistantAsked = NotificationCenter.default.publisher(for: .lampShowWritingAssistant)
+
+    /// Shows the assistant where a turn's notification asks it for this
+    /// writing.
+    private func showAssistant(asked note: Notification) {
+        guard note.object as? String == identifier, aiFeaturesEnabled, !showingAgentWorkspace else { return }
+        withAnimation(.lampPaneReveal) { showingAgentWorkspace = true }
+    }
     /// The chat turn running in the agent pane, where one is open.
     ///
     /// Held here rather than in that pane because the agent writes to the
@@ -1346,6 +1355,9 @@ struct DevotionalEditorView: View {
         // every keystroke. The new value is passed in: read off the model
         // here, it would still be the old one.
         .onReceive(model.$devotionals) { devotionals in lookForNewerCopy(in: devotionals) }
+        // A turn's notification clicked: the assistant, where its reply or
+        // what it waits on is.
+        .onReceive(Self.assistantAsked, perform: showAssistant(asked:))
         // Turned off while the agent's pane is open: it closes, and the
         // details take its place as they would on closing it by hand.
         .onChange(of: aiFeaturesEnabled) { _, enabled in

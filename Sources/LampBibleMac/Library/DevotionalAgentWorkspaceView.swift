@@ -788,8 +788,10 @@ enum DevotionalAgentWorkspaceStore {
     /// a Terminal opens, so a server an agent wrote into one is gone before
     /// a provider reads it.
     @WritingWorkspaceFiles
-    static func restoreProviderFiles(in workspace: URL, configuration: LampAgentMCPConfiguration) throws {
-        try configuration.restoreProviderConfigurations(in: workspace)
+    static func restoreProviderFiles(
+        in workspace: URL, configuration: LampAgentMCPConfiguration, only: Set<AgentChatWireProvider>? = nil
+    ) throws {
+        try configuration.restoreProviderConfigurations(in: workspace, only: only)
     }
 
     /// What the writing's settings hold that Lamp can't vouch for; see

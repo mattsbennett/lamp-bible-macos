@@ -93,12 +93,16 @@ public struct LampAgentMCPConfiguration: Equatable, Sendable {
     /// the workspace: each folder on the way must be a real folder, not a
     /// link, and each file is written whole and renamed into place. Throws on
     /// any failure, so a Terminal never opens over a half-restored set.
-    public func restoreProviderConfigurations(in workspace: URL) throws {
+    ///
+    /// `only`: the providers whose files are written, where not every
+    /// provider's is wanted (an OpenCode turn writes OpenCode's alone, so
+    /// another's file it can't write doesn't stop it).
+    public func restoreProviderConfigurations(in workspace: URL, only: Set<AgentChatWireProvider>? = nil) throws {
         let files: [(String, String)] = [
-            (".codex/config.toml", answering(provider: AgentChatWireProvider.codex.rawValue).codexTOML),
-            (".mcp.json", answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON),
-            ("opencode.json", answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON),
-        ]
+            (AgentChatWireProvider.codex, ".codex/config.toml", answering(provider: AgentChatWireProvider.codex.rawValue).codexTOML),
+            (AgentChatWireProvider.claude, ".mcp.json", answering(provider: AgentChatWireProvider.claude.rawValue).claudeJSON),
+            (AgentChatWireProvider.openCode, "opencode.json", answering(provider: AgentChatWireProvider.openCode.rawValue).openCodeJSON),
+        ].filter { only?.contains($0.0) ?? true }.map { ($0.1, $0.2) }
         func refuse(_ words: String) -> Error {
             CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: words])
         }

@@ -2284,6 +2284,8 @@ struct OpenCodeChatCheck: Identifiable {
 /// Why a message wasn't sent, said where the chat says it.
 struct AgentChatSendRefusal: LocalizedError {
     let message: String
+    /// The message is kept on the chat, waiting, not handed back.
+    var kept = false
     var errorDescription: String? { message }
 }
 
@@ -2790,7 +2792,9 @@ final class NativeAgentChatModel: ObservableObject {
             guard isRunning, notifiesThisRun, !isWatched, let notificationContext else { return }
             // Only one posted is taken back: the end of an earlier turn may
             // be showing under the same name.
-            waitNoticed = AgentTurnNotifications.post(.notice("\(provider.shortName) is waiting for your answer."), context: notificationContext)
+            waitNoticed = AgentTurnNotifications.post(
+                .notice("\(provider.shortName) is waiting for your answer."), context: notificationContext, isWait: true
+            )
         case .clear:
             guard waitNoticed, let notificationContext else { return }
             waitNoticed = false
@@ -4060,8 +4064,11 @@ final class NativeAgentChatModel: ObservableObject {
         try? AgentChatQueueStore.save(queue, providerID: provider.rawValue, in: workspace)
     }
 
-    func enqueue(_ text: String) {
+    @discardableResult
+    func enqueue(_ text: String) -> UUID? {
+        let before = Set(queued.map(\.id))
         changeQueue { [conversationID] in $0.add(text, conversation: conversationID) }
+        return queued.first { !before.contains($0.id) }?.id
     }
 
     /// Whether this waiting message still belongs to the conversation it
@@ -4467,16 +4474,24 @@ struct NativeAgentChatView: View {
                 // The last thing before the send, which runs with nothing
                 // awaited from its own check of what was checked here.
                 if provider == .openCode, model.isWritingChat {
-                    switch await WritingChatTurns.checkOpenCode(in: workspaceFolder) {
-                    case .clear:
-                        break
-                    case .refused(let words):
-                        throw AgentChatSendRefusal(message: words)
-                    case .unapproved(let findings):
-                        openCodeCheck = OpenCodeChatCheck(
-                            prompt: prompt, queued: queued, conversation: conversation, findings: findings
-                        )
-                        throw AgentChatSendRefusal(message: "OpenCode wasn’t started: this writing’s settings hold things Lamp didn’t put there.")
+                    let check = await WritingChatTurns.checkOpenCode(in: workspaceFolder)
+                    if check != .clear {
+                        // Kept on the chat, held, not in this pane's field,
+                        // which may be gone by now: Send Them, or Send Anyway
+                        // below, sends it on.
+                        var kept = queued
+                        if kept == nil, conversation == model.conversationID {
+                            kept = model.enqueue(prompt)
+                        }
+                        model.holdQueue()
+                        if case .unapproved(let findings) = check {
+                            openCodeCheck = OpenCodeChatCheck(
+                                prompt: prompt, queued: kept, conversation: conversation, findings: findings
+                            )
+                        }
+                        let words = if case .refused(let words) = check { words }
+                            else { "OpenCode wasn’t started: this writing’s settings hold things Lamp didn’t put there." }
+                        throw AgentChatSendRefusal(message: words, kept: kept != nil)
                     }
                 }
                 submissionError = nil
@@ -4529,6 +4544,8 @@ struct NativeAgentChatView: View {
                     // Held, with Send Them to go on, rather than tried again
                     // unasked or left with no way on.
                     model.holdQueue()
+                } else if (error as? AgentChatSendRefusal)?.kept == true {
+                    // Waiting on the chat already.
                 } else if draft.isEmpty {
                     draft = prompt
                 }

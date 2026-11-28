@@ -75,11 +75,34 @@ struct OpenCodeWritingCheckTests {
         try FileManager.default.createSymbolicLink(
             at: workspace.appendingPathComponent("opencode.json"), withDestinationURL: library.appendingPathComponent("elsewhere.json")
         )
-        guard case .unapproved(let findings) = await WritingChatTurns.checkOpenCode(in: workspace) else {
-            Issue.record("expected the turn stopped")
+        // Refused, not put to the person: what a link leads to can change
+        // unasked, and OpenCode rereads it at every request.
+        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            Issue.record("expected the turn refused")
             return
         }
-        #expect(findings.map(\.path) == ["opencode.json"])
+        #expect(words.contains("opencode.json"))
+    }
+
+    /// An OpenCode turn writes OpenCode's file alone: another provider's it
+    /// can't write doesn't stop it.
+    @Test func anOpenCodeTurnRestoresOnlyOpenCodesFile() throws {
+        let (library, workspace) = try writing()
+        let server = LampAgentMCPConfiguration(
+            helperExecutableURL: URL(fileURLWithPath: "/usr/bin/true"), libraryRootURL: library,
+            policyURL: library.appendingPathComponent("policy.json"), workspaceURL: workspace
+        )
+        try server.restoreProviderConfigurations(in: workspace, only: [.openCode])
+        #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent("opencode.json").path))
+        #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".mcp.json").path))
+        #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".codex/config.toml").path))
+    }
+
+    /// A wait's notice has a name of its own, so taking it back leaves the
+    /// chat's end notice alone.
+    @Test func aWaitNoticeHasItsOwnName() {
+        let context = AgentTurnNotificationContext(title: "Talk", route: .writing("w"))
+        #expect(AgentTurnNotifications.waitIdentifier(context) != context.route.notificationIdentifier)
     }
 
     /// Clear once, for the next send only, and only if nothing began since.

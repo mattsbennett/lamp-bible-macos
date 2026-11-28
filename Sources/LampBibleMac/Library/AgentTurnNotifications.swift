@@ -94,8 +94,11 @@ enum AgentTurnNotifications {
 
     /// Posts the notification if the setting is on, saying whether it did.
     /// Whether anyone was watching is the caller's to judge.
+    ///
+    /// `isWait`: a turn waiting on an answer, under a name of its own, so
+    /// taking it back can't take another turn's end with it.
     @discardableResult
-    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext) -> Bool {
+    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext, isWait: Bool = false) -> Bool {
         guard isEnabledNow, !KeptAgentChats.isQuitting else { return false }
         let content = UNMutableNotificationContent()
         content.title = context.title
@@ -105,7 +108,7 @@ enum AgentTurnNotifications {
         content.threadIdentifier = context.route.notificationIdentifier
         content.userInfo = context.route.userInfo
         let request = UNNotificationRequest(
-            identifier: context.route.notificationIdentifier,
+            identifier: isWait ? waitIdentifier(context) : context.route.notificationIdentifier,
             content: content,
             trigger: nil
         )
@@ -116,7 +119,11 @@ enum AgentTurnNotifications {
     /// Takes back a notification still shown for the chat: one that said a
     /// turn waited, once it doesn't.
     static func withdraw(context: AgentTurnNotificationContext) {
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [context.route.notificationIdentifier])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [waitIdentifier(context)])
+    }
+
+    static func waitIdentifier(_ context: AgentTurnNotificationContext) -> String {
+        context.route.notificationIdentifier + ".waiting"
     }
 
     static func body(for outcome: Outcome, showsReply: Bool) -> String {
@@ -160,6 +167,9 @@ enum AgentTurnNotifications {
 }
 
 extension Notification.Name {
+    /// The writing editor showing this writing (the object, its id) shows
+    /// its assistant.
+    static let lampShowWritingAssistant = Notification.Name("lampShowWritingAssistant")
     /// A finished turn's notification was clicked. The object is the
     /// `AgentTurnRoute`; each library window looks for it among its own.
     static let lampShowAgentTurn = Notification.Name("lampShowAgentTurn")
@@ -368,6 +378,9 @@ struct AgentTurnRouteReceiver: ViewModifier {
                     if let showing = OpenWritingEditors.window(showing: id) {
                         if showing.isMiniaturized { showing.deminiaturize(nil) }
                         showing.makeKeyAndOrderFront(nil)
+                        // Its assistant shown too, where the reply or the
+                        // request waiting is.
+                        NotificationCenter.default.post(name: .lampShowWritingAssistant, object: id)
                         return
                     }
                     openWindow(

@@ -57,7 +57,7 @@ enum WritingChatTurns {
         let lampServer = mcpConfiguration(forWorkspace: workspace)
         if let lampServer {
             do {
-                try await DevotionalAgentWorkspaceStore.restoreProviderFiles(in: workspace, configuration: lampServer)
+                try await DevotionalAgentWorkspaceStore.restoreProviderFiles(in: workspace, configuration: lampServer, only: [.openCode])
             } catch {
                 return .refused("Lamp didn’t start OpenCode: \(error.localizedDescription)")
             }
@@ -67,6 +67,12 @@ enum WritingChatTurns {
             AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
         }.value
         let findings = scanned.findings.filter(AgentTerminalLaunchCheck.openCodeReads) + above
+        // A link is fingerprinted by where it points, and what it leads to can
+        // change unasked, while OpenCode rereads it at every request: one in
+        // what OpenCode reads stops the turn rather than be approved.
+        if let link = findings.first(where: \.isLink) {
+            return .refused("Lamp didn’t start OpenCode: \(link.path) in this writing is a link, which Lamp can’t check for OpenCode. Replace it with the file itself.")
+        }
         if let unchecked = findings.first(where: \.isIncomplete) {
             return .refused("Lamp didn’t start OpenCode: it couldn’t check all of what OpenCode reads in this writing (\(unchecked.detail)).")
         }
