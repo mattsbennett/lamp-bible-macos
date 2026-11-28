@@ -335,4 +335,21 @@ struct OpenCodeWritingCheckTests {
         try FileManager.default.createDirectory(at: library.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
         #expect(AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace).map(\.path) == ["../../../.claude/skills"])
     }
+
+    /// A writing reached through a link out of the library is refused before
+    /// Lamp writes anything into it.
+    @Test func aWritingLeadingOutOfTheLibraryIsWrittenNothing() async throws {
+        let (library, _) = try writing()
+        let outside = library.deletingLastPathComponent().appendingPathComponent("Away/Writing", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("w"), withIntermediateDirectories: true)
+        let away = library.appendingPathComponent("AgentWorkspaces/Away", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: away, withDestinationURL: outside)
+        #expect(!AgentTerminalLaunchCheck.isInsideLibrary(away.appendingPathComponent("w")))
+        guard case .refused(_, _, let code) = await WritingChatTurns.checkOpenCode(in: away.appendingPathComponent("w")) else {
+            Issue.record("expected the turn refused")
+            return
+        }
+        #expect(code == LampAgentRemoteFailure.writingSettings)
+        #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("w/opencode.json").path))
+    }
 }

@@ -2109,6 +2109,9 @@ private struct ChatCommandGrantsList: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // Scrolled where there are many or long: every Remove reachable.
+            ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
             ForEach(grants, id: \.self) { grant in
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -2128,6 +2131,9 @@ private struct ChatCommandGrantsList: View {
                         .controlSize(.small)
                 }
             }
+            }
+            }
+            .frame(maxHeight: 420)
         }
         .padding(14)
         .frame(width: 380)

@@ -65,12 +65,25 @@ enum WritingChatTurns {
                 code: LampAgentRemoteFailure.busy
             )
         }
+        // Before anything is written: a linked parent leading out of the
+        // library would take the write with it.
+        guard AgentTerminalLaunchCheck.isInsideLibrary(workspace) else {
+            return .refused(
+                Self.openCodeRefusal([.init(path: "..", fingerprint: "incomplete", detail: "")]),
+                code: LampAgentRemoteFailure.writingSettings
+            )
+        }
         let lampServer = mcpConfiguration(forWorkspace: workspace)
         if let lampServer {
             do {
                 try await DevotionalAgentWorkspaceStore.restoreProviderFiles(in: workspace, configuration: lampServer, only: [.openCode])
             } catch {
-                return .refused("Lamp didn’t start OpenCode: \(error.localizedDescription)")
+                // The writing's folder, not the provider's setup: told so,
+                // under a code whose words a phone shows.
+                return .refused(
+                    "Lamp didn’t start OpenCode: it couldn’t write its own settings into this writing on your Mac (\(error.localizedDescription)).",
+                    code: LampAgentRemoteFailure.writingSettings
+                )
             }
         }
         let scanned = await DevotionalAgentWorkspaceStore.openCodeScan(in: workspace, lampServer: lampServer)

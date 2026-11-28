@@ -1318,6 +1318,16 @@ public enum AgentTerminalLaunchCheck {
     /// Lamp's library (`<library>/AgentWorkspaces/Writing/<writing>`): the
     /// folders Lamp owns. Nothing is there unless something put it there.
     /// Above the library is the person's own, and isn't looked at.
+    /// Whether a writing's folder, links resolved, is inside Lamp's library
+    /// (`<library>/AgentWorkspaces/Writing/<writing>`, the library resolved
+    /// too): what bounds the walk above it, and what any write into it needs
+    /// first, since a linked parent would lead the write elsewhere.
+    public static func isInsideLibrary(_ workspace: URL) -> Bool {
+        let library = workspace.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+        return workspace.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(library + "/")
+    }
+
     public static func openCodeAncestorFindings(of workspace: URL) -> [Finding] {
         var found: [Finding] = []
         // From where OpenCode runs, links resolved: a linked parent would
