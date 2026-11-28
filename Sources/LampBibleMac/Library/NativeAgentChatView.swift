@@ -4837,6 +4837,12 @@ struct NativeAgentChatView: View {
                 check: TerminalLaunchCheck(provider: provider, findings: check.findings, forChat: true)
             ) {
                 openCodeCheck = nil
+                // Not sent, and not left to go with the next Send: back in
+                // the field where there is room, else left waiting, held.
+                if let queued = check.queued, draft.isEmpty, model.queued.contains(where: { $0.id == queued }) {
+                    model.removeQueued(queued)
+                    draft = check.prompt
+                }
             } open: {
                 openCodeCheck = nil
                 do {
@@ -4854,6 +4860,13 @@ struct NativeAgentChatView: View {
                 // Checked again as it goes: what changed while this was up
                 // is asked about afresh.
                 if let queued = check.queued {
+                    guard model.queued.contains(where: { $0.id == queued }) else { return }
+                    // That message, wherever it waits: brought to the front.
+                    while model.queued.first?.id != queued, model.queued.contains(where: { $0.id == queued }) {
+                        let before = model.queued.map(\.id)
+                        model.sendQueuedSooner(queued)
+                        if model.queued.map(\.id) == before { break }
+                    }
                     guard model.queued.first?.id == queued else { return }
                     model.releaseQueue()
                     drainQueue()

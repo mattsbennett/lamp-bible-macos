@@ -222,4 +222,28 @@ struct OpenCodeWritingCheckTests {
         #expect(model.conversationID == nil)
         #expect(model.chatGrantKey != nil)
     }
+
+    /// Above the writing, a file that can't be shown whole can't be approved.
+    @Test func aLongFileAboveTheWritingStopsTheTurn() throws {
+        let (library, workspace) = try writing()
+        try write(String(repeating: "x", count: 5_000), to: library.appendingPathComponent("opencode.json"))
+        let found = AgentTerminalLaunchCheck.openCodeAncestorFindings(of: workspace)
+        #expect(found.count == 1 && found[0].isIncomplete)
+    }
+
+    /// The folders above where OpenCode runs, with a linked parent resolved.
+    @Test func theFoldersAboveAreFoundThroughALinkedParent() throws {
+        let (library, workspace) = try writing()
+        let elsewhere = library.deletingLastPathComponent().appendingPathComponent("Elsewhere/Writing", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try write("{}", to: elsewhere.deletingLastPathComponent().appendingPathComponent("opencode.json"))
+        let real = elsewhere.appendingPathComponent("w", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        // AgentWorkspaces/Writing a link to Elsewhere/Writing.
+        let linked = library.appendingPathComponent("AgentWorkspaces/Linked", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: elsewhere)
+        let found = AgentTerminalLaunchCheck.openCodeAncestorFindings(of: linked.appendingPathComponent("w"))
+        #expect(found.map(\.path).contains("../../opencode.json"))
+        _ = workspace
+    }
 }

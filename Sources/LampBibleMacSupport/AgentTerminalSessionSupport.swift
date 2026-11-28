@@ -1315,7 +1315,9 @@ public enum AgentTerminalLaunchCheck {
     /// Above the library is the person's own, and isn't looked at.
     public static func openCodeAncestorFindings(of workspace: URL) -> [Finding] {
         var found: [Finding] = []
-        var folder = workspace.standardizedFileURL
+        // From where OpenCode runs, links resolved: a linked parent would
+        // otherwise lead the walk up folders OpenCode never looks in.
+        var folder = workspace.resolvingSymlinksInPath().standardizedFileURL
         var prefix = ""
         for _ in 0..<3 {
             folder = folder.deletingLastPathComponent()
@@ -1346,11 +1348,14 @@ public enum AgentTerminalLaunchCheck {
                         found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) could not be read"))
                         continue
                     }
-                    let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
-                    found.append(Finding(
-                        path: shown, fingerprint: fingerprint,
-                        detail: text ?? "\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) of content"
-                    ))
+                    // Approved only as shown whole: one too long to show, or
+                    // not text, can't be looked at in the sheet, so it stops
+                    // the turn.
+                    guard size <= Int64(shownBytes), let text = String(data: head, encoding: .utf8) else {
+                        found.append(Finding(path: shown, fingerprint: incomplete, detail: "\(shown) is too long to show whole, or isn't text"))
+                        continue
+                    }
+                    found.append(Finding(path: shown, fingerprint: fingerprint, detail: text))
                 default:
                     // A folder or a link above the writing: what OpenCode
                     // would read through it isn't walked here, so no answer
