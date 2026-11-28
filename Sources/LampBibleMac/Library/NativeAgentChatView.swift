@@ -2640,25 +2640,20 @@ enum KeptAgentChats {
         if let model = models[key] { return model }
         let model = NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode)
         models[key] = model
-        // A Claude Terminal began before this chat was loaded: what it had
-        // waiting on disk waits for the person's next Send.
-        if queueHoldsPending.remove(key) != nil { model.holdQueue() }
         return model
     }
 
-    /// Chats not loaded when a Claude Terminal began in their writing, whose
-    /// waiting messages are held once they are (`AgentTerminalHolds`).
-    @MainActor
-    private static var queueHoldsPending: Set<String> = []
-
-    /// Holds every chat's waiting messages in this writing, loaded or not.
+    /// Holds every chat's waiting messages in this writing, loaded or not: a
+    /// chat not loaded, with messages on disk, has its hold kept at once in
+    /// this Mac's preferences, which it takes as it loads, a quit between
+    /// included (`AgentTerminalHolds`).
     @MainActor
     static func holdQueues(in workspace: URL) {
         for provider in AIProviderCLI.allCases {
             if let model = existing(provider: provider, workspace: workspace) {
                 if model.hasWaitingMessage { model.holdQueue() }
-            } else {
-                queueHoldsPending.insert("\(provider.rawValue)|\(workspace.standardizedFileURL.path)")
+            } else if !AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace).messages.isEmpty {
+                NativeAgentChatModel.keepHold(provider: provider, workspace: workspace)
             }
         }
     }
@@ -3279,6 +3274,11 @@ final class NativeAgentChatModel: ObservableObject {
     nonisolated static let heldQueuesKey = "agent.chat.queuesHeldForTheirWord"
 
     private var holdKey: String { "\(provider.rawValue)|\(workspace.standardizedFileURL.path)" }
+
+    /// Keeps a hold for a chat not loaded yet.
+    static func keepHold(provider: AIProviderCLI, workspace: URL) {
+        keepHold(true, for: "\(provider.rawValue)|\(workspace.standardizedFileURL.path)")
+    }
 
     private static func keepHold(_ held: Bool, for key: String) {
         var keys = Set(UserDefaults.standard.stringArray(forKey: heldQueuesKey) ?? [])

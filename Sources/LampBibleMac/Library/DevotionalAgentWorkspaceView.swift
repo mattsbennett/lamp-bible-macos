@@ -1437,6 +1437,7 @@ struct DevotionalAgentWorkspaceView: View {
 
     private func showChat(asked note: Notification) {
         guard note.object as? String == devotionalID else { return }
+        WritingChatAsked.ids.remove(devotionalID)
         showsChatForWait = true
     }
 
@@ -1518,7 +1519,11 @@ struct DevotionalAgentWorkspaceView: View {
                 WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
             }
         }
-        .onAppear { paneLifetime.isGone = false }
+        .onAppear {
+            paneLifetime.isGone = false
+            // Asked for by a wait's notice before this pane was made.
+            if WritingChatAsked.ids.remove(devotionalID) != nil { showsChatForWait = true }
+        }
         .onReceive(Self.chatAsked, perform: showChat(asked:))
         .onDisappear {
             WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)

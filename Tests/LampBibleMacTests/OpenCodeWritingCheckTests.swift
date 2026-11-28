@@ -244,9 +244,17 @@ struct OpenCodeWritingCheckTests {
     /// Terminal begins, and the chat takes the hold as it loads.
     @Test func aChatNotYetLoadedTakesTheHoldAsItLoads() throws {
         let (_, workspace) = try writing()
+        // A message waiting on disk for a chat not loaded.
+        var queue = AgentChatQueue()
+        queue.add("Later", conversation: nil)
+        try AgentChatQueueStore.save(queue, providerID: AIProviderCLI.codex.rawValue, in: workspace)
         KeptAgentChats.holdQueues(in: workspace)
+        // Kept at once, so a quit before it loads doesn't lose it.
+        #expect(NativeAgentChatModel.holdWasKept(provider: .codex, workspace: workspace))
+        #expect(!NativeAgentChatModel.holdWasKept(provider: .claude, workspace: workspace))
         let model = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
         defer { KeptAgentChats.drop(model) }
+        model.load()
         #expect(model.queueHeld)
     }
 

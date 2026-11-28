@@ -174,6 +174,13 @@ enum AgentTurnNotifications {
     }
 }
 
+/// Writings a wait's notice asked to show the chat of, until their pane takes
+/// the request: one the click opened is made after the click.
+@MainActor
+enum WritingChatAsked {
+    static var ids: Set<String> = []
+}
+
 extension Notification.Name {
     /// The writing editor showing this writing (the object, its id) shows
     /// its assistant.
@@ -445,6 +452,8 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
         // chat, though left on Terminal, without changing the setting every
         // writing shares.
         if content.userInfo[AgentTurnNotifications.waitKey] != nil, case .writing(let id) = route {
+            // Kept for a pane not made yet, which takes it as it appears.
+            WritingChatAsked.ids.insert(id)
             NotificationCenter.default.post(name: .lampShowWritingChat, object: id)
         }
     }
