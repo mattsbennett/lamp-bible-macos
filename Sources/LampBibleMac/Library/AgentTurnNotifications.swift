@@ -127,11 +127,8 @@ enum AgentTurnNotifications {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [waitIdentifier(context, provider: provider)])
     }
 
-    /// Marks a wait's notice, whose click opens the chat rather than a
-    /// Terminal: the card is in the chat.
+    /// Marks a wait's notice.
     nonisolated static let waitKey = "lampTurnIsWait"
-    /// The writing pane's session mode, as it stores it.
-    nonisolated static let sessionModeKey = "devotional.agent.sessionMode"
 
     static func waitIdentifier(_ context: AgentTurnNotificationContext, provider: String) -> String {
         context.route.notificationIdentifier + ".waiting." + provider
@@ -439,11 +436,6 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
         let content = response.notification.request.content
         guard content.categoryIdentifier == AgentTurnNotifications.categoryIdentifier,
               let route = AgentTurnRoute(userInfo: content.userInfo) else { return }
-        // A wait is answered on the chat's card: the writing's pane opens on
-        // Chat, not on a Terminal left showing.
-        if content.userInfo[AgentTurnNotifications.waitKey] != nil, case .writing = route {
-            UserDefaults.standard.set(AgentSessionDisplayMode.native.rawValue, forKey: AgentTurnNotifications.sessionModeKey)
-        }
         NSApp.activate()
         NotificationCenter.default.post(name: .lampShowAgentTurn, object: route)
     }
