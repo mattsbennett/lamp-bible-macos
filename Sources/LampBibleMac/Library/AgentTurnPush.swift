@@ -141,6 +141,104 @@ enum AgentTurnPush {
         return record
     }
 
+    // MARK: - A turn waiting on the person
+
+    /// What a turn waiting on the person tells the phone that asked for it
+    /// (`decisions/0045`), on the same record type as an end, with its
+    /// fields only, so no schema changes and a shipped phone alerts: named
+    /// `wait.<deviceID>.<chatID>`, which is how the phone tells it from an
+    /// end, with a `turnID` of its own, never the turn's, so a phone that
+    /// matches it against a turn end it heard doesn't take it for one.
+    struct Waiting: Equatable, Sendable {
+        var deviceID: String
+        var chat: LampAgentRemoteHosting.Chat
+        /// As the phone shows the chat.
+        var title: String
+        var providerName: String
+        /// When it began to wait, which the sweep reads as `endedAt`.
+        var began: Date
+        /// The wait's own id.
+        var waitID = UUID()
+    }
+
+    static func waitRecordName(deviceID: String, chatID: String) -> String {
+        "wait.\(deviceID).\(chatID)"
+    }
+
+    /// The record for a wait: who is waiting, never on what. The command,
+    /// its folder and the agent's reason are left out, since an alert can
+    /// show on a locked phone.
+    static func record(for waiting: Waiting) -> CKRecord {
+        let record = CKRecord(
+            recordType: recordType,
+            recordID: CKRecord.ID(recordName: waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id))
+        )
+        let words = "\(waiting.providerName) is waiting for your answer."
+        record["deviceID"] = waiting.deviceID
+        record["chatID"] = waiting.chat.id
+        switch waiting.chat {
+        case .reader:
+            record["kind"] = "reader"
+        case .writing(let id):
+            record["kind"] = "writing"
+            record["writingID"] = id
+        }
+        record["turnID"] = waiting.waitID.uuidString
+        record["title"] = waiting.title
+        record["subtitle"] = ""
+        record["outcome"] = "waiting"
+        record["summary"] = words
+        record["body"] = words
+        record["endedAt"] = waiting.began
+        return record
+    }
+
+    /// What a change in whether a turn waits does to its phone: told once
+    /// when it begins to wait, cleared when it stops, nothing otherwise.
+    enum WaitChange: Equatable { case tell, clear, none }
+
+    nonisolated static func change(wasWaiting: Bool, isWaiting: Bool) -> WaitChange {
+        switch (wasWaiting, isWaiting) {
+        case (false, true): .tell
+        case (true, false): .clear
+        default: .none
+        }
+    }
+
+    /// Tells the phone a turn it asked for waits on the person, best effort.
+    /// Saved only if it still waits when its turn in the line comes, and
+    /// only while the device may still be told (`stillWaiting`).
+    static func tellWaiting(_ waiting: Waiting, stillWaiting: @escaping @MainActor () -> Bool) {
+        guard isEntitled, AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return }
+        let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+        let previous = tail
+        tail = Task.detached(priority: .utility) {
+            await previous?.value
+            let record: CKRecord? = await MainActor.run {
+                guard stillWaiting(), AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return nil }
+                return Self.record(for: waiting)
+            }
+            if let record { await save(record, to: database) }
+        }
+    }
+
+    /// Takes the wait's record away, once nothing waits: it tells nothing,
+    /// and an alert already shown stays until the phone sees the chat again.
+    static func clearWaiting(deviceID: String, chatID: String) {
+        guard isEntitled else { return }
+        let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+        let id = CKRecord.ID(recordName: waitRecordName(deviceID: deviceID, chatID: chatID))
+        let previous = tail
+        tail = Task.detached(priority: .utility) {
+            await previous?.value
+            do {
+                _ = try await database.modifyRecords(saving: [], deleting: [id])
+            } catch {
+                log.error("wait push \(id.recordName, privacy: .public) not cleared: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     /// Saves one record, and logs a failure of the call or of the record:
     /// `modifyRecords` can succeed as a call and still fail the record, a
     /// missing schema or an account signed out among the reasons.

@@ -631,16 +631,73 @@ final class AgentRemoteHost: ObservableObject {
         isAllowed && !revoked.contains(device) && devices.contains { $0.id == device }
     }
 
-    private func pushedEnd(
-        of chat: LampAgentRemoteHosting.Chat, turn: UUID, device: String,
-        outcome: AgentTurnNotifications.Outcome, endedAt: Date
-    ) -> AgentTurnPush.Ended {
-        let (title, subtitle): (String, String) = switch chat {
+    /// A chat's title and subtitle as a push shows it.
+    private func pushHeading(of chat: LampAgentRemoteHosting.Chat) -> (title: String, subtitle: String) {
+        switch chat {
         case .reader:
             ("Reader Chat", summary(of: chat)?.title.replacingOccurrences(of: "New Chat", with: "") ?? "")
         case .writing(let id):
             (writing(id)?.title ?? "Writing", "")
         }
+    }
+
+    /// Tells the phone that asked for a turn when the turn begins to wait on
+    /// the person, and takes it back when it stops (`decisions/0045`): once
+    /// per wait, never what it waits on. Cancelled with the turn.
+    private func tellsWaits(of open: OpenChat, device: String) -> WaitTelling {
+        let telling = WaitTelling(deviceID: device, chatID: open.chat.id)
+        let model = open.model
+        let chat = open.chat
+        telling.watch = model.$pendingApprovals.map { !$0.isEmpty }.removeDuplicates().sink { [weak self, weak telling] waiting in
+            guard let self, let telling else { return }
+            switch AgentTurnPush.change(wasWaiting: telling.told, isWaiting: waiting) {
+            case .tell:
+                telling.told = true
+                guard self.mayStillPush(to: device) else { return }
+                AgentTurnPush.tellWaiting(
+                    .init(deviceID: device, chat: chat, title: self.pushHeading(of: chat).title,
+                          providerName: model.provider.shortName, began: Date()),
+                    stillWaiting: { [weak self, weak model] in
+                        !(model?.pendingApprovals.isEmpty ?? true) && (self?.mayStillPush(to: device) ?? false)
+                    }
+                )
+            case .clear:
+                telling.told = false
+                AgentTurnPush.clearWaiting(deviceID: device, chatID: chat.id)
+            case .none:
+                break
+            }
+        }
+        return telling
+    }
+
+    /// One turn's telling of its waits, ended with the turn.
+    @MainActor
+    private final class WaitTelling {
+        let deviceID: String
+        let chatID: String
+        var told = false
+        var watch: AnyCancellable?
+
+        init(deviceID: String, chatID: String) {
+            self.deviceID = deviceID
+            self.chatID = chatID
+        }
+
+        /// Stops watching, and takes back a wait still told.
+        func end() {
+            watch?.cancel()
+            watch = nil
+            if told { AgentTurnPush.clearWaiting(deviceID: deviceID, chatID: chatID) }
+            told = false
+        }
+    }
+
+    private func pushedEnd(
+        of chat: LampAgentRemoteHosting.Chat, turn: UUID, device: String,
+        outcome: AgentTurnNotifications.Outcome, endedAt: Date
+    ) -> AgentTurnPush.Ended {
+        let (title, subtitle) = pushHeading(of: chat)
         return AgentTurnPush.Ended(
             deviceID: device, chat: chat, turnID: turn, title: title, subtitle: subtitle,
             outcome: outcome, endedAt: endedAt
@@ -1228,6 +1285,8 @@ final class AgentRemoteHost: ObservableObject {
         runs[device, default: []].append((open.model, turn))
         if let requestID { remember(requestID, asked: turn) }
         let collecting = collectWhileRunning(open)
+        // A wait in it told to this phone; taken back once nothing waits.
+        let waits = tellsWaits(of: open, device: device)
         // Counted from before the run to after its last collection, so a
         // quit waits for what the turn wrote to be saved and marked rather
         // than for a count that is zero between the marks and the save.
@@ -1239,6 +1298,7 @@ final class AgentRemoteHost: ObservableObject {
             text, contextualPrompt: prompt, messageID: turn, inConversation: conversation,
             notifiesWhenDone: false
         )
+        waits.end()
         // How it ended, read now: the collecting below waits, and a turn
         // started in that wait, from this Mac or another phone, clears it.
         let outcome = taken ? open.model.lastTurnOutcome : nil

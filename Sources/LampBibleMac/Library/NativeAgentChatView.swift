@@ -2648,6 +2648,7 @@ final class NativeAgentChatModel: ObservableObject {
     /// answer too (`AgentRemoteHost`, `decisions/0040`).
     @Published private(set) var pendingApprovals: [AgentToolApprovalRequest] = [] {
         didSet {
+            noticeWait(was: !oldValue.isEmpty)
             // Said as the turn's step, so wherever the turn is watched — a
             // pane, or the phone that asked, which has no card — it reads
             // as waiting on the person, not as working.
@@ -2775,6 +2776,28 @@ final class NativeAgentChatModel: ObservableObject {
 
     /// Whether anyone is looking at this chat now, asked as its turn ends.
     private var isWatched: Bool { panes.values.contains { $0.isWatched } }
+
+    /// Whether this turn's wait was told by a notification, to take back.
+    private var waitNoticed = false
+
+    /// Tells the person on this Mac, as a turn's end does, that a turn they
+    /// started and aren't watching waits on their answer, and takes it back
+    /// once it doesn't (`decisions/0045`). Not for a phone's turn, whose
+    /// phone is told; the end's notice takes this one's place.
+    private func noticeWait(was wasWaiting: Bool) {
+        switch AgentTurnPush.change(wasWaiting: wasWaiting, isWaiting: !pendingApprovals.isEmpty) {
+        case .tell:
+            guard isRunning, notifiesThisRun, !isWatched, let notificationContext else { return }
+            AgentTurnNotifications.post(.notice("\(provider.shortName) is waiting for your answer."), context: notificationContext)
+            waitNoticed = true
+        case .clear:
+            guard waitNoticed, let notificationContext else { return }
+            waitNoticed = false
+            AgentTurnNotifications.withdraw(context: notificationContext)
+        case .none:
+            break
+        }
+    }
 
     func stopObservingQueueReady(for token: AnyHashable) {
         queueObservers.removeValue(forKey: token)

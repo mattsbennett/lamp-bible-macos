@@ -46,6 +46,47 @@ struct AgentTurnNotificationsTests {
         #expect(AgentTurnRoute(userInfo: ["lampTurnRouteKind": "readerChat", "lampTurnRouteID": "nope"]) == nil)
     }
 
+    /// A wait is told on the same record type with the same fields an end
+    /// has, so no schema changes (`decisions/0045`), with its own turn id, and
+    /// who waits, never on what.
+    @MainActor
+    @Test func aWaitIsAnEndsRecordWithItsOwnNameAndTurn() {
+        let turn = UUID()
+        let ended = AgentTurnPush.record(for: AgentTurnPush.Ended(
+            deviceID: "phone-1", chat: .writing("w1"), turnID: turn, title: "Talk", subtitle: "",
+            outcome: .replied("Done."), endedAt: Date()
+        ), showsReply: true)
+        let waiting = AgentTurnPush.Waiting(
+            deviceID: "phone-1", chat: .writing("w1"), title: "Talk", providerName: "Codex",
+            began: Date(timeIntervalSince1970: 2_000)
+        )
+        let record = AgentTurnPush.record(for: waiting)
+        #expect(record.recordType == ended.recordType)
+        #expect(Set(record.allKeys()).isSubset(of: Set(ended.allKeys())))
+        #expect(record.recordID.recordName == "wait.phone-1.\(LampAgentRemoteHosting.Chat.writing("w1").id)")
+        #expect(record.recordID.recordName != ended.recordID.recordName)
+        let waitTurn = record["turnID"] as? String
+        #expect(waitTurn == waiting.waitID.uuidString)
+        #expect(waitTurn != turn.uuidString)
+        #expect(record["outcome"] as? String == "waiting")
+        #expect(record["summary"] as? String == "Codex is waiting for your answer.")
+        #expect(record["body"] as? String == record["summary"] as? String)
+        #expect(record["subtitle"] as? String == "")
+        #expect(record["kind"] as? String == "writing")
+        #expect(record["writingID"] as? String == "w1")
+        #expect(record["endedAt"] as? Date == Date(timeIntervalSince1970: 2_000))
+        // Every word in it is the provider's name, the chat's, or Lamp's.
+        let words = record.allKeys().compactMap { record[$0] as? String }.joined(separator: " ")
+        #expect(!words.contains("make") && !words.contains("/"))
+    }
+
+    @Test func aWaitIsToldOnceAndTakenBack() {
+        #expect(AgentTurnPush.change(wasWaiting: false, isWaiting: true) == .tell)
+        #expect(AgentTurnPush.change(wasWaiting: true, isWaiting: true) == .none)
+        #expect(AgentTurnPush.change(wasWaiting: true, isWaiting: false) == .clear)
+        #expect(AgentTurnPush.change(wasWaiting: false, isWaiting: false) == .none)
+    }
+
     @MainActor
     @Test func aPushedTurnIsOneRecordPerPhoneAndChat() {
         let chat = UUID()

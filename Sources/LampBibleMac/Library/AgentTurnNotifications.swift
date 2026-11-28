@@ -111,6 +111,12 @@ enum AgentTurnNotifications {
         UNUserNotificationCenter.current().add(request) { _ in }
     }
 
+    /// Takes back a notification still shown for the chat: one that said a
+    /// turn waited, once it doesn't.
+    static func withdraw(context: AgentTurnNotificationContext) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [context.route.notificationIdentifier])
+    }
+
     static func body(for outcome: Outcome, showsReply: Bool) -> String {
         switch outcome {
         case .replied(let reply):
