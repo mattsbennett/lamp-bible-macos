@@ -92,10 +92,11 @@ enum AgentTurnNotifications {
         (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
     }
 
-    /// Posts the notification if the setting is on. Whether anyone was
-    /// watching is the caller's to judge.
-    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext) {
-        guard isEnabledNow, !KeptAgentChats.isQuitting else { return }
+    /// Posts the notification if the setting is on, saying whether it did.
+    /// Whether anyone was watching is the caller's to judge.
+    @discardableResult
+    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext) -> Bool {
+        guard isEnabledNow, !KeptAgentChats.isQuitting else { return false }
         let content = UNMutableNotificationContent()
         content.title = context.title
         content.body = body(for: outcome, showsReply: showsReplyNow)
@@ -109,6 +110,7 @@ enum AgentTurnNotifications {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request) { _ in }
+        return true
     }
 
     /// Takes back a notification still shown for the chat: one that said a

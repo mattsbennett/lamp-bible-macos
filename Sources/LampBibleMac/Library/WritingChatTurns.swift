@@ -48,11 +48,10 @@ enum WritingChatTurns {
         if AgentTerminalHolds.shared.hasTerminal(in: workspace) {
             return .refused("OpenCode wasn’t started: a Terminal session is open in this writing. End it, then send again.")
         }
-        // Nor while another chat's agent is at work in it: it could change
-        // what is checked here and finish before the send looks.
-        if AIProviderCLI.allCases.contains(where: {
-            $0 != .openCode && KeptAgentChats.existing(provider: $0, workspace: workspace)?.isRunning == true
-        }) {
+        // Nor while any chat's agent is at work in it, OpenCode's own turn
+        // from another pane included: it could change what is checked here
+        // and finish before the send looks.
+        if KeptAgentChats.isRunning(in: workspace) {
             return .refused("OpenCode wasn’t started: another chat is answering in this writing. Send it again when that has finished.")
         }
         let lampServer = mcpConfiguration(forWorkspace: workspace)

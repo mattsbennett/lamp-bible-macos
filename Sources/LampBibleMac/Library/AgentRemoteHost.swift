@@ -654,15 +654,18 @@ final class AgentRemoteHost: ObservableObject {
             case .tell:
                 telling.told = true
                 guard self.mayStillPush(to: device) else { return }
-                AgentTurnPush.tellWaiting(
-                    .init(deviceID: device, chat: chat, title: self.pushHeading(of: chat).title,
-                          providerName: model.provider.shortName, began: Date()),
-                    stillWaiting: { [weak self, weak model] in
-                        !(model?.pendingApprovals.isEmpty ?? true) && (self?.mayStillPush(to: device) ?? false)
-                    }
+                let wait = AgentTurnPush.Waiting(
+                    deviceID: device, chat: chat, title: self.pushHeading(of: chat).title,
+                    providerName: model.provider.shortName, began: Date()
                 )
+                telling.current = wait.waitID
+                AgentTurnPush.tellWaiting(wait, stillWaiting: { [weak self, weak telling] in
+                    // This wait, not a later one that began after it ended.
+                    telling?.current == wait.waitID && (self?.mayStillPush(to: device) ?? false)
+                })
             case .clear:
                 telling.told = false
+                telling.current = nil
                 AgentTurnPush.clearWaiting(deviceID: device, chatID: chat.id)
             case .none:
                 break
@@ -677,6 +680,8 @@ final class AgentRemoteHost: ObservableObject {
         let deviceID: String
         let chatID: String
         var told = false
+        /// The wait now told, while it lasts.
+        var current: UUID?
         var watch: AnyCancellable?
 
         init(deviceID: String, chatID: String) {
@@ -690,6 +695,7 @@ final class AgentRemoteHost: ObservableObject {
             watch = nil
             if told { AgentTurnPush.clearWaiting(deviceID: deviceID, chatID: chatID) }
             told = false
+            current = nil
         }
     }
 

@@ -2788,8 +2788,9 @@ final class NativeAgentChatModel: ObservableObject {
         switch AgentTurnPush.change(wasWaiting: wasWaiting, isWaiting: !pendingApprovals.isEmpty) {
         case .tell:
             guard isRunning, notifiesThisRun, !isWatched, let notificationContext else { return }
-            AgentTurnNotifications.post(.notice("\(provider.shortName) is waiting for your answer."), context: notificationContext)
-            waitNoticed = true
+            // Only one posted is taken back: the end of an earlier turn may
+            // be showing under the same name.
+            waitNoticed = AgentTurnNotifications.post(.notice("\(provider.shortName) is waiting for your answer."), context: notificationContext)
         case .clear:
             guard waitNoticed, let notificationContext else { return }
             waitNoticed = false
@@ -4839,9 +4840,9 @@ struct NativeAgentChatView: View {
                     guard model.queued.first?.id == queued else { return }
                     model.releaseQueue()
                     drainQueue()
-                } else {
-                    if draft == check.prompt { draft = "" }
-                    startSending(check.prompt)
+                } else if startSending(check.prompt), draft == check.prompt {
+                    // Cleared only once it is taken, as the composer does.
+                    draft = ""
                 }
             }
         }
