@@ -211,9 +211,12 @@ enum AgentTurnPush {
     /// only while the device may still be told (`stillWaiting`).
     static func tellWaiting(_ waiting: Waiting, stillWaiting: @escaping @MainActor () -> Bool) {
         guard isEntitled, AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return }
-        // Its name off the list first: an older wait's delete, tried again
-        // now, would take this one's record away.
-        PendingClears.remove(waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id))
+        // Put on the list before it is saved, so a crash after the save
+        // still has it deleted on the next launch; kept from the list's
+        // retries while it lasts in this one.
+        let name = waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id)
+        activeWaits.insert(name)
+        PendingClears.add(name)
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let previous = tail
         tail = Task.detached(priority: .utility) {
@@ -237,6 +240,7 @@ enum AgentTurnPush {
     static func clearWaiting(deviceID: String, chatID: String) {
         guard isEntitled else { return }
         let name = waitRecordName(deviceID: deviceID, chatID: chatID)
+        activeWaits.remove(name)
         PendingClears.add(name)
         clearPending()
     }
@@ -249,7 +253,8 @@ enum AgentTurnPush {
         let previous = tail
         tail = Task.detached(priority: .utility) {
             await previous?.value
-            let names = PendingClears.names()
+            let active = await MainActor.run { activeWaits }
+            let names = PendingClears.names().filter { !active.contains($0) }
             guard !names.isEmpty else { return }
             let ids = names.map { CKRecord.ID(recordName: $0) }
             do {
@@ -269,6 +274,10 @@ enum AgentTurnPush {
             }
         }
     }
+
+    /// Waits told in this launch and not over, whose records the list's
+    /// retries leave alone.
+    private static var activeWaits: Set<String> = []
 
     /// The wait records still to delete, kept across launches.
     enum PendingClears {

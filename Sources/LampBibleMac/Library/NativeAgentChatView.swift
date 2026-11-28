@@ -494,11 +494,13 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             /// Writes what `make` decides, deciding it only once the write is
             /// Lamp's to make, so a Stop pressed while it waited is seen.
+            /// `make` returning nil writes nothing: decided, under the lock,
+            /// that nothing is to go.
             @discardableResult
-            func sendDecided(_ make: () -> [String: Any]) -> Bool {
+            func sendDecided(_ make: () -> [String: Any]?) -> Bool {
                 writeLock.lock()
                 defer { writeLock.unlock() }
-                var message = make()
+                guard var message = make() else { return false }
                 message["jsonrpc"] = "2.0"
                 guard let data = try? JSONSerialization.data(withJSONObject: message) else { return false }
                 return (try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))) != nil
@@ -674,24 +676,29 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                                 // pressed meanwhile still wins, and a grant
                                 // removed meanwhile puts it on the card.
                                 replies.async {
-                                    guard self.isAllowedForChat(ask) else {
-                                        stateLock.lock()
-                                        let refuse = stopped || self.isCancelled
-                                        if !refuse { waiting.append((ask.id, id, params, ask)); publish() }
-                                        stateLock.unlock()
-                                        if refuse { send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]]) }
-                                        else {
-                                            DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(ask.id, .deny) }
-                                        }
-                                        return
-                                    }
+                                    // Looked at again under the writer's
+                                    // lock, as the answer is decided.
+                                    var revoked = false
                                     sendDecided {
                                         stateLock.lock()
                                         let late = stopped
                                         stateLock.unlock()
+                                        if !late, !self.isCancelled, !self.isAllowedForChat(ask) {
+                                            revoked = true
+                                            return nil
+                                        }
                                         let outcome: [String: Any] = late || self.isCancelled
                                             ? ["outcome": "cancelled"] : AgentACPRun.outcome(for: .allow, permission: params)
                                         return ["id": id, "result": ["outcome": outcome]]
+                                    }
+                                    guard revoked else { return }
+                                    stateLock.lock()
+                                    let refuse = stopped || self.isCancelled
+                                    if !refuse { waiting.append((ask.id, id, params, ask)); publish() }
+                                    stateLock.unlock()
+                                    if refuse { send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]]) }
+                                    else {
+                                        DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(ask.id, .deny) }
                                     }
                                 }
                             } else {
@@ -931,11 +938,12 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             /// As for Antigravity: decided once the write is Lamp's to make.
             @discardableResult
-            func sendDecided(_ make: () -> [String: Any]) -> Bool {
+            func sendDecided(_ make: () -> [String: Any]?) -> Bool {
                 writeLock.lock()
                 defer { writeLock.unlock() }
                 // Slashes as written, so a method reads as itself in a log.
-                guard let data = try? JSONSerialization.data(withJSONObject: make(), options: [.withoutEscapingSlashes])
+                guard let message = make(),
+                      let data = try? JSONSerialization.data(withJSONObject: message, options: [.withoutEscapingSlashes])
                 else { return false }
                 return (try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))) != nil
             }
@@ -1102,23 +1110,27 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                             } else if allowedForChat {
                                 replies.async {
                                     // A grant removed meanwhile puts it on
-                                    // the card after all.
-                                    guard self.isAllowedForChat(approval) else {
-                                        stateLock.lock()
-                                        let refuse = stopped || self.isCancelled
-                                        if !refuse { waiting.append((key, id, approval)); publish() }
-                                        stateLock.unlock()
-                                        if refuse { send(["id": id, "result": AgentCodexRun.decision(.deny)]) }
-                                        else {
-                                            DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(key, .deny) }
-                                        }
-                                        return
-                                    }
+                                    // the card after all: looked at again
+                                    // under the writer's lock.
+                                    var revoked = false
                                     sendDecided {
                                         stateLock.lock()
                                         let late = stopped
                                         stateLock.unlock()
+                                        if !late, !self.isCancelled, !self.isAllowedForChat(approval) {
+                                            revoked = true
+                                            return nil
+                                        }
                                         return ["id": id, "result": AgentCodexRun.decision(late || self.isCancelled ? .deny : .allow)]
+                                    }
+                                    guard revoked else { return }
+                                    stateLock.lock()
+                                    let refuse = stopped || self.isCancelled
+                                    if !refuse { waiting.append((key, id, approval)); publish() }
+                                    stateLock.unlock()
+                                    if refuse { send(["id": id, "result": AgentCodexRun.decision(.deny)]) }
+                                    else {
+                                        DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(key, .deny) }
                                     }
                                 }
                             } else {
@@ -4865,10 +4877,13 @@ struct NativeAgentChatView: View {
                 openCodeCheck = nil
                 // Not sent, and not left to go with the next Send: back in
                 // the field, after whatever is being written there.
-                if let queued = check.queued, model.queued.contains(where: { $0.id == queued }) {
+                // Its words as they are now: another window may have edited it.
+                if let queued = check.queued, let waiting = model.queued.first(where: { $0.id == queued }) {
                     model.removeQueued(queued)
+                    // Left waiting if it couldn't be taken off (it is being sent).
+                    guard !model.queued.contains(where: { $0.id == queued }) else { return }
                     let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    draft = typed.isEmpty ? check.prompt : draft + "\n\n" + check.prompt
+                    draft = typed.isEmpty ? waiting.text : draft + "\n\n" + waiting.text
                 }
             } open: {
                 openCodeCheck = nil
