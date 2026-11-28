@@ -2017,11 +2017,15 @@ private struct AgentToolApprovalCard: View {
                 // What is remembered, exactly, where it isn't what is shown
                 // above: the shell Codex runs it in is part of it.
                 if let grant = request.chatGrant, grant.commandText != request.toolInput["command"] as? String {
-                    Text("Exactly: \(grant.commandText)")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Whole, and scrolled where long: what is remembered.
+                    ScrollView {
+                        Text("Exactly: \(grant.commandText)")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 120)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 // Said whole, since what it allows outlasts this answer, and
                 // runs outside any sandbox.
@@ -4382,6 +4386,7 @@ struct NativeAgentChatView: View {
     @ObservedObject private var terminalHolds = AgentTerminalHolds.shared
     /// Shows the writing's Terminal, where the host has one.
     private var showTerminal: (() -> Void)?
+    private var isHiddenByHost = false
     @State private var draft = ""
     /// The settings that stopped an OpenCode turn, for Show in Finder beside
     /// the words.
@@ -4518,13 +4523,16 @@ struct NativeAgentChatView: View {
                         if kept == nil, conversation == model.conversationID {
                             kept = model.enqueue(prompt)
                         }
-                        // Held only for a message still this chat's: a New
-                        // Chat meanwhile isn't paused by one that wasn't.
-                        if kept != nil { model.holdQueue() }
+                        // Held only for a message still this chat's, waiting:
+                        // a New Chat meanwhile, which took the old queue
+                        // away, isn't paused by one that wasn't.
+                        if let kept, conversation == model.conversationID, model.queued.contains(where: { $0.id == kept }) {
+                            model.holdQueue()
+                        }
                         // From the writing as it resolves, as the scan named
                         // what is above it.
                         let base = workspaceFolder.resolvingSymlinksInPath()
-                        refusedSettings = paths.prefix(5).map { base.appendingPathComponent($0).standardizedFileURL }
+                        refusedSettings = paths.filter { $0 != ".." }.prefix(5).map { base.appendingPathComponent($0).standardizedFileURL }
                         throw AgentChatSendRefusal(message: words, kept: kept != nil)
                     }
                 }
@@ -4584,8 +4592,11 @@ struct NativeAgentChatView: View {
                 if let queued {
                     model.releaseQueued(queued)
                     // Held, with Send Them to go on, rather than tried again
-                    // unasked or left with no way on.
-                    model.holdQueue()
+                    // unasked or left with no way on; only while it is still
+                    // this chat's.
+                    if conversation == model.conversationID, model.queued.contains(where: { $0.id == queued }) {
+                        model.holdQueue()
+                    }
                 } else if (error as? AgentChatSendRefusal)?.kept == true {
                     // Waiting on the chat already.
                 } else if draft.isEmpty {
@@ -4831,6 +4842,7 @@ struct NativeAgentChatView: View {
             if let context { model.notificationContext = context }
         }
         .reportsVisibility(to: visibility)
+        .onChange(of: isHiddenByHost, initial: true) { _, hidden in visibility.isHiddenByHost = hidden }
         .onAppear {
             loadSavedPermissions()
             loadChatGrants()
@@ -4965,6 +4977,15 @@ struct NativeAgentChatView: View {
     /// the reader or the writing, over the field it is written in, with a
     /// button to send without it. The host decides what is sent: dismissing
     /// asks it to leave the selection out.
+    /// Whether the host hides this chat while keeping it drawn, as a
+    /// writing's pane does behind its Terminal: a turn waiting then isn't
+    /// watched.
+    func hiddenByHost(_ hidden: Bool) -> NativeAgentChatView {
+        var copy = self
+        copy.isHiddenByHost = hidden
+        return copy
+    }
+
     /// Where Show Terminal leads, in a pane that holds a Terminal.
     func showsTerminal(_ show: (() -> Void)?) -> NativeAgentChatView {
         var copy = self

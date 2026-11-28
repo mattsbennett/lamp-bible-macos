@@ -195,9 +195,12 @@ extension Notification.Name {
 @MainActor
 final class PaneVisibility {
     fileprivate weak var view: NSView?
+    /// Hidden by its host though still drawn: a writing's chat kept mounted,
+    /// unseen, behind its Terminal.
+    var isHiddenByHost = false
 
     var isWatched: Bool {
-        guard NSApp.isActive, let view, let window = view.window,
+        guard !isHiddenByHost, NSApp.isActive, let view, let window = view.window,
               window.isKeyWindow, window.isVisible, !window.isMiniaturized,
               !view.isHiddenOrHasHiddenAncestor else { return false }
         let shown = view.visibleRect

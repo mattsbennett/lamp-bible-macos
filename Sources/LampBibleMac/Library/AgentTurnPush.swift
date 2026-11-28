@@ -260,7 +260,10 @@ enum AgentTurnPush {
             let active = await MainActor.run { activeWaits }
             let names = PendingClears.names().filter { !active.contains($0) }
             guard !names.isEmpty else { return }
-            let ids = names.map { CKRecord.ID(recordName: $0) }
+            // In batches CloudKit takes, so a backlog left by a long time
+            // offline can't be refused whole on every try.
+            for start in stride(from: 0, to: names.count, by: 100) {
+            let ids = names[start..<min(start + 100, names.count)].map { CKRecord.ID(recordName: $0) }
             do {
                 let (_, deleted) = try await database.modifyRecords(saving: [], deleting: ids)
                 for (id, result) in deleted {
@@ -275,6 +278,7 @@ enum AgentTurnPush {
                 }
             } catch {
                 log.error("wait pushes not cleared: \(error.localizedDescription, privacy: .public)")
+            }
             }
         }
     }

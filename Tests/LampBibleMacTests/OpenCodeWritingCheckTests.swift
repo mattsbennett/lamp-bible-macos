@@ -310,6 +310,9 @@ struct OpenCodeWritingCheckTests {
         let above = AgentTerminalLaunchCheck.Finding(path: "../../../opencode.json", fingerprint: "f", detail: "")
         #expect(WritingChatTurns.openCodeRefusal([mine]).contains("Terminal"))
         #expect(!WritingChatTurns.openCodeRefusal([mine, above]).contains("Terminal"))
+        let outside = AgentTerminalLaunchCheck.Finding(path: "..", fingerprint: "incomplete", detail: "")
+        let words = WritingChatTurns.openCodeRefusal([outside])
+        #expect(!words.contains("Terminal") && words.contains("outside Lamp’s library"))
     }
 
     /// A file in the writing the sheet could show only by its size stops the

@@ -89,6 +89,11 @@ enum WritingChatTurns {
     nonisolated static func openCodeRefusal(_ findings: [AgentTerminalLaunchCheck.Finding]) -> String {
         let paths = Array(NSOrderedSet(array: findings.map(\.path))) as? [String] ?? findings.map(\.path)
         let named = paths.prefix(5).joined(separator: ", ") + (paths.count > 5 ? ", and \(paths.count - 5) more" : "")
+        // A writing that resolves outside the library: what is above it
+        // can't be bounded, and there is nothing to remove.
+        if paths.contains("..") {
+            return "OpenCode wasn’t started: this writing’s folder is reached through a link that leads outside Lamp’s library, so Lamp can’t check what OpenCode would read above it."
+        }
         // The Terminal asks about what is in the writing, not above it.
         let above = paths.contains { $0.hasPrefix("../") }
         return "OpenCode wasn’t started: this writing holds settings for OpenCode that Lamp didn’t put there (\(named)). "
