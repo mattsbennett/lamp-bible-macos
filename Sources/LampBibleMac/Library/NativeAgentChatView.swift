@@ -2775,7 +2775,17 @@ final class NativeAgentChatModel: ObservableObject {
     private var removedAt: Date?
     /// Messages written while a reply was still arriving, in the order they
     /// will be sent.
-    @Published private(set) var queued: [AgentChatQueue.Message] = []
+    @Published private(set) var queued: [AgentChatQueue.Message] = [] {
+        didSet {
+            // Nothing left that was held: the hold goes with it, so it
+            // applies only to the messages held at the time.
+            if queued.isEmpty, heldForTheirWord { releaseQueue() }
+        }
+    }
+
+    /// A refused message that couldn't be kept on the chat, held here too, so
+    /// a pane made again after its own has gone gets it back.
+    var unsentPrompt: String?
     /// The turn being recorded: the id of the user message that began it.
     private var recordingTurn: UUID?
     /// The queued message being sent right now, held so that a second pane
@@ -4600,6 +4610,7 @@ struct NativeAgentChatView: View {
                 }
                 submissionError = nil
                 refusedSettings = []
+                model.unsentPrompt = nil
                 isPreparing = false
                 let taken = await model.send(
                     prompt, contextualPrompt: contextualPrompt,
@@ -4661,11 +4672,16 @@ struct NativeAgentChatView: View {
                     }
                 } else if (error as? AgentChatSendRefusal)?.kept == true {
                     // Waiting on the chat already.
-                } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    draft = prompt
-                } else if !draft.contains(prompt) {
-                    // Typed over meanwhile: kept after the newer words, not lost.
-                    draft += "\n\n" + prompt
+                } else {
+                    // On the chat too, for a pane made again if this one has
+                    // gone meanwhile.
+                    model.unsentPrompt = prompt
+                    if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        draft = prompt
+                    } else if !draft.contains(prompt) {
+                        // Typed over meanwhile: kept after the newer words, not lost.
+                        draft += "\n\n" + prompt
+                    }
                 }
             }
         }
@@ -4915,6 +4931,14 @@ struct NativeAgentChatView: View {
         .onAppear {
             loadSavedPermissions()
             loadChatGrants()
+            // A refused message whose pane went before it could be handed
+            // back.
+            if let unsent = model.unsentPrompt {
+                model.unsentPrompt = nil
+                if !draft.contains(unsent) {
+                    draft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? unsent : draft + "\n\n" + unsent
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: AgentToolAllowRules.changed)) { _ in loadSavedPermissions() }
         .onChange(of: model.pendingApprovals.count) { _, _ in

@@ -1241,6 +1241,16 @@ final class AgentRemoteHost: ObservableObject {
     ) async {
         guard admitsTurn(in: open.workspace, running: open.model.isRunning, chatID: open.id, requestID: requestID, peer: peer)
         else { return }
+        // An OpenCode writing turn starts beside no Terminal (0043): said
+        // before preparing writes the provider files the Terminal reads.
+        if open.model.provider == .openCode, case .writing = open.chat, AgentTerminalHolds.shared.hasTerminal(in: open.workspace) {
+            send(.failed(
+                LampAgentRemoteFailure.terminalOpen,
+                "OpenCode wasn’t started: a Terminal session is open in this writing on your Mac. End it there, then send again.",
+                requestID: requestID, chatID: open.id
+            ), to: peer)
+            return
+        }
         // Held from here, while the prompt is prepared and before the model
         // says it is running, so a change of provider from another device
         // can't move the chat out from under the turn (`setChoices`).

@@ -367,6 +367,8 @@ struct OpenCodeWritingCheckTests {
         let (_, workspace) = try writing()
         let first = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
         first.load()
+        // A hold is for messages waiting: one is.
+        #expect(first.enqueue("Later") != nil)
         first.holdQueue()
         KeptAgentChats.drop(first)
         let again = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
@@ -391,5 +393,19 @@ struct OpenCodeWritingCheckTests {
         KeptAgentChats.holdQueues(in: workspace)
         model.load()
         #expect(model.queueHeld)
+    }
+
+    /// A hold goes with the last message it held.
+    @Test func aHoldGoesWithItsLastMessage() throws {
+        let (_, workspace) = try writing()
+        let model = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        defer { KeptAgentChats.drop(model) }
+        model.load()
+        let id = try #require(model.enqueue("Later"))
+        model.holdQueue()
+        #expect(model.queueHeld)
+        model.removeQueued(id)
+        #expect(!model.queueHeld)
+        #expect(!NativeAgentChatModel.holdWasKept(provider: .codex, workspace: workspace))
     }
 }
