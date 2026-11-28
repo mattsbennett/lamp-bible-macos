@@ -107,6 +107,7 @@ enum AgentTurnPush {
             if let record { await save(record, to: database) }
             if sweeps { await sweep(database, devices: pairedDevices) }
         }
+        clearPending()
     }
 
     /// The record for one ended turn. Without the reply allowed, the reply's
@@ -210,6 +211,9 @@ enum AgentTurnPush {
     /// only while the device may still be told (`stillWaiting`).
     static func tellWaiting(_ waiting: Waiting, stillWaiting: @escaping @MainActor () -> Bool) {
         guard isEntitled, AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return }
+        // Its name off the list first: an older wait's delete, tried again
+        // now, would take this one's record away.
+        PendingClears.remove(waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id))
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let previous = tail
         tail = Task.detached(priority: .utility) {
@@ -220,22 +224,77 @@ enum AgentTurnPush {
             }
             if let record { await save(record, to: database) }
         }
+        clearPending()
     }
 
     /// Takes the wait's record away, once nothing waits: it tells nothing,
     /// and an alert already shown stays until the phone sees the chat again.
+    ///
+    /// The phone takes a wait's alert away only once it finds the record gone,
+    /// so a record left behind keeps an alert up for a wait long over: a
+    /// delete that fails, or is cut short by a quit, is kept on a list and
+    /// tried again with the next push and as remote chats start.
     static func clearWaiting(deviceID: String, chatID: String) {
         guard isEntitled else { return }
+        let name = waitRecordName(deviceID: deviceID, chatID: chatID)
+        PendingClears.add(name)
+        clearPending()
+    }
+
+    /// Deletes every wait record on the list, in the line, keeping those whose
+    /// delete fails. One already gone is done.
+    static func clearPending() {
+        guard isEntitled, !PendingClears.names().isEmpty else { return }
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
-        let id = CKRecord.ID(recordName: waitRecordName(deviceID: deviceID, chatID: chatID))
         let previous = tail
         tail = Task.detached(priority: .utility) {
             await previous?.value
+            let names = PendingClears.names()
+            guard !names.isEmpty else { return }
+            let ids = names.map { CKRecord.ID(recordName: $0) }
             do {
-                _ = try await database.modifyRecords(saving: [], deleting: [id])
+                let (_, deleted) = try await database.modifyRecords(saving: [], deleting: ids)
+                for (id, result) in deleted {
+                    switch result {
+                    case .success:
+                        PendingClears.remove(id.recordName)
+                    case .failure(let error as CKError) where error.code == .unknownItem:
+                        PendingClears.remove(id.recordName)
+                    case .failure(let error):
+                        log.error("wait push \(id.recordName, privacy: .public) not cleared: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
             } catch {
-                log.error("wait push \(id.recordName, privacy: .public) not cleared: \(error.localizedDescription, privacy: .public)")
+                log.error("wait pushes not cleared: \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    /// The wait records still to delete, kept across launches.
+    enum PendingClears {
+        nonisolated static let key = "agent.turnPush.waitsToClear"
+        nonisolated private static let lock = NSLock()
+
+        nonisolated static func names(in defaults: UserDefaults = .standard) -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return defaults.stringArray(forKey: key) ?? []
+        }
+
+        nonisolated static func add(_ name: String, in defaults: UserDefaults = .standard) {
+            lock.lock()
+            defer { lock.unlock() }
+            var names = defaults.stringArray(forKey: key) ?? []
+            if !names.contains(name) { names.append(name) }
+            defaults.set(names, forKey: key)
+        }
+
+        nonisolated static func remove(_ name: String, in defaults: UserDefaults = .standard) {
+            lock.lock()
+            defer { lock.unlock() }
+            var names = defaults.stringArray(forKey: key) ?? []
+            names.removeAll { $0 == name }
+            defaults.set(names, forKey: key)
         }
     }
 

@@ -3729,6 +3729,8 @@ struct EmbeddedAITerminalView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: LocalProcessTerminalView, coordinator: Coordinator) {
+        // A launch whose process hasn't started yet doesn't start now.
+        if let holdID = coordinator.holdID { AgentTerminalHolds.shared.dropIfNotStarted(holdID) }
         coordinator.stopWatching()
         if nsView.process.running { nsView.terminate() }
         let onDismantle = coordinator.onDismantle

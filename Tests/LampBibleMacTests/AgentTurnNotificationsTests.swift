@@ -80,6 +80,18 @@ struct AgentTurnNotificationsTests {
         #expect(!words.contains("make") && !words.contains("/"))
     }
 
+    /// A wait record to delete is kept, across launches, until its delete
+    /// went or found it gone.
+    @Test func waitsToClearAreKeptUntilCleared() throws {
+        let defaults = try #require(UserDefaults(suiteName: "wait-clears-\(UUID().uuidString)"))
+        AgentTurnPush.PendingClears.add("wait.a.b", in: defaults)
+        AgentTurnPush.PendingClears.add("wait.a.b", in: defaults)
+        AgentTurnPush.PendingClears.add("wait.a.c", in: defaults)
+        #expect(AgentTurnPush.PendingClears.names(in: defaults) == ["wait.a.b", "wait.a.c"])
+        AgentTurnPush.PendingClears.remove("wait.a.b", in: defaults)
+        #expect(AgentTurnPush.PendingClears.names(in: defaults) == ["wait.a.c"])
+    }
+
     @Test func aWaitIsToldOnceAndTakenBack() {
         #expect(AgentTurnPush.change(wasWaiting: false, isWaiting: true) == .tell)
         #expect(AgentTurnPush.change(wasWaiting: true, isWaiting: true) == .none)

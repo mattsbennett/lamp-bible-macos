@@ -671,8 +671,20 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                             } else if allowedForChat {
                                 // Through the writer the card's answers take,
                                 // and judged as it is written, so a Stop
-                                // pressed meanwhile still wins.
+                                // pressed meanwhile still wins, and a grant
+                                // removed meanwhile puts it on the card.
                                 replies.async {
+                                    guard self.isAllowedForChat(ask) else {
+                                        stateLock.lock()
+                                        let refuse = stopped || self.isCancelled
+                                        if !refuse { waiting.append((ask.id, id, params, ask)); publish() }
+                                        stateLock.unlock()
+                                        if refuse { send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]]) }
+                                        else {
+                                            DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(ask.id, .deny) }
+                                        }
+                                        return
+                                    }
                                     sendDecided {
                                         stateLock.lock()
                                         let late = stopped
@@ -1089,6 +1101,19 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                                 send(["id": id, "result": AgentCodexRun.decision(.deny)])
                             } else if allowedForChat {
                                 replies.async {
+                                    // A grant removed meanwhile puts it on
+                                    // the card after all.
+                                    guard self.isAllowedForChat(approval) else {
+                                        stateLock.lock()
+                                        let refuse = stopped || self.isCancelled
+                                        if !refuse { waiting.append((key, id, approval)); publish() }
+                                        stateLock.unlock()
+                                        if refuse { send(["id": id, "result": AgentCodexRun.decision(.deny)]) }
+                                        else {
+                                            DispatchQueue.global().asyncAfter(deadline: .now() + answerSeconds) { _ = settle(key, .deny) }
+                                        }
+                                        return
+                                    }
                                     sendDecided {
                                         stateLock.lock()
                                         let late = stopped
@@ -2071,15 +2096,16 @@ private struct ChatCommandGrantsList: View {
             ForEach(grants, id: \.self) { grant in
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
+                        // Whole, both: two grants can differ anywhere.
                         Text(grant.commandText)
                             .font(.system(.callout, design: .monospaced))
                             .textSelection(.enabled)
-                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text("in \(grant.folderText)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     Button("Remove", role: .destructive) { remove(grant) }
@@ -4838,10 +4864,11 @@ struct NativeAgentChatView: View {
             ) {
                 openCodeCheck = nil
                 // Not sent, and not left to go with the next Send: back in
-                // the field where there is room, else left waiting, held.
-                if let queued = check.queued, draft.isEmpty, model.queued.contains(where: { $0.id == queued }) {
+                // the field, after whatever is being written there.
+                if let queued = check.queued, model.queued.contains(where: { $0.id == queued }) {
                     model.removeQueued(queued)
-                    draft = check.prompt
+                    let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    draft = typed.isEmpty ? check.prompt : draft + "\n\n" + check.prompt
                 }
             } open: {
                 openCodeCheck = nil

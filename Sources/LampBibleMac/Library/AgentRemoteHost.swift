@@ -209,6 +209,8 @@ final class AgentRemoteHost: ObservableObject {
 
     private func start() {
         guard listener == nil else { return }
+        // Waits whose records a failed delete or a quit left behind.
+        AgentTurnPush.clearPending()
         refreshDevices()
         listen(onLampsPort: true)
         let monitor = NWPathMonitor()

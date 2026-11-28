@@ -106,7 +106,7 @@ enum AgentTurnNotifications {
         content.sound = .default
         content.categoryIdentifier = categoryIdentifier
         content.threadIdentifier = context.route.notificationIdentifier
-        content.userInfo = context.route.userInfo
+        content.userInfo = context.route.userInfo.merging(isWait ? [Self.waitKey: "1"] : [:]) { $1 }
         let request = UNNotificationRequest(
             identifier: isWait ? waitIdentifier(context) : context.route.notificationIdentifier,
             content: content,
@@ -119,8 +119,17 @@ enum AgentTurnNotifications {
     /// Takes back a notification still shown for the chat: one that said a
     /// turn waited, once it doesn't.
     static func withdraw(context: AgentTurnNotificationContext) {
+        // Not yet shown too: adding one is asynchronous, and an answer can
+        // come first.
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [waitIdentifier(context)])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [waitIdentifier(context)])
     }
+
+    /// Marks a wait's notice, whose click opens the chat rather than a
+    /// Terminal: the card is in the chat.
+    nonisolated static let waitKey = "lampTurnIsWait"
+    /// The writing pane's session mode, as it stores it.
+    nonisolated static let sessionModeKey = "devotional.agent.sessionMode"
 
     static func waitIdentifier(_ context: AgentTurnNotificationContext) -> String {
         context.route.notificationIdentifier + ".waiting"
@@ -425,6 +434,11 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
         let content = response.notification.request.content
         guard content.categoryIdentifier == AgentTurnNotifications.categoryIdentifier,
               let route = AgentTurnRoute(userInfo: content.userInfo) else { return }
+        // A wait is answered on the chat's card: the writing's pane opens on
+        // Chat, not on a Terminal left showing.
+        if content.userInfo[AgentTurnNotifications.waitKey] != nil, case .writing = route {
+            UserDefaults.standard.set(AgentSessionDisplayMode.native.rawValue, forKey: AgentTurnNotifications.sessionModeKey)
+        }
         NSApp.activate()
         NotificationCenter.default.post(name: .lampShowAgentTurn, object: route)
     }
