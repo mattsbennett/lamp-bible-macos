@@ -4518,10 +4518,13 @@ struct NativeAgentChatView: View {
                         if kept == nil, conversation == model.conversationID {
                             kept = model.enqueue(prompt)
                         }
-                        model.holdQueue()
-                        refusedSettings = paths.prefix(5).map {
-                            workspaceFolder.appendingPathComponent($0).standardizedFileURL
-                        }
+                        // Held only for a message still this chat's: a New
+                        // Chat meanwhile isn't paused by one that wasn't.
+                        if kept != nil { model.holdQueue() }
+                        // From the writing as it resolves, as the scan named
+                        // what is above it.
+                        let base = workspaceFolder.resolvingSymlinksInPath()
+                        refusedSettings = paths.prefix(5).map { base.appendingPathComponent($0).standardizedFileURL }
                         throw AgentChatSendRefusal(message: words, kept: kept != nil)
                     }
                 }
