@@ -3289,6 +3289,9 @@ struct DevotionalAgentWorkspaceView: View {
         guard let workspaceURL else { return }
         collectTerminalTurns(in: workspaceURL)
         terminalCapture.processExited = true
+        // Ended by End: the person's doing, however soon or however it
+        // exited, so not taken for a resume that failed and started again.
+        guard !AgentTerminalHolds.shared.takeEndedByEnd(terminalID) else { return }
 
         guard let provider = activeProvider,
               let resumed = terminalCapture.resumedSessionID,

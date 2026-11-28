@@ -80,8 +80,16 @@ final class AgentTerminalHolds: ObservableObject {
     /// Its process exited.
     func ended(_ id: UUID) {
         if launches[id] != nil { launches[id] = nil }
-        endAsked.remove(id)
+        if endAsked.remove(id) != nil { endedByEnd.insert(id) }
     }
+
+    /// Launches whose process went because End was pressed, for the exit's
+    /// handling to read once: such an exit is the person's, not a resume
+    /// that failed, and nothing is to start again in its place.
+    private var endedByEnd: Set<UUID> = []
+
+    /// Whether this launch ended by End, asked once.
+    func takeEndedByEnd(_ id: UUID) -> Bool { endedByEnd.remove(id) != nil }
 
     /// Whether End was pressed for this launch.
     func isEndAsked(_ id: UUID) -> Bool { endAsked.contains(id) }

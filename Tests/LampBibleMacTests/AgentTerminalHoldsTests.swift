@@ -134,6 +134,9 @@ struct AgentTerminalHoldsTests {
         #expect(holds.isHeld(in: place))
         holds.ended(launch)
         #expect(!holds.isEndAsked(launch))
+        // Its exit read once as the person's, never as a failed resume.
+        #expect(holds.takeEndedByEnd(launch))
+        #expect(!holds.takeEndedByEnd(launch))
     }
 
     @Test func endClearsALaunchNotStartedYet() throws {
