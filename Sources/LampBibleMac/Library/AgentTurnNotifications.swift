@@ -95,10 +95,12 @@ enum AgentTurnNotifications {
     /// Posts the notification if the setting is on, saying whether it did.
     /// Whether anyone was watching is the caller's to judge.
     ///
-    /// `isWait`: a turn waiting on an answer, under a name of its own, so
-    /// taking it back can't take another turn's end with it.
+    /// `waitingProvider`: a turn of that provider's waiting on an answer,
+    /// under a name of its own, so taking it back can't take another turn's
+    /// end, or another provider's wait, with it.
     @discardableResult
-    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext, isWait: Bool = false) -> Bool {
+    static func post(_ outcome: Outcome, context: AgentTurnNotificationContext, waitingProvider: String? = nil) -> Bool {
+        let isWait = waitingProvider != nil
         guard isEnabledNow, !KeptAgentChats.isQuitting else { return false }
         let content = UNMutableNotificationContent()
         content.title = context.title
@@ -108,7 +110,7 @@ enum AgentTurnNotifications {
         content.threadIdentifier = context.route.notificationIdentifier
         content.userInfo = context.route.userInfo.merging(isWait ? [Self.waitKey: "1"] : [:]) { $1 }
         let request = UNNotificationRequest(
-            identifier: isWait ? waitIdentifier(context) : context.route.notificationIdentifier,
+            identifier: waitingProvider.map { waitIdentifier(context, provider: $0) } ?? context.route.notificationIdentifier,
             content: content,
             trigger: nil
         )
@@ -118,11 +120,11 @@ enum AgentTurnNotifications {
 
     /// Takes back a notification still shown for the chat: one that said a
     /// turn waited, once it doesn't.
-    static func withdraw(context: AgentTurnNotificationContext) {
+    static func withdraw(context: AgentTurnNotificationContext, provider: String) {
         // Not yet shown too: adding one is asynchronous, and an answer can
         // come first.
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [waitIdentifier(context)])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [waitIdentifier(context)])
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [waitIdentifier(context, provider: provider)])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [waitIdentifier(context, provider: provider)])
     }
 
     /// Marks a wait's notice, whose click opens the chat rather than a
@@ -131,8 +133,8 @@ enum AgentTurnNotifications {
     /// The writing pane's session mode, as it stores it.
     nonisolated static let sessionModeKey = "devotional.agent.sessionMode"
 
-    static func waitIdentifier(_ context: AgentTurnNotificationContext) -> String {
-        context.route.notificationIdentifier + ".waiting"
+    static func waitIdentifier(_ context: AgentTurnNotificationContext, provider: String) -> String {
+        context.route.notificationIdentifier + ".waiting." + provider
     }
 
     static func body(for outcome: Outcome, showsReply: Bool) -> String {

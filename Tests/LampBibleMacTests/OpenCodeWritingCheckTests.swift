@@ -102,7 +102,8 @@ struct OpenCodeWritingCheckTests {
     /// chat's end notice alone.
     @Test func aWaitNoticeHasItsOwnName() {
         let context = AgentTurnNotificationContext(title: "Talk", route: .writing("w"))
-        #expect(AgentTurnNotifications.waitIdentifier(context) != context.route.notificationIdentifier)
+        #expect(AgentTurnNotifications.waitIdentifier(context, provider: "codex") != context.route.notificationIdentifier)
+        #expect(AgentTurnNotifications.waitIdentifier(context, provider: "codex") != AgentTurnNotifications.waitIdentifier(context, provider: "openCode"))
     }
 
     /// Clear once, for the next send only, and only if nothing began since.
@@ -245,5 +246,17 @@ struct OpenCodeWritingCheckTests {
         let found = AgentTerminalLaunchCheck.openCodeAncestorFindings(of: linked.appendingPathComponent("w"))
         #expect(found.map(\.path).contains("../../opencode.json"))
         _ = workspace
+    }
+
+    /// A file in the writing the sheet could show only by its size stops the
+    /// turn, rather than be approved unseen.
+    @Test func aLongPluginInTheWritingStopsTheTurn() async throws {
+        let (_, workspace) = try writing()
+        try write(String(repeating: "x", count: 5_000), to: workspace.appendingPathComponent(".opencode/plugin/big.js"))
+        guard case .refused(let words) = await WritingChatTurns.checkOpenCode(in: workspace) else {
+            Issue.record("expected the turn refused")
+            return
+        }
+        #expect(words.contains("big.js"))
     }
 }

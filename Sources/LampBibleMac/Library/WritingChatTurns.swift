@@ -73,6 +73,11 @@ enum WritingChatTurns {
         if let link = findings.first(where: \.isLink) {
             return .refused("Lamp didn’t start OpenCode: \(link.path) in this writing is a link, which Lamp can’t check for OpenCode. Replace it with the file itself.")
         }
+        // Approved only as shown: a file the sheet could show only by its
+        // size can't be looked at there, so it stops the turn.
+        if let unshown = findings.first(where: \.isShownBySize) {
+            return .refused("Lamp didn’t start OpenCode: \(unshown.path) in this writing is too long to show whole, or isn’t text, so it can’t be checked here.")
+        }
         if let unchecked = findings.first(where: \.isIncomplete) {
             return .refused("Lamp didn’t start OpenCode: it couldn’t check all of what OpenCode reads in this writing (\(unchecked.detail)).")
         }

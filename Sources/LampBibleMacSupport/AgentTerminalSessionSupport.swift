@@ -1134,6 +1134,9 @@ public enum AgentTerminalLaunchCheck {
         public var isPermission = false
         /// A link, fingerprinted by where it points, not by what it leads to.
         public var isLink = false
+        /// A file shown by its size, not its words: too long to show whole,
+        /// or not text.
+        public var isShownBySize = false
         public var id: String { path + "\u{0}" + fingerprint }
 
         public init(path: String, fingerprint: String, detail: String, isPermission: Bool = false, isLink: Bool = false) {
@@ -1254,10 +1257,12 @@ public enum AgentTerminalLaunchCheck {
                     return
                 }
                 let text = size <= Int64(shownBytes) ? String(data: head, encoding: .utf8) : nil
-                found.append(Finding(
+                var finding = Finding(
                     path: relative, fingerprint: fingerprint,
                     detail: text ?? "\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) of content"
-                ))
+                )
+                finding.isShownBySize = text == nil
+                found.append(finding)
             default:
                 // A pipe or device: what a provider would read from it can't
                 // be looked at, so no answer can cover it.

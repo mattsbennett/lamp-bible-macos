@@ -216,7 +216,6 @@ enum AgentTurnPush {
         // retries while it lasts in this one.
         let name = waitRecordName(deviceID: waiting.deviceID, chatID: waiting.chat.id)
         activeWaits.insert(name)
-        PendingClears.add(name)
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
         let previous = tail
         tail = Task.detached(priority: .utility) {
@@ -225,7 +224,12 @@ enum AgentTurnPush {
                 guard stillWaiting(), AIFeatures.isEnabledNow, !KeptAgentChats.isQuitting else { return nil }
                 return Self.record(for: waiting)
             }
-            if let record { await save(record, to: database) }
+            // Listed in the line, just before it is saved: an older delete
+            // ahead of it in the line can't take the entry away.
+            if let record {
+                PendingClears.add(name)
+                await save(record, to: database)
+            }
         }
         clearPending()
     }

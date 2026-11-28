@@ -2831,12 +2831,13 @@ final class NativeAgentChatModel: ObservableObject {
             // Only one posted is taken back: the end of an earlier turn may
             // be showing under the same name.
             waitNoticed = AgentTurnNotifications.post(
-                .notice("\(provider.shortName) is waiting for your answer."), context: notificationContext, isWait: true
+                .notice("\(provider.shortName) is waiting for your answer."), context: notificationContext,
+                waitingProvider: provider.rawValue
             )
         case .clear:
             guard waitNoticed, let notificationContext else { return }
             waitNoticed = false
-            AgentTurnNotifications.withdraw(context: notificationContext)
+            AgentTurnNotifications.withdraw(context: notificationContext, provider: provider.rawValue)
         case .none:
             break
         }
