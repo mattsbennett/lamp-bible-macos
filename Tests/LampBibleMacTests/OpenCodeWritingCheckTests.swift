@@ -352,4 +352,23 @@ struct OpenCodeWritingCheckTests {
         #expect(code == LampAgentRemoteFailure.writingSettings)
         #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("w/opencode.json").path))
     }
+
+    /// A hold for the person's word outlasts a quit: a chat made afresh
+    /// takes it, and only a Send lets it go.
+    @Test func aHoldForTheirWordOutlastsAQuit() throws {
+        let (_, workspace) = try writing()
+        let first = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        first.load()
+        first.holdQueue()
+        KeptAgentChats.drop(first)
+        let again = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        again.load()
+        #expect(again.queueHeld)
+        again.releaseQueue()
+        KeptAgentChats.drop(again)
+        let after = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        defer { KeptAgentChats.drop(after) }
+        after.load()
+        #expect(!after.queueHeld)
+    }
 }

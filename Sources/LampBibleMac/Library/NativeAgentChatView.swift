@@ -3004,6 +3004,11 @@ final class NativeAgentChatModel: ObservableObject {
         didLoad = true
         knownModificationDate = transcriptModificationDate()
         var waiting = AgentChatQueueStore.load(providerID: provider.rawValue, in: workspace)
+        // Held for the person's word before a quit: still held.
+        if Self.holdWasKept(provider: provider, workspace: workspace) {
+            heldForTheirWord = true
+            queueHeld = true
+        }
         // Anything already in the conversation was sent before the app
         // closed, however it closed. The question carries the queued
         // message's own id, so this is an answer rather than a guess.
@@ -3264,7 +3269,27 @@ final class NativeAgentChatModel: ObservableObject {
     /// Lets messages held back after a failure go, as sending one does.
     func releaseQueue() {
         queueHeld = false
+        if heldForTheirWord { Self.keepHold(false, for: holdKey) }
         heldForTheirWord = false
+    }
+
+    /// Holds kept for the person's word, by provider and workspace, on this
+    /// Mac only: a quit doesn't let them go, and the queue file every Mac
+    /// syncs isn't changed for them.
+    nonisolated static let heldQueuesKey = "agent.chat.queuesHeldForTheirWord"
+
+    private var holdKey: String { "\(provider.rawValue)|\(workspace.standardizedFileURL.path)" }
+
+    private static func keepHold(_ held: Bool, for key: String) {
+        var keys = Set(UserDefaults.standard.stringArray(forKey: heldQueuesKey) ?? [])
+        if held { keys.insert(key) } else { keys.remove(key) }
+        UserDefaults.standard.set(keys.sorted(), forKey: heldQueuesKey)
+    }
+
+    /// Whether a hold for the person's word was kept from before.
+    static func holdWasKept(provider: AIProviderCLI, workspace: URL) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: heldQueuesKey) ?? [])
+            .contains("\(provider.rawValue)|\(workspace.standardizedFileURL.path)")
     }
 
     /// Held by Lamp for the person's word (a Claude Terminal, a refused
@@ -3274,6 +3299,7 @@ final class NativeAgentChatModel: ObservableObject {
     /// Holds the waiting messages until the person sends, as a failure does:
     /// a Claude Terminal held them (`AgentTerminalHolds`).
     func holdQueue() {
+        if !heldForTheirWord { Self.keepHold(true, for: holdKey) }
         heldForTheirWord = true
         if !queueHeld { queueHeld = true }
     }
@@ -4526,7 +4552,9 @@ struct NativeAgentChatView: View {
                         // Kept on the chat, held, not in this pane's field,
                         // which may be gone by now: Send Them sends it on.
                         var kept = queued
-                        if kept == nil, conversation == model.conversationID {
+                        // Not written anywhere for a writing reached through a
+                        // link out of the library: it stays in the field.
+                        if kept == nil, conversation == model.conversationID, !paths.contains("..") {
                             kept = model.enqueue(prompt)
                         }
                         // Held only for a message still this chat's, waiting:

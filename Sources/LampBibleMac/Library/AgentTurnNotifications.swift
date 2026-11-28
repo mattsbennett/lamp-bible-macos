@@ -178,6 +178,9 @@ extension Notification.Name {
     /// The writing editor showing this writing (the object, its id) shows
     /// its assistant.
     static let lampShowWritingAssistant = Notification.Name("lampShowWritingAssistant")
+    /// The writing's pane (the object, its id) shows its chat rather than its
+    /// Terminal, for itself alone.
+    static let lampShowWritingChat = Notification.Name("lampShowWritingChat")
     /// A finished turn's notification was clicked. The object is the
     /// `AgentTurnRoute`; each library window looks for it among its own.
     static let lampShowAgentTurn = Notification.Name("lampShowAgentTurn")
@@ -438,5 +441,11 @@ extension LampAppDelegate: UNUserNotificationCenterDelegate {
               let route = AgentTurnRoute(userInfo: content.userInfo) else { return }
         NSApp.activate()
         NotificationCenter.default.post(name: .lampShowAgentTurn, object: route)
+        // A wait is answered on the chat's card: that writing's pane shows its
+        // chat, though left on Terminal, without changing the setting every
+        // writing shares.
+        if content.userInfo[AgentTurnNotifications.waitKey] != nil, case .writing(let id) = route {
+            NotificationCenter.default.post(name: .lampShowWritingChat, object: id)
+        }
     }
 }

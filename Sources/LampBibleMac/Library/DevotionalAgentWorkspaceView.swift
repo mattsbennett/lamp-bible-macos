@@ -1425,7 +1425,31 @@ struct DevotionalAgentWorkspaceView: View {
         // Antigravity is chat only, through `agy acp`: running its
         // interactive CLI inside Lamp is not the integration Google documents.
         if selectedProvider == .antigravity { return .native }
+        // A wait's notice clicked: this pane's chat, for this pane alone.
+        if showsChatForWait { return .native }
         return AgentSessionDisplayMode(rawValue: sessionModeID) ?? .native
+    }
+
+    /// Set by a wait's notice: this pane shows its chat, where the card is,
+    /// until the person picks a mode.
+    @State private var showsChatForWait = false
+    private static let chatAsked = NotificationCenter.default.publisher(for: .lampShowWritingChat)
+
+    private func showChat(asked note: Notification) {
+        guard note.object as? String == devotionalID else { return }
+        showsChatForWait = true
+    }
+
+    /// The mode picker: what is shown, and the person's choice, which ends a
+    /// wait's showing of the chat.
+    private var sessionModeChoice: Binding<String> {
+        Binding(
+            get: { sessionMode.rawValue },
+            set: { chosen in
+                showsChatForWait = false
+                sessionModeID = chosen
+            }
+        )
     }
 
     var body: some View {
@@ -1495,6 +1519,7 @@ struct DevotionalAgentWorkspaceView: View {
             }
         }
         .onAppear { paneLifetime.isGone = false }
+        .onReceive(Self.chatAsked, perform: showChat(asked:))
         .onDisappear {
             WritingPaneVisibility.unregister(writingID: devotionalID, token: visibilityToken)
             // A launch still checking when the pane goes hands nothing over,
@@ -1754,7 +1779,7 @@ struct DevotionalAgentWorkspaceView: View {
         if selectedProvider != .antigravity {
             LampSegmentedPicker(
                 "Session interface",
-                selection: $sessionModeID,
+                selection: sessionModeChoice,
                 items: AgentSessionDisplayMode.allCases.map {
                     .init(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
                 }
