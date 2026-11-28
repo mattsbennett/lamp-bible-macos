@@ -2394,8 +2394,17 @@ public enum AgentCodexRun {
             return .ask(AgentToolApprovalRequest(
                 id: id, toolName: commandToolName, toolInputJSON: String(decoding: data, as: UTF8.self),
                 // The command as Codex sent it, wrapper and all, not as shown:
-                // what is remembered is what ran.
-                chatGrant: cwd.map { AgentChatCommandGrant(tool: commandToolName, command: command, folder: $0) }
+                // what is remembered is what ran. Only for a request asking
+                // to leave the sandbox and nothing more: one that names
+                // further permissions could ask more next time under the same
+                // command, so it is asked about each time. Bound to the
+                // environment it runs in.
+                chatGrant: cwd.flatMap { cwd in
+                    let more = params["additionalPermissions"]
+                    guard more == nil || more is NSNull else { return nil }
+                    let environment = (params["environmentId"] as? String).map { "@" + $0 } ?? ""
+                    return AgentChatCommandGrant(tool: commandToolName + environment, command: command, folder: cwd)
+                }
             ))
         case "item/fileChange/requestApproval":
             return .answer(["decision": "decline"])

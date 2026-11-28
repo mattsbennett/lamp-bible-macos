@@ -28,7 +28,7 @@ struct OpenCodeWritingCheckTests {
     }
 
     @Test func onlyWhatOpenCodeReadsIsAskedAbout() {
-        for path in ["opencode.json", "OpenCode.JSONC", ".opencode/plugin/x.js", ".OPENCODE", ".claude/skills/x/SKILL.md", ".agents/skills"] {
+        for path in ["opencode.json", "OpenCode.JSONC", ".opencode/plugin/x.js", ".OPENCODE", ".claude/skills/x/SKILL.md", ".agents/skills", ".claude", ".agents"] {
             #expect(AgentTerminalLaunchCheck.openCodeReads(finding(path)), "\(path)")
         }
         for path in [".claude/settings.local.json", ".claude/settings", ".codex/config.toml", ".mcp.json", ".agents/mcp_config.json", ".claude/skillsx"] {
@@ -166,5 +166,37 @@ struct OpenCodeWritingCheckTests {
         }, in: file)
         #expect(AgentTerminalLaunchCheck.isApproved([claudes], for: workspace, in: file))
         #expect(!AgentTerminalLaunchCheck.isApproved([above], for: workspace, in: file))
+    }
+
+    /// A queue saved for a chat not yet loaded is held when a Claude
+    /// Terminal begins, and the chat takes the hold as it loads.
+    @Test func aChatNotYetLoadedTakesTheHoldAsItLoads() throws {
+        let (_, workspace) = try writing()
+        KeptAgentChats.holdQueues(in: workspace)
+        let model = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        defer { KeptAgentChats.drop(model) }
+        #expect(model.queueHeld)
+    }
+
+    /// End ends the Terminal that holds the chats, not another provider's.
+    @Test func endLeavesAnotherProvidersTerminal() throws {
+        let (_, workspace) = try writing()
+        let claude = UUID(), codex = UUID()
+        AgentTerminalHolds.shared.begin(claude, in: workspace)
+        AgentTerminalHolds.shared.begin(codex, in: workspace, holdsChats: false)
+        defer { AgentTerminalHolds.shared.dropIfNotStarted(codex) }
+        AgentTerminalHolds.shared.end(in: workspace)
+        #expect(!AgentTerminalHolds.shared.isHeld(in: workspace))
+        #expect(AgentTerminalHolds.shared.isPending(codex))
+    }
+
+    /// A conversation saved before conversations had ids can still be
+    /// allowed for.
+    @Test func aChatWithNoConversationIdStillHasAGrantKey() throws {
+        let (_, workspace) = try writing()
+        let model = KeptAgentChats.model(provider: .codex, workspace: workspace, mode: .writing)
+        defer { KeptAgentChats.drop(model) }
+        #expect(model.conversationID == nil)
+        #expect(model.chatGrantKey != nil)
     }
 }

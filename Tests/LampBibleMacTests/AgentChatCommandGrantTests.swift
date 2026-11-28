@@ -88,6 +88,18 @@ struct AgentChatCommandGrantTests {
         store.removeAll(for: one)
         #expect(store.list(for: one).isEmpty)
     }
+
+    /// A request naming more than leaving the sandbox is asked about each
+    /// time; and a grant holds only in the environment it was given in.
+    @Test func aRequestForMorePermissionsOffersNoGrantAndAGrantKnowsItsEnvironment() throws {
+        let more = #"{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","command":"make","cwd":"/w","additionalPermissions":{"network":true}}}"#
+        #expect(try codexAsk(more).chatGrant == nil)
+        let local = #"{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","command":"make","cwd":"/w","environmentId":"local"}}"#
+        let remote = #"{"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","command":"make","cwd":"/w","environmentId":"remote"}}"#
+        let a = try #require(try codexAsk(local).chatGrant), b = try #require(try codexAsk(remote).chatGrant)
+        #expect(a != b)
+    }
+
 }
 
 /// With the fake Codex: a command allowed for the chat is accepted unasked,
@@ -171,4 +183,30 @@ struct AgentChatCommandGrantRunnerTests {
         )
         #expect(shown.value == 1)
     }
+
+    /// Allowed for the chat on the card, the same command asked again at
+    /// once is answered unasked: the grant is kept before the answer goes.
+    @Test func allowedForTheChatTheNextAskInTheSameTurnIsAnsweredUnasked() async throws {
+        let fake = try fakeCodex(requests: [request(0), request(1)])
+        defer { try? FileManager.default.removeItem(at: fake.folder) }
+        let key = "codex|\(fake.folder.path)|\(UUID().uuidString)"
+        defer { AgentChatCommandGrants.shared.removeAll(for: key) }
+        let runner = AgentCLIProcessRunner()
+        runner.useChatGrants(key)
+        let shown = Locked<Int>(0)
+        _ = await runner.runCodexAppServer(
+            executableName: fake.script.path, workingDirectory: fake.folder, writingServer: nil,
+            threadID: nil, model: nil, effort: nil, prompt: "Render it", answerSeconds: 30,
+            onApprovals: { list in
+                guard let request = list.first else { return }
+                shown.mutate { $0 += 1 }
+                DispatchQueue.global().async { runner.answerApproval(request.id, with: .allow, forChat: true) }
+            }
+        )
+        #expect(shown.value == 1)
+        let sent = (try? String(contentsOf: fake.log, encoding: .utf8)) ?? ""
+        #expect(sent.components(separatedBy: #""decision":"accept""#).count - 1 == 2)
+        #expect(AgentChatCommandGrants.shared.list(for: key).count == 1)
+    }
+
 }

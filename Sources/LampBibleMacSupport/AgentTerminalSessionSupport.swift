@@ -1294,6 +1294,8 @@ public enum AgentTerminalLaunchCheck {
         let path = finding.path.lowercased()
         let first = path.split(separator: "/").first.map(String.init) ?? path
         return ["opencode.json", "opencode.jsonc", ".opencode"].contains(first)
+            // A link standing in for a skill folder's parent is shown too.
+            || path == ".claude" || path == ".agents"
             || path.hasPrefix(".claude/skills/") || path == ".claude/skills"
             || path.hasPrefix(".agents/skills/") || path == ".agents/skills"
     }

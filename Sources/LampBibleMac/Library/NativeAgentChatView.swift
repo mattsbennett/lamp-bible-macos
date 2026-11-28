@@ -159,7 +159,9 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
     private var acpCancel: (() -> Void)?
     /// Set while a Codex app-server or Antigravity turn runs: how the card's
     /// answer reaches the request waiting on it.
-    private var runnerAnswer: ((String, AgentToolApprovalAnswer) -> Bool)?
+    /// Answers a waiting request: its key, the answer, and whether it is
+    /// allowed for the chat too (`AgentChatCommandGrants`).
+    private var runnerAnswer: ((String, AgentToolApprovalAnswer, Bool) -> Bool)?
 
     /// How long a run may say nothing before Lamp stops it. A provider in
     /// trouble — retrying an overloaded API, or held at a usage limit — can
@@ -492,13 +494,14 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             /// Writes what `make` decides, deciding it only once the write is
             /// Lamp's to make, so a Stop pressed while it waited is seen.
-            func sendDecided(_ make: () -> [String: Any]) {
+            @discardableResult
+            func sendDecided(_ make: () -> [String: Any]) -> Bool {
                 writeLock.lock()
                 defer { writeLock.unlock() }
                 var message = make()
                 message["jsonrpc"] = "2.0"
-                guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
-                try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+                guard let data = try? JSONSerialization.data(withJSONObject: message) else { return false }
+                return (try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))) != nil
             }
 
             var session: String?
@@ -517,7 +520,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             /// Answers one waiting command, once. After Stop it is cancelled,
             /// whatever the answer, as ACP answers an outstanding request
             /// then.
-            func settle(_ key: String, _ answer: AgentToolApprovalAnswer) -> Bool {
+            func settle(_ key: String, _ answer: AgentToolApprovalAnswer, _ forChat: Bool = false) -> Bool {
                 stateLock.lock()
                 guard let index = waiting.firstIndex(where: { $0.key == key }) else {
                     stateLock.unlock()
@@ -531,16 +534,21 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 // Stop's cancel can't be queued ahead of it; written off the
                 // caller's thread, the card's being the main one; and judged
                 // again as it is written, so one pressed just before Stop is
-                // cancelled after all.
+                // cancelled after all. Said to have gone only once written.
                 replies.async {
-                    sendDecided {
+                    var asAnswered = false
+                    var takeBack: (() -> Void)?
+                    let wrote = sendDecided {
                         stateLock.lock()
                         let late = stopped
                         stateLock.unlock()
                         let refused = late || self.isCancelled
-                        self.noteReply(entry.key, asAnswered: !refused || answer == .deny)
+                        asAnswered = !refused || answer == .deny
+                        if !refused, answer == .allow, forChat { takeBack = self.keepGrant(for: entry.request) }
                         return ["id": entry.id, "result": ["outcome": refused ? ["outcome": "cancelled"] : outcome]]
                     }
+                    if !wrote { takeBack?() }
+                    self.noteReply(entry.key, asAnswered: wrote && asAnswered)
                 }
                 stateLock.unlock()
                 return true
@@ -553,7 +561,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             }
             lock.lock()
             activeProcess = process
-            runnerAnswer = { settle($0, $1) }
+            runnerAnswer = { settle($0, $1, $2) }
             acpCancel = { [weak self] in
                 // Nothing waiting is allowed after Stop. Then it is asked of
                 // the agent while it is answering, which ends the prompt as
@@ -843,12 +851,28 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
     /// Gives a waiting Codex request the person's answer. False when it is
     /// no longer waiting: answered by its timeout, or ended with the turn.
+    ///
+    /// `forChat`: remembered for the chat as well, when it is allowed. The
+    /// grant is kept before the answer is written, so a provider asking again
+    /// the moment it reads it finds it, and taken back if the write failed.
     @discardableResult
-    func answerApproval(_ id: String, with answer: AgentToolApprovalAnswer) -> Bool {
+    func answerApproval(_ id: String, with answer: AgentToolApprovalAnswer, forChat: Bool = false) -> Bool {
         lock.lock()
         let answering = runnerAnswer
         lock.unlock()
-        return answering?(id, answer) ?? false
+        return answering?(id, answer, forChat) ?? false
+    }
+
+    /// Keeps a grant for the running chat, returning what to take back if
+    /// the answer is never written.
+    fileprivate func keepGrant(for request: AgentToolApprovalRequest) -> (() -> Void)? {
+        lock.lock()
+        let key = chatGrantKey
+        lock.unlock()
+        guard let key, let grant = request.chatGrant else { return nil }
+        let had = AgentChatCommandGrants.shared.contains(grant, for: key)
+        AgentChatCommandGrants.shared.add(grant, for: key)
+        return had ? {} : { AgentChatCommandGrants.shared.remove(grant, for: key) }
     }
 
     private func runCodexAppServerSynchronously(
@@ -894,13 +918,14 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 sendDecided { message }
             }
             /// As for Antigravity: decided once the write is Lamp's to make.
-            func sendDecided(_ make: () -> [String: Any]) {
+            @discardableResult
+            func sendDecided(_ make: () -> [String: Any]) -> Bool {
                 writeLock.lock()
                 defer { writeLock.unlock() }
                 // Slashes as written, so a method reads as itself in a log.
                 guard let data = try? JSONSerialization.data(withJSONObject: make(), options: [.withoutEscapingSlashes])
-                else { return }
-                try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))
+                else { return false }
+                return (try? input.fileHandleForWriting.write(contentsOf: data + Data([0x0A]))) != nil
             }
 
             var thread: String?
@@ -920,7 +945,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
             /// allowed, whatever the answer: read from the runner's own
             /// flag, which Stop sets before anything else, as well as this
             /// turn's, set a moment later on another thread.
-            func settle(_ key: String, _ answer: AgentToolApprovalAnswer) -> Bool {
+            func settle(_ key: String, _ answer: AgentToolApprovalAnswer, _ forChat: Bool = false) -> Bool {
                 stateLock.lock()
                 guard let index = waiting.firstIndex(where: { $0.key == key }) else {
                     stateLock.unlock()
@@ -932,14 +957,19 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
                 // Queued under the lock, written off the caller's thread, and
                 // judged again as it is written, as for Antigravity.
                 replies.async {
-                    sendDecided {
+                    var asAnswered = false
+                    var takeBack: (() -> Void)?
+                    let wrote = sendDecided {
                         stateLock.lock()
                         let late = stopped
                         stateLock.unlock()
                         let refused = late || self.isCancelled
-                        self.noteReply(entry.key, asAnswered: !refused || answer == .deny)
+                        asAnswered = !refused || answer == .deny
+                        if !refused, answer == .allow, forChat { takeBack = self.keepGrant(for: entry.request) }
                         return ["id": entry.id, "result": AgentCodexRun.decision(refused ? .deny : answer)]
                     }
+                    if !wrote { takeBack?() }
+                    self.noteReply(entry.key, asAnswered: wrote && asAnswered)
                 }
                 stateLock.unlock()
                 return true
@@ -953,7 +983,7 @@ final class AgentCLIProcessRunner: @unchecked Sendable {
 
             lock.lock()
             activeProcess = process
-            runnerAnswer = { settle($0, $1) }
+            runnerAnswer = { settle($0, $1, $2) }
             acpCancel = { [weak self] in
                 // Nothing waiting is allowed after Stop; then the turn is
                 // interrupted, which lets Codex save, and a server that does
@@ -1947,6 +1977,15 @@ private struct AgentToolApprovalCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if allowForChat != nil {
+                // What is remembered, exactly, where it isn't what is shown
+                // above: the shell Codex runs it in is part of it.
+                if let grant = request.chatGrant, grant.commandText != request.toolInput["command"] as? String {
+                    Text("Exactly: \(grant.commandText)")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // Said whole, since what it allows outlasts this answer, and
                 // runs outside any sandbox.
                 Text("Allow for This Chat runs this exact command in this folder again without asking, until you start a new chat. Lamp doesn’t check what the command’s files hold by then.")
@@ -2563,7 +2602,27 @@ enum KeptAgentChats {
         if let model = models[key] { return model }
         let model = NativeAgentChatModel(provider: provider, workspace: workspace, mode: mode)
         models[key] = model
+        // A Claude Terminal began before this chat was loaded: what it had
+        // waiting on disk waits for the person's next Send.
+        if queueHoldsPending.remove(key) != nil { model.holdQueue() }
         return model
+    }
+
+    /// Chats not loaded when a Claude Terminal began in their writing, whose
+    /// waiting messages are held once they are (`AgentTerminalHolds`).
+    @MainActor
+    private static var queueHoldsPending: Set<String> = []
+
+    /// Holds every chat's waiting messages in this writing, loaded or not.
+    @MainActor
+    static func holdQueues(in workspace: URL) {
+        for provider in AIProviderCLI.allCases {
+            if let model = existing(provider: provider, workspace: workspace) {
+                if model.hasWaitingMessage { model.holdQueue() }
+            } else {
+                queueHoldsPending.insert("\(provider.rawValue)|\(workspace.standardizedFileURL.path)")
+            }
+        }
     }
 }
 
@@ -3158,13 +3217,18 @@ final class NativeAgentChatModel: ObservableObject {
     /// This chat's commands allowed for it (`AgentChatCommandGrants`): by
     /// conversation, so a new chat has none.
     var chatGrantKey: String? {
-        AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: conversationID)
+        AgentChatCommandGrants.key(provider: provider.rawValue, workspace: workspace, conversation: conversationID ?? unnamedConversation)
     }
+
+    /// The name a conversation saved before conversations had ids goes by
+    /// here, for its grants alone; a new chat is given another.
+    private var unnamedConversation = UUID()
 
     func clearConversation() {
         guard !isRunning else { return }
         // What was allowed for the chat goes with it.
         if let chatGrantKey { AgentChatCommandGrants.shared.removeAll(for: chatGrantKey) }
+        unnamedConversation = UUID()
         // A message still being prepared belongs to the conversation going.
         placeholderToken = nil
         sendingPlaceholder = []
@@ -3601,18 +3665,11 @@ final class NativeAgentChatModel: ObservableObject {
         forChat: Bool = false
     ) -> Bool {
         if runnerApprovals {
-            let taken = runner.answerApproval(request.id, with: answer)
+            let taken = runner.answerApproval(request.id, with: answer, forChat: forChat && request.chatGrant != nil)
             if !taken, saysWhy {
                 errorMessage = "That request had already ended, and the command did not run."
             }
             pendingApprovals.removeAll { $0.id == request.id }
-            if taken, forChat, answer == .allow, let grant = request.chatGrant, let key = chatGrantKey {
-                Task { [runner] in
-                    if await runner.replyWentAsAnswered(request.id) {
-                        AgentChatCommandGrants.shared.add(grant, for: key)
-                    }
-                }
-            }
             return taken
         }
         guard let approvalChannel else { return false }
@@ -4415,10 +4472,13 @@ struct NativeAgentChatView: View {
                     if let queued {
                         // Back to waiting — and tried again now, since
                         // nothing else will: the queue is drained by a run
-                        // finishing, and no run started.
+                        // finishing, and no run started. Refused with a
+                        // reason (another chat at work in the writing), it is
+                        // held for the person's word instead, rather than
+                        // tried again and again until that chat ends.
                         model.releaseQueued(queued)
                         isPreparing = false
-                        drainQueue()
+                        if model.errorMessage != nil { model.holdQueue() } else { drainQueue() }
                     } else {
                         // A message typed straight in, refused because the
                         // conversation changed while it was being prepared,
@@ -4692,6 +4752,8 @@ struct NativeAgentChatView: View {
             loadChatGrants()
         }
         .onChange(of: model.isRunning) { _, _ in loadChatGrants() }
+        // A new chat arriving from another Mac has none of these.
+        .onChange(of: model.chatGrantKey) { _, _ in loadChatGrants() }
         .onReceive(NotificationCenter.default.publisher(for: AgentChatCommandGrants.changed)) { _ in loadChatGrants() }
         .onChange(of: model.isRunning, initial: true) { _, running in
             onRunningChanged(running)

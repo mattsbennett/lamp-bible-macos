@@ -3171,13 +3171,7 @@ struct DevotionalAgentWorkspaceView: View {
         AgentTerminalHolds.shared.begin(terminalID, in: workspaceURL, holdsChats: AgentTerminalHolds.holds(provider))
         // Messages already waiting in the writing's chats wait for the
         // person's next Send, whether or not a pane is there to see the hold.
-        if AgentTerminalHolds.holds(provider) {
-            for each in AIProviderCLI.allCases {
-                if let model = KeptAgentChats.existing(provider: each, workspace: workspaceURL), model.hasWaitingMessage {
-                    model.holdQueue()
-                }
-            }
-        }
+        if AgentTerminalHolds.holds(provider) { KeptAgentChats.holdQueues(in: workspaceURL) }
         // Opened with what was checked: its restrictions, as the scan read
         // them, are the reference for the next check.
         AgentTerminalLaunchCheck.recordRestrictions(scanned.restrictions, for: workspaceURL)

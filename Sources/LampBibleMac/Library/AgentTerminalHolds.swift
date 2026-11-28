@@ -137,7 +137,8 @@ final class AgentTerminalHolds: ObservableObject {
     /// hold go. One not started yet is dropped.
     func end(in workspace: URL, killAfter seconds: Double = 3) {
         let key = Self.key(workspace)
-        for (id, launch) in launches where launch.workspace == key {
+        // Only those holding the chats: another provider's Terminal is left.
+        for (id, launch) in launches where launch.workspace == key && launch.holdsChats {
             switch launch.state {
             case .starting:
                 launches[id] = nil
